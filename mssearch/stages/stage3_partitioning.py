@@ -316,29 +316,30 @@ def partition_candidate_images(
 
         while work_queue:
             box = work_queue.pop(0)
-            x1, y1, x2, y2 = box
+            box_ints = tuple(int(round(float(c))) for c in box)
+            x1, y1, x2, y2 = box_ints
             pw, ph = x2 - x1, y2 - y1
 
             # Check recursive bounding condition: longer side <= max_patch_size
             if max(pw, ph) > config.max_patch_size:
-                crop = img_pil.crop(box)
+                crop = img_pil.crop(box_ints)
                 entropy = compute_spatial_entropy(crop, weights=config.entropy_weights)
 
                 # Partitioning route
                 if config.partition_mode == "quadrant_only" or (config.partition_mode == "hybrid" and entropy < config.entropy_threshold):
                     sub_boxes = partition_into_quadrants(
-                        box, img_w, img_h, overlap_ratio=config.quadrant_overlap_ratio
+                        box_ints, img_w, img_h, overlap_ratio=config.quadrant_overlap_ratio
                     )
                     if config.verbose:
-                        print(f"[Stage 3][Routing] Patch {box} (size {pw}x{ph}) -> H={entropy:.3f} < {config.entropy_threshold:.2f} -> Quadrant 2x2 Split ({len(sub_boxes)} patches).")
+                        print(f"[Stage 3][Routing] Patch {box_ints} (size {pw}x{ph}) -> H={entropy:.3f} < {config.entropy_threshold:.2f} -> Quadrant 2x2 Split ({len(sub_boxes)} patches).")
                 else:
                     # SAM3-SGAP (Semantic-Guided Adaptive Patching reusing Stage 2 features)
-                    sub_feat, _ = slice_feature_map(feat_map, box, img_w, img_h)
+                    sub_feat, _ = slice_feature_map(feat_map, box_ints, img_w, img_h)
                     if config.verbose:
-                        print(f"[Stage 3][Routing] Patch {box} (size {pw}x{ph}) -> H={entropy:.3f} >= {config.entropy_threshold:.2f} -> SAM3-SGAP Partitioning.")
+                        print(f"[Stage 3][Routing] Patch {box_ints} (size {pw}x{ph}) -> H={entropy:.3f} >= {config.entropy_threshold:.2f} -> SAM3-SGAP Partitioning.")
                     sub_boxes = partition_into_sam3_sgap(
                         sub_feat,
-                        box,
+                        box_ints,
                         img_w,
                         img_h,
                         min_splits=config.sgap_min_splits,
@@ -349,17 +350,18 @@ def partition_candidate_images(
 
                 # Push sub-boxes back to queue for recursive evaluation
                 for sb in sub_boxes:
-                    work_queue.append(sb)
+                    sb_ints = tuple(int(round(float(c))) for c in sb)
+                    work_queue.append(sb_ints)
             else:
                 # Patch satisfies longer side <= 1024px!
-                crop = img_pil.crop(box)
+                crop = img_pil.crop(box_ints)
                 entropy = compute_spatial_entropy(crop, weights=config.entropy_weights)
-                _, pooled_vec = slice_feature_map(feat_map, box, img_w, img_h)
+                _, pooled_vec = slice_feature_map(feat_map, box_ints, img_w, img_h)
 
                 bounded_patches.append(
                     BoundedPatch(
                         img_idx=img_idx,
-                        box=box,
+                        box=box_ints,
                         feature_vector=pooled_vec,
                         entropy=entropy
                     )

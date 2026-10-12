@@ -27,31 +27,39 @@ class FastPathResult:
 
 
 def compute_composite_bbox(
-    boxes: List[Tuple[int, int, int, int]],
+    boxes: List[Any],
     img_w: int,
     img_h: int,
     margin_ratio: float = 0.10
 ) -> Tuple[int, int, int, int]:
-    """Computes the union bounding box enclosing all detected targets with safety margin."""
-    x1 = min(b[0] for b in boxes)
-    y1 = min(b[1] for b in boxes)
-    x2 = max(b[2] for b in boxes)
-    y2 = max(b[3] for b in boxes)
+    """Computes the union bounding box enclosing all detected targets with safety margin, guaranteed pure Python ints."""
+    clean_boxes = []
+    for b in boxes:
+        if isinstance(b, torch.Tensor):
+            b = b.detach().cpu().tolist()
+        elif isinstance(b, np.ndarray):
+            b = b.tolist()
+        clean_boxes.append([float(coord) for coord in b])
 
-    pad_w = int((x2 - x1) * margin_ratio)
-    pad_h = int((y2 - y1) * margin_ratio)
+    x1 = min(b[0] for b in clean_boxes)
+    y1 = min(b[1] for b in clean_boxes)
+    x2 = max(b[2] for b in clean_boxes)
+    y2 = max(b[3] for b in clean_boxes)
 
-    cx1 = max(0, x1 - pad_w)
-    cy1 = max(0, y1 - pad_h)
-    cx2 = min(img_w, x2 + pad_w)
-    cy2 = min(img_h, y2 + pad_h)
+    pad_w = (x2 - x1) * margin_ratio
+    pad_h = (y2 - y1) * margin_ratio
 
-    return (cx1, cy1, cx2, cy2)
+    cx1 = max(0, int(round(x1 - pad_w)))
+    cy1 = max(0, int(round(y1 - pad_h)))
+    cx2 = min(img_w, int(round(x2 + pad_w)))
+    cy2 = min(img_h, int(round(y2 + pad_h)))
+
+    return (int(cx1), int(cy1), int(cx2), int(cy2))
 
 
 def render_visual_prompt_bbox(
     crop_img: Image.Image,
-    local_boxes: List[Tuple[int, int, int, int]],
+    local_boxes: List[Any],
     color: str = "red",
     width: int = 3
 ) -> Image.Image:
@@ -59,8 +67,46 @@ def render_visual_prompt_bbox(
     annotated = crop_img.copy()
     draw = ImageDraw.Draw(annotated)
     for box in local_boxes:
-        draw.rectangle(box, outline=color, width=width)
+        if isinstance(box, torch.Tensor):
+            box = box.detach().cpu().tolist()
+        elif isinstance(box, np.ndarray):
+            box = box.tolist()
+        clean_box = [int(round(float(coord))) for coord in box]
+        draw.rectangle(clean_box, outline=color, width=width)
     return annotated
+
+
+def _query_vlm_response(zoom_model, image_pil: Image.Image, question: str) -> str:
+    """Safely invokes VLM response generation across model APIs."""
+    if hasattr(zoom_model, "generate_response"):
+        return zoom_model.generate_response(image_pil=image_pil, question=question)
+    elif hasattr(zoom_model, "free_form_using_nodes"):
+        return zoom_model.free_form_using_nodes(image_pil=image_pil, question=question, searched_nodes=[])
+    elif hasattr(zoom_model, "generate"):
+        return zoom_model.generate(image_pil=image_pil, question=question)
+    return str(zoom_model(image_pil=image_pil, question=question))
+
+
+def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str) -> float:
+    """Safely invokes VLM existence confidence query across model APIs."""
+    if hasattr(zoom_model, "get_confidence_value"):
+        for kwarg in [{"node": None}, {"node_list": None}, {}]:
+            try:
+                conf = zoom_model.get_confidence_value(
+                    image_pil=image_pil,
+                    confidence_type="existence",
+                    input_ele=query,
+                    **kwarg
+                )
+                if isinstance(conf, torch.Tensor):
+                    conf = conf.item()
+                return float(conf)
+            except TypeError:
+                continue
+            except Exception as e:
+                print(f"[Stage 2][VLM Confidence Notice] {e}")
+                return 0.0
+    return 0.0
 
 
 def run_tool_based_fast_path(
@@ -116,10 +162,25 @@ def run_tool_based_fast_path(
             boxes = res_for_t.get('boxes', [])
             scores = res_for_t.get('scores', [])
 
-            confident_boxes = [
-                b for b, s in zip(boxes, scores)
-                if s >= config.sam3_group_det_threshold
-            ]
+            # Convert to CPU Python lists
+            if isinstance(boxes, torch.Tensor):
+                boxes = boxes.detach().cpu().tolist()
+            elif isinstance(boxes, np.ndarray):
+                boxes = boxes.tolist()
+
+            if isinstance(scores, torch.Tensor):
+                scores = scores.detach().cpu().tolist()
+            elif isinstance(scores, np.ndarray):
+                scores = scores.tolist()
+
+            confident_boxes = []
+            for b, s in zip(boxes, scores):
+                s_val = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
+                if s_val >= config.sam3_group_det_threshold:
+                    if isinstance(b, (torch.Tensor, np.ndarray)):
+                        b = b.tolist()
+                    b_int = tuple(int(round(float(c))) for c in b)
+                    confident_boxes.append(b_int)
 
             if len(confident_boxes) == 0:
                 all_objects_found = False
@@ -132,17 +193,22 @@ def run_tool_based_fast_path(
                 print(f"[Stage 2] Image {img_idx}: Detected {len(matched_boxes_by_obj)}/{len(active_objects)} objects -> missing targets, fast path bypass.")
             continue
 
-        # 4. Construct composite crop encompassing all active target detections
+        # 4. Construct composite crop encompassing all active target detections (guaranteed pure ints)
         composite_box = compute_composite_bbox(matched_boxes_by_obj, img_w, img_h)
         crop_pil = img_pil.crop(composite_box)
         cw, ch = crop_pil.size
         if cw < 8 or ch < 8:
             continue
 
-        # Compute coordinates relative to crop origin
+        # Compute coordinates relative to crop origin (guaranteed pure ints)
         x_min, y_min = composite_box[0], composite_box[1]
         local_boxes = [
-            (b[0] - x_min, b[1] - y_min, b[2] - x_min, b[3] - y_min)
+            (
+                int(round(float(b[0]) - x_min)),
+                int(round(float(b[1]) - y_min)),
+                int(round(float(b[2]) - x_min)),
+                int(round(float(b[3]) - y_min))
+            )
             for b in matched_boxes_by_obj
         ]
 
@@ -167,12 +233,7 @@ def run_tool_based_fast_path(
 
         # 7. Query VLM Existence Confidence
         existence_query = f"{', '.join(active_objects)}.{text_coords_hint}"
-        existence_conf = zoom_model.get_confidence_value(
-            node_list=None,
-            image_pil=vlm_crop,
-            confidence_type='existence',
-            input_ele=existence_query
-        )
+        existence_conf = _query_vlm_existence(zoom_model, vlm_crop, existence_query)
 
         if config.verbose:
             print(f"[Stage 2] Image {img_idx}: All targets detected! VLM existence conf = {existence_conf:.3f} (Threshold = {config.fast_path_conf_threshold:.2f})")
@@ -181,10 +242,8 @@ def run_tool_based_fast_path(
         if existence_conf > config.fast_path_conf_threshold:
             # High existence confidence confirmed -> Generate final answer immediately!
             answer_prompt = f"{question}{text_coords_hint}"
-            answer_text = zoom_model.generate_response(
-                image_pil=vlm_crop,
-                question=answer_prompt
-            )
+            answer_text = _query_vlm_response(zoom_model, vlm_crop, answer_prompt)
+
             if config.verbose:
                 print(f"[Stage 2][Non-Fallback Early Exit] Instant answer confirmed on image {img_idx}: '{answer_text}'. Exiting in 1 step!")
             return FastPathResult(
@@ -203,4 +262,3 @@ def run_tool_based_fast_path(
         print(f"[Stage 2][Fallback to Stage 3] Fast Path did not trigger across all candidate images. Switching to Visual Search Branch. (Cached {len(feature_cache)} feature maps).")
 
     return FastPathResult(triggered=False, feature_cache=feature_cache)
-

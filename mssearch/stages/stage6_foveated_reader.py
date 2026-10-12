@@ -34,28 +34,31 @@ class FinalSearchResult:
 
 
 def expand_bounding_box(
-    box: Tuple[int, int, int, int],
+    box: Any,
     img_w: int,
     img_h: int,
     expansion_factor: float = 1.25
 ) -> Tuple[int, int, int, int]:
     """
     Independently expands a bounding box by expansion_factor (e.g. 1.25x = 25% margin)
-    clamped to image boundary.
+    clamped to image boundary, guaranteed pure Python ints.
     """
-    x1, y1, x2, y2 = box
+    if hasattr(box, "tolist"):
+        box = box.tolist()
+    x1, y1, x2, y2 = [int(round(float(c))) for c in box]
     w = x2 - x1
     h = y2 - y1
 
-    delta_w = int((expansion_factor - 1.0) / 2.0 * w)
-    delta_h = int((expansion_factor - 1.0) / 2.0 * h)
+    delta_w = int(round((expansion_factor - 1.0) / 2.0 * w))
+    delta_h = int(round((expansion_factor - 1.0) / 2.0 * h))
 
     ex1 = max(0, x1 - delta_w)
     ey1 = max(0, y1 - delta_h)
     ex2 = min(img_w, x2 + delta_w)
     ey2 = min(img_h, y2 + delta_h)
 
-    return (ex1, ey1, ex2, ey2)
+    return (int(ex1), int(ey1), int(ex2), int(ey2))
+
 
 
 def is_negative_or_unanswerable(text: str) -> bool:
@@ -156,10 +159,14 @@ def run_foveated_vlm_reading(
         raw_answer = ""
         if zoom_model is not None:
             try:
-                raw_answer = zoom_model.generate_response(
-                    image_pil=vlm_input_crop,
-                    question=prompt
-                )
+                if hasattr(zoom_model, "generate_response"):
+                    raw_answer = zoom_model.generate_response(image_pil=vlm_input_crop, question=prompt)
+                elif hasattr(zoom_model, "free_form_using_nodes"):
+                    raw_answer = zoom_model.free_form_using_nodes(image_pil=vlm_input_crop, question=prompt, searched_nodes=[])
+                elif hasattr(zoom_model, "generate"):
+                    raw_answer = zoom_model.generate(image_pil=vlm_input_crop, question=prompt)
+                else:
+                    raw_answer = str(zoom_model(image_pil=vlm_input_crop, question=prompt))
             except Exception as e:
                 if config.verbose:
                     print(f"[Stage 6][Error Fallback] Crop {c_idx} (Image {img_idx}) VLM generation failed ({e}); skipping crop.")

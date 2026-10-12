@@ -215,11 +215,15 @@ class ModelQwenVL:
         cropped_image = image_pil.crop(resized_bboxes)
         cropped_image.save(image_path)
 
-    def is_root_only(self, nodes: List[Node]):
-        return (len(nodes) == 1 and nodes[0].is_root)
+    def is_root_only(self, nodes: Optional[List[Node]]):
+        if not nodes:
+            return False
+        return (len(nodes) == 1 and getattr(nodes[0], 'is_root', False))
 
-    def include_root(self, nodes: List[Node]):
-        return any(node.is_root for node in nodes)
+    def include_root(self, nodes: Optional[List[Node]]):
+        if not nodes:
+            return False
+        return any(getattr(node, 'is_root', False) for node in nodes)
 
     def get_bbox_in_square_image(self, bbox, left, top):
         x1, y1, x2, y2 = bbox
@@ -268,6 +272,8 @@ class ModelQwenVL:
 
     def process_nodes_to_image_list(self, nodes, image_pil, root_anyres=True):
         square_image, left, top = expand2square(image_pil, self.background_color)
+        if not nodes:
+            return [deepcopy(image_pil)] if root_anyres else [self.resize_image(image_pil)]
         if self.is_root_only(nodes):
             # Original CVSearch: Retain unconstrained 8K full image into root node
             return [deepcopy(image_pil)] if root_anyres else [self.resize_image(image_pil)]
@@ -313,9 +319,10 @@ class ModelQwenVL:
         return [self.resize_image(original_image_with_color_bbox), croped_view, zoomed_view]
 
     @torch.no_grad()
-    def get_confidence_value(self, node: List[NodeA], image_pil: Image.Image, confidence_type: str, input_ele,root_anyres=True):
+    def get_confidence_value(self, node: Optional[List[NodeA]] = None, image_pil: Image.Image = None, confidence_type: str = 'existence', input_ele: str = '', root_anyres: bool = True, node_list: Optional[List[NodeA]] = None):
         assert confidence_type in ['existence', 'latent', 'answering']
-        image_list = self.process_nodes_to_image_list(node, image_pil, root_anyres=root_anyres)
+        actual_nodes = node if node is not None else node_list
+        image_list = self.process_nodes_to_image_list(actual_nodes, image_pil, root_anyres=root_anyres)
         if len(image_list) > 1:
             raw_image_resize, croped_view, zoom_view = image_list
             image_input = [zoom_view]
@@ -393,6 +400,11 @@ class ModelQwenVL:
             return response
 
         return outputs
+
+    @torch.inference_mode()
+    def generate_response(self, image_pil: Image.Image, question: str, **kwargs) -> str:
+        """Direct free-form text response generation interface for an image and question."""
+        return self.free_form_using_nodes(image_pil=image_pil, question=question, searched_nodes=[], return_zoomed_view=False)
 
     @torch.inference_mode()
     def multiple_choices_inference(self, image_pil, question, options, searched_nodes: List[NodeA] = None):

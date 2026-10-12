@@ -100,8 +100,8 @@ def run_feature_grouping_and_gating(
             dists = np.linalg.norm(group_feats - centroid, axis=1)
             rep_idx = member_indices[int(np.argmin(dists))]
 
-        rep_patch = bounded_patches[rep_idx]
-        rep_img = candidate_images[rep_patch.img_idx].crop(rep_patch.box)
+        rep_box_ints = tuple(int(round(float(c))) for c in rep_patch.box)
+        rep_img = candidate_images[rep_patch.img_idx].crop(rep_box_ints)
         rw, rh = rep_img.size
         if rw < 8 or rh < 8:
             continue

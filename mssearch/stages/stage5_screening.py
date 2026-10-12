@@ -47,7 +47,8 @@ def run_resolution_screening(
         ph = y2 - y1
         longest_side = max(pw, ph)
 
-        crop = candidate_images[patch.img_idx].crop(patch.box)
+        box_ints = tuple(int(round(float(c))) for c in patch.box)
+        crop = candidate_images[patch.img_idx].crop(box_ints)
         cw, ch = crop.size
         if cw < 4 or ch < 4:
             continue
