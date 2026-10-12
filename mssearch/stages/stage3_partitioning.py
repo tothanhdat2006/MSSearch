@@ -66,32 +66,65 @@ def compute_spatial_entropy(
     return float(np.clip(h_total, 0.0, 1.0))
 
 
+def partition_oversized_box(
+    box: Tuple[int, int, int, int],
+    img_w: int,
+    img_h: int,
+    max_patch_size: int = 1024,
+    overlap_ratio: float = 0.10
+) -> List[Tuple[int, int, int, int]]:
+    """
+    Direction-aware recursive partitioning:
+    - If both W > max_patch_size and H > max_patch_size -> 2x2 Quadrants (4 patches)
+    - If only W > max_patch_size -> Split horizontally (2 patches, Left & Right)
+    - If only H > max_patch_size -> Split vertically (2 patches, Top & Bottom)
+    - Preserves safety overlap padding while preventing thin sliver over-splitting.
+    """
+    x1, y1, x2, y2 = box
+    w, h = x2 - x1, y2 - y1
+
+    split_x = (w > max_patch_size)
+    split_y = (h > max_patch_size)
+
+    # If neither exceeds max_patch_size, return original box
+    if not split_x and not split_y:
+        return [box]
+
+    pad_x = int(w * overlap_ratio) if split_x else 0
+    pad_y = int(h * overlap_ratio) if split_y else 0
+    mid_x = x1 + w // 2
+    mid_y = y1 + h // 2
+
+    if split_x and split_y:
+        # 2x2 Quadrants
+        return [
+            (max(0, x1 - pad_x), max(0, y1 - pad_y), min(img_w, mid_x + pad_x), min(img_h, mid_y + pad_y)),
+            (max(0, mid_x - pad_x), max(0, y1 - pad_y), min(img_w, x2 + pad_x), min(img_h, mid_y + pad_y)),
+            (max(0, x1 - pad_x), max(0, mid_y - pad_y), min(img_w, mid_x + pad_x), min(img_h, y2 + pad_y)),
+            (max(0, mid_x - pad_x), max(0, mid_y - pad_y), min(img_w, x2 + pad_x), min(img_h, y2 + pad_y)),
+        ]
+    elif split_x:
+        # Split horizontally only (Left and Right)
+        return [
+            (max(0, x1 - pad_x), y1, min(img_w, mid_x + pad_x), y2),
+            (max(0, mid_x - pad_x), y1, min(img_w, x2 + pad_x), y2),
+        ]
+    else:
+        # Split vertically only (Top and Bottom)
+        return [
+            (x1, max(0, y1 - pad_y), x2, min(img_h, mid_y + pad_y)),
+            (x1, max(0, mid_y - pad_y), x2, min(img_h, y2 + pad_y)),
+        ]
+
+
 def partition_into_quadrants(
     box: Tuple[int, int, int, int],
     img_w: int,
     img_h: int,
     overlap_ratio: float = 0.10
 ) -> List[Tuple[int, int, int, int]]:
-    """Splits a box into 2x2 quadrants with 10% overlap padding."""
-    x1, y1, x2, y2 = box
-    w, h = x2 - x1, y2 - y1
-    mid_x = x1 + w // 2
-    mid_y = y1 + h // 2
-
-    pad_x = int(w * overlap_ratio)
-    pad_y = int(h * overlap_ratio)
-
-    quads = [
-        # Top-Left
-        (max(0, x1 - pad_x), max(0, y1 - pad_y), min(img_w, mid_x + pad_x), min(img_h, mid_y + pad_y)),
-        # Top-Right
-        (max(0, mid_x - pad_x), max(0, y1 - pad_y), min(img_w, x2 + pad_x), min(img_h, mid_y + pad_y)),
-        # Bottom-Left
-        (max(0, x1 - pad_x), max(0, mid_y - pad_y), min(img_w, mid_x + pad_x), min(img_h, y2 + pad_y)),
-        # Bottom-Right
-        (max(0, mid_x - pad_x), max(0, mid_y - pad_y), min(img_w, x2 + pad_x), min(img_h, y2 + pad_y)),
-    ]
-    return quads
+    """Splits a box into direction-aware quadrants/halves with overlap padding."""
+    return partition_oversized_box(box, img_w, img_h, max_patch_size=1024, overlap_ratio=overlap_ratio)
 
 
 def compute_bbox_overlap_cost(atom_bboxes: np.ndarray, labels: np.ndarray, k: int) -> float:
@@ -130,8 +163,8 @@ def partition_into_sam3_sgap(
     box: Tuple[int, int, int, int],
     img_w: int,
     img_h: int,
-    min_splits: int = 8,
-    max_splits: int = 16,
+    min_splits: int = 4,
+    max_splits: int = 8,
     overlap_ratio: float = 0.10,
     verbose: bool = False
 ) -> List[Tuple[int, int, int, int]]:
@@ -142,8 +175,8 @@ def partition_into_sam3_sgap(
     C, H_f, W_f = sub_feat.shape
     if H_f < 4 or W_f < 4:
         if verbose:
-            print(f"[Stage 3][Fallback] SGAP feature map slice ({H_f}x{W_f}) is smaller than 4x4 threshold; falling back to 2x2 Quadrant split.")
-        return partition_into_quadrants(box, img_w, img_h, overlap_ratio)
+            print(f"[Stage 3][Fallback] SGAP feature map slice ({H_f}x{W_f}) is smaller than 4x4 threshold; falling back to direction-aware split.")
+        return partition_oversized_box(box, img_w, img_h, overlap_ratio=overlap_ratio)
 
     feat_tr = sub_feat.transpose(1, 2, 0)
     feat_norm = (feat_tr - feat_tr.min()) / (feat_tr.max() - feat_tr.min() + 1e-6)
@@ -152,22 +185,22 @@ def partition_into_sam3_sgap(
     n_atoms_target = min(100, H_f * W_f // 4)
     if n_atoms_target < min_splits:
         if verbose:
-            print(f"[Stage 3][Fallback] Target SLIC atoms ({n_atoms_target}) < min_splits ({min_splits}); falling back to 2x2 Quadrant split.")
-        return partition_into_quadrants(box, img_w, img_h, overlap_ratio)
+            print(f"[Stage 3][Fallback] Target SLIC atoms ({n_atoms_target}) < min_splits ({min_splits}); falling back to direction-aware split.")
+        return partition_oversized_box(box, img_w, img_h, overlap_ratio=overlap_ratio)
 
     try:
         atom_map = slic(feat_norm, n_segments=n_atoms_target, compactness=20, start_label=0, channel_axis=2)
     except Exception as e:
         if verbose:
-            print(f"[Stage 3][Fallback] SLIC segmentation failed ({e}); falling back to 2x2 Quadrant split.")
-        return partition_into_quadrants(box, img_w, img_h, overlap_ratio)
+            print(f"[Stage 3][Fallback] SLIC segmentation failed ({e}); falling back to direction-aware split.")
+        return partition_oversized_box(box, img_w, img_h, overlap_ratio=overlap_ratio)
 
     props = regionprops(atom_map + 1)
     n_atoms = len(props)
     if n_atoms < min_splits:
         if verbose:
-            print(f"[Stage 3][Fallback] Actual SLIC atoms ({n_atoms}) < min_splits ({min_splits}); falling back to 2x2 Quadrant split.")
-        return partition_into_quadrants(box, img_w, img_h, overlap_ratio)
+            print(f"[Stage 3][Fallback] Actual SLIC atoms ({n_atoms}) < min_splits ({min_splits}); falling back to direction-aware split.")
+        return partition_oversized_box(box, img_w, img_h, overlap_ratio=overlap_ratio)
 
     bx1, by1, bx2, by2 = box
     patch_w = bx2 - bx1
@@ -203,8 +236,8 @@ def partition_into_sam3_sgap(
         adj_matrix = nx.adjacency_matrix(rag).toarray()
     except Exception as e:
         if verbose:
-            print(f"[Stage 3][Fallback] RAG graph construction failed ({e}); falling back to 2x2 Quadrant split.")
-        return partition_into_quadrants(box, img_w, img_h, overlap_ratio)
+            print(f"[Stage 3][Fallback] RAG graph construction failed ({e}); falling back to direction-aware split.")
+        return partition_oversized_box(box, img_w, img_h, overlap_ratio=overlap_ratio)
 
     # 3. Scaled feature concatenation
     scaler = StandardScaler()
@@ -233,8 +266,8 @@ def partition_into_sam3_sgap(
 
     if best_labels is None:
         if verbose:
-            print("[Stage 3][Fallback] Agglomerative clustering could not find valid labels; falling back to 2x2 Quadrant split.")
-        return partition_into_quadrants(box, img_w, img_h, overlap_ratio)
+            print("[Stage 3][Fallback] Agglomerative clustering could not find valid labels; falling back to direction-aware split.")
+        return partition_oversized_box(box, img_w, img_h, overlap_ratio=overlap_ratio)
 
     # 5. Extract bounding boxes with 10% overlap padding
     sub_boxes = []
@@ -260,7 +293,7 @@ def partition_into_sam3_sgap(
     if verbose:
         print(f"[Stage 3][Non-Fallback] SAM3-SGAP clustered {n_atoms} atoms into k*={best_k} semantic patches (score: {best_score:.3f}).")
 
-    return sub_boxes if sub_boxes else partition_into_quadrants(box, img_w, img_h, overlap_ratio)
+    return sub_boxes if sub_boxes else partition_oversized_box(box, img_w, img_h, overlap_ratio=overlap_ratio)
 
 
 
@@ -301,8 +334,8 @@ def partition_candidate_images(
 
     for img_idx, img_pil in enumerate(candidate_images):
         img_w, img_h = img_pil.size
-        # Queue of patches to evaluate: [(x1, y1, x2, y2)]
-        work_queue: List[Tuple[int, int, int, int]] = [(0, 0, img_w, img_h)]
+        # Queue of patches to evaluate: [((x1, y1, x2, y2), depth)]
+        work_queue: List[Tuple[Tuple[int, int, int, int], int]] = [((0, 0, img_w, img_h), 0)]
 
         # Get cached feature map or default empty
         feat_map = stage2_feature_cache.get(img_idx, None)
@@ -314,8 +347,10 @@ def partition_candidate_images(
             if config.verbose:
                 print(f"[Stage 3][Fallback] Image {img_idx}: No Stage 2 feature map in cache; falling back to zero-initialized feature map.")
 
+        img_patches: List[BoundedPatch] = []
+
         while work_queue:
-            box = work_queue.pop(0)
+            box, depth = work_queue.pop(0)
             box_ints = tuple(int(round(float(c))) for c in box)
             x1, y1, x2, y2 = box_ints
             pw, ph = x2 - x1, y2 - y1
@@ -325,18 +360,17 @@ def partition_candidate_images(
                 crop = img_pil.crop(box_ints)
                 entropy = compute_spatial_entropy(crop, weights=config.entropy_weights)
 
-                # Partitioning route
-                if config.partition_mode == "quadrant_only" or (config.partition_mode == "hybrid" and entropy < config.entropy_threshold):
-                    sub_boxes = partition_into_quadrants(
-                        box_ints, img_w, img_h, overlap_ratio=config.quadrant_overlap_ratio
-                    )
-                    if config.verbose:
-                        print(f"[Stage 3][Routing] Patch {box_ints} (size {pw}x{ph}) -> H={entropy:.3f} < {config.entropy_threshold:.2f} -> Quadrant 2x2 Split ({len(sub_boxes)} patches).")
-                else:
-                    # SAM3-SGAP (Semantic-Guided Adaptive Patching reusing Stage 2 features)
+                # Only run SAM3-SGAP clustering at root level (depth == 0) to avoid recursive superpixel explosion
+                should_run_sgap = (
+                    depth == 0 and
+                    config.partition_mode in ("hybrid", "sgap_only") and
+                    (config.partition_mode == "sgap_only" or entropy >= config.entropy_threshold)
+                )
+
+                if should_run_sgap:
                     sub_feat, _ = slice_feature_map(feat_map, box_ints, img_w, img_h)
                     if config.verbose:
-                        print(f"[Stage 3][Routing] Patch {box_ints} (size {pw}x{ph}) -> H={entropy:.3f} >= {config.entropy_threshold:.2f} -> SAM3-SGAP Partitioning.")
+                        print(f"[Stage 3][Routing] Root Canvas {box_ints} (size {pw}x{ph}) -> H={entropy:.3f} >= {config.entropy_threshold:.2f} -> SAM3-SGAP Partitioning.")
                     sub_boxes = partition_into_sam3_sgap(
                         sub_feat,
                         box_ints,
@@ -347,18 +381,29 @@ def partition_candidate_images(
                         overlap_ratio=config.sgap_overlap_ratio,
                         verbose=config.verbose
                     )
+                else:
+                    # Direction-aware split: bisect only the oversized axis
+                    sub_boxes = partition_oversized_box(
+                        box_ints,
+                        img_w,
+                        img_h,
+                        max_patch_size=config.max_patch_size,
+                        overlap_ratio=config.quadrant_overlap_ratio
+                    )
+                    if config.verbose and depth <= 1:
+                        print(f"[Stage 3][Routing] Patch {box_ints} (size {pw}x{ph}, depth={depth}) -> Direction-aware Split ({len(sub_boxes)} patches).")
 
-                # Push sub-boxes back to queue for recursive evaluation
+                # Push sub-boxes back to queue with incremented depth
                 for sb in sub_boxes:
                     sb_ints = tuple(int(round(float(c))) for c in sb)
-                    work_queue.append(sb_ints)
+                    work_queue.append((sb_ints, depth + 1))
             else:
                 # Patch satisfies longer side <= 1024px!
                 crop = img_pil.crop(box_ints)
                 entropy = compute_spatial_entropy(crop, weights=config.entropy_weights)
                 _, pooled_vec = slice_feature_map(feat_map, box_ints, img_w, img_h)
 
-                bounded_patches.append(
+                img_patches.append(
                     BoundedPatch(
                         img_idx=img_idx,
                         box=box_ints,
@@ -366,6 +411,15 @@ def partition_candidate_images(
                         entropy=entropy
                     )
                 )
+
+        # Safety Budget Cap: ensure number of bounded patches per image does not exceed budget
+        if len(img_patches) > config.max_patches_per_image:
+            if config.verbose:
+                print(f"[Stage 3][Budget Guard] Capping {len(img_patches)} bounded patches to top {config.max_patches_per_image} by spatial entropy.")
+            img_patches.sort(key=lambda p: p.entropy, reverse=True)
+            img_patches = img_patches[:config.max_patches_per_image]
+
+        bounded_patches.extend(img_patches)
 
     if config.verbose:
         print(f"[Stage 3] Partitioning finished: Aggregated {len(bounded_patches)} bounded patches (all longer side <= {config.max_patch_size}px) across {len(candidate_images)} candidate images.")

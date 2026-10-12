@@ -33,12 +33,14 @@ class MSSearchConfig:
     entropy_threshold: float = 0.35              # H < 0.35 -> Quadrants, H >= 0.35 -> SAM3-SGAP
     entropy_weights: Tuple[float, float, float] = (0.35, 0.35, 0.30)  # Shannon, Sobel, Laplacian
     partition_mode: str = "hybrid"               # "hybrid", "quadrant_only", "sgap_only"
-    sgap_min_splits: int = 8
-    sgap_max_splits: int = 16
+    sgap_min_splits: int = 4                     # Default 4 splits (aligned with CVSearch)
+    sgap_max_splits: int = 8                     # Default 8 splits (aligned with CVSearch)
     sgap_n_atoms: int = 100
     quadrant_overlap_ratio: float = 0.10         # 10% safety border expansion
     sgap_overlap_ratio: float = 0.10             # 10% safety border expansion
     max_patch_size: int = 1024                   # Recursive invariant: longer side <= 1024px
+    max_partition_depth: int = 2                 # Maximum recursion depth before direct tiling
+    max_patches_per_image: int = 64              # Maximum bounded patches budget per image
     reuse_stage2_features: bool = True           # Reuse SAM3 vision features extracted in Stage 2
 
     # -------------------------------------------------------------------------

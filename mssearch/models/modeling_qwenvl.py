@@ -43,11 +43,12 @@ class ModelQwenVL:
         self.model.eval()
         self.device = self.model.device
 
-        # Original CVSearch Token Setting: Default 12,845,056 (~16.5k tokens for 8K)
-        max_pixels = kwargs.get("max_pixels", 12845056)
+        # Tesla T4 Safety Shield: Cap max visual pixels to 1.05M (~1,300 tokens)
+        # Unbounded 12.8M pixels causes SDPA attention buffers to exceed 16GB (e.g. 27.79 GiB OOM on 8K)
+        max_pixels = kwargs.get("max_pixels", 1048576)
         min_pixels = kwargs.get("min_pixels", 3136)
-        print("max_pixels:", max_pixels)
-        print("min_pixels:", min_pixels)
+        print("[ModelQwenVL] max_pixels capped at:", max_pixels)
+        print("[ModelQwenVL] min_pixels:", min_pixels)
         self.processor.image_processor.max_pixels = max_pixels
         self.processor.image_processor.min_pixels = min_pixels
 
@@ -274,11 +275,17 @@ class ModelQwenVL:
     def process_nodes_to_image_list(self, nodes, image_pil, root_anyres=True):
         square_image, left, top = expand2square(image_pil, self.background_color)
         if not nodes:
+            # Physical resolution shield: clamp root image to max 1024px to prevent SDPA attention buffer OOM
+            if max(image_pil.width, image_pil.height) > 1024:
+                return [self.resize_image_seg(image_pil, 1024)]
             return [deepcopy(image_pil)] if root_anyres else [self.resize_image(image_pil)]
         if self.is_root_only(nodes):
-            # Original CVSearch: Retain unconstrained 8K full image into root node
+            if max(image_pil.width, image_pil.height) > 1024:
+                return [self.resize_image_seg(image_pil, 1024)]
             return [deepcopy(image_pil)] if root_anyres else [self.resize_image(image_pil)]
         if len(nodes) == 0 or self.include_root(nodes):
+            if max(image_pil.width, image_pil.height) > 1024:
+                return [self.resize_image_seg(image_pil, 1024)]
             return [deepcopy(image_pil)]
 
         resized_bboxes = []

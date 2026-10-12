@@ -77,23 +77,38 @@ def render_visual_prompt_bbox(
 
 
 def _query_vlm_response(zoom_model, image_pil: Image.Image, question: str) -> str:
-    """Safely invokes VLM response generation across model APIs."""
+    """Safely invokes VLM response generation across model APIs with resolution safety shield."""
+    safe_img = image_pil
+    if max(image_pil.width, image_pil.height) > 1024:
+        scale = 1024.0 / max(image_pil.width, image_pil.height)
+        safe_img = image_pil.resize(
+            (int(round(image_pil.width * scale)), int(round(image_pil.height * scale))),
+            Image.Resampling.LANCZOS
+        )
     if hasattr(zoom_model, "generate_response"):
-        return zoom_model.generate_response(image_pil=image_pil, question=question)
+        return zoom_model.generate_response(image_pil=safe_img, question=question)
     elif hasattr(zoom_model, "free_form_using_nodes"):
-        return zoom_model.free_form_using_nodes(image_pil=image_pil, question=question, searched_nodes=[])
+        return zoom_model.free_form_using_nodes(image_pil=safe_img, question=question, searched_nodes=[])
     elif hasattr(zoom_model, "generate"):
-        return zoom_model.generate(image_pil=image_pil, question=question)
-    return str(zoom_model(image_pil=image_pil, question=question))
+        return zoom_model.generate(image_pil=safe_img, question=question)
+    return str(zoom_model(image_pil=safe_img, question=question))
 
 
 def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str) -> float:
-    """Safely invokes VLM existence confidence query across model APIs."""
+    """Safely invokes VLM existence confidence query across model APIs with resolution safety shield."""
     if hasattr(zoom_model, "get_confidence_value"):
+        # Physical resolution shield: clamp image to max 1024px to prevent 27.79 GiB SDPA OOM
+        safe_img = image_pil
+        if max(image_pil.width, image_pil.height) > 1024:
+            scale = 1024.0 / max(image_pil.width, image_pil.height)
+            safe_img = image_pil.resize(
+                (int(round(image_pil.width * scale)), int(round(image_pil.height * scale))),
+                Image.Resampling.LANCZOS
+            )
         for kwarg in [{"node": None}, {"node_list": None}, {}]:
             try:
                 conf = zoom_model.get_confidence_value(
-                    image_pil=image_pil,
+                    image_pil=safe_img,
                     confidence_type="existence",
                     input_ele=query,
                     **kwarg
