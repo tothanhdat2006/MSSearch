@@ -554,6 +554,26 @@ def _setup_device_and_mode(model, device, eval_mode):
     return model
 
 
+def _resolve_bpe_path(bpe_path: Optional[str] = None) -> str:
+    """Resolve BPE tokenizer vocabulary path with auto-download fallback."""
+    if bpe_path is None:
+        bpe_path = os.path.join(
+            os.path.dirname(__file__), "..", "assets", "bpe_simple_vocab_16e6.txt.gz"
+        )
+    bpe_path = os.path.abspath(bpe_path)
+    if not os.path.exists(bpe_path):
+        os.makedirs(os.path.dirname(bpe_path), exist_ok=True)
+        import urllib.request
+        url = "https://raw.githubusercontent.com/openai/CLIP/main/clip/bpe_simple_vocab_16e6.txt.gz"
+        try:
+            print(f"[SAM3] Downloading missing BPE vocab to {bpe_path} from {url}...")
+            urllib.request.urlretrieve(url, bpe_path)
+            print("[SAM3] Successfully downloaded BPE vocab!")
+        except Exception as e:
+            print(f"[SAM3 WARNING] Automatic BPE vocab download failed: {e}")
+    return bpe_path
+
+
 def build_sam3_image_model(
     bpe_path=None,
     device="cuda" if torch.cuda.is_available() else "cpu",
@@ -579,11 +599,9 @@ def build_sam3_image_model(
     Returns:
         A SAM3 image model
     """
-    if bpe_path is None:
-        bpe_path = os.path.join(
-            os.path.dirname(__file__), "..", "assets", "bpe_simple_vocab_16e6.txt.gz"
-        )
+    bpe_path = _resolve_bpe_path(bpe_path)
     # Create visual components
+
     compile_mode = "default" if compile else None
     vision_encoder = _create_vision_backbone(
         compile_mode=compile_mode, enable_inst_interactivity=enable_inst_interactivity
@@ -667,10 +685,7 @@ def build_sam3_video_model(
     Returns:
         Sam3VideoInferenceWithInstanceInteractivity: The instantiated dense tracking model
     """
-    if bpe_path is None:
-        bpe_path = os.path.join(
-            os.path.dirname(__file__), "..", "assets", "bpe_simple_vocab_16e6.txt.gz"
-        )
+    bpe_path = _resolve_bpe_path(bpe_path)
 
     # Build Tracker module
     tracker = build_tracker(apply_temporal_disambiguation=apply_temporal_disambiguation)
