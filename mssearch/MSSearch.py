@@ -112,6 +112,15 @@ class MultiSourceSearchEngine:
                 "answers": [fast_path_result.answer],
                 "primary_answer": fast_path_result.answer,
                 "evidence_images": [fast_path_result.evidence_img_idx],
+                "extractions": [
+                    {
+                        "img_idx": fast_path_result.evidence_img_idx,
+                        "box": list(fast_path_result.detected_boxes[0]) if fast_path_result.detected_boxes else [0, 0, 100, 100],
+                        "expanded_box": list(fast_path_result.detected_boxes[0]) if fast_path_result.detected_boxes else [0, 0, 100, 100],
+                        "raw_answer": fast_path_result.answer,
+                        "source_branch": "Fast Path"
+                    }
+                ],
                 "telemetry": telemetry
             }
 
@@ -135,15 +144,18 @@ class MultiSourceSearchEngine:
         # Stage 4: SAM3 Feature Grouping & Active Object Gating
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
-        remaining_patches = run_feature_grouping_and_gating(
+        remaining_patches, stage4_groups = run_feature_grouping_and_gating(
             bounded_patches=bounded_patches,
             candidate_images=candidate_images,
             active_objects=active_objects,
             sam_model=self.sam_model,
-            config=self.config
+            config=self.config,
+            detected_boxes=fast_path_result.detected_boxes,
+            return_debug=True
         )
         telemetry["timings_sec"]["stage4_grouping_gating"] = round(time.perf_counter() - t0, 3)
         telemetry["num_remaining_patches"] = len(remaining_patches)
+        telemetry["stage4_groups"] = stage4_groups
         telemetry["stages_executed"].append("stage4_grouping_gating")
 
         # ---------------------------------------------------------------------
@@ -176,10 +188,21 @@ class MultiSourceSearchEngine:
         )
         telemetry["timings_sec"]["stage6_reading"] = round(time.perf_counter() - t0, 3)
         telemetry["evidence_images"] = final_result.evidence_image_indices
+        telemetry["stage6_crops"] = getattr(final_result, "crop_records", [])
         telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
         telemetry["stages_executed"].append("stage6_foveated_reading")
 
-        primary_answer = final_result.answers[0] if final_result.answers else "No answer found"
+        # Prioritize informative answers over refusal / negative answers
+        from .stages.stage6_foveated_reader import is_negative_or_unanswerable
+        informative_answers = [
+            a for a in final_result.answers if not is_negative_or_unanswerable(a)
+        ]
+        if informative_answers:
+            primary_answer = informative_answers[0]
+        elif final_result.answers:
+            primary_answer = final_result.answers[0]
+        else:
+            primary_answer = "No answer found"
 
         return {
             "answers": final_result.answers,

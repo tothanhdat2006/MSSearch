@@ -59,25 +59,35 @@ def group_patches_by_cosine_similarity(
     return list(groups.values())
 
 
+from typing import List, Dict, Tuple, Optional, Any, Union
+
+def bbox_intersects(b1: Tuple[int, int, int, int], b2: Tuple[int, int, int, int]) -> bool:
+    """Checks whether two bounding boxes (x1, y1, x2, y2) intersect with non-zero area."""
+    return not (b1[2] <= b2[0] or b1[0] >= b2[2] or b1[3] <= b2[1] or b1[1] >= b2[3])
+
+
 def run_feature_grouping_and_gating(
     bounded_patches: List[BoundedPatch],
     candidate_images: List[Image.Image],
     active_objects: List[str],
     sam_model,
-    config: MSSearchConfig
-) -> List[BoundedPatch]:
+    config: MSSearchConfig,
+    detected_boxes: Optional[List[Tuple[int, int, int, int]]] = None,
+    return_debug: bool = False
+) -> Union[List[BoundedPatch], Tuple[List[BoundedPatch], List[Dict[str, Any]]]]:
     """
     Executes Feature Grouping and Active Object Gating.
     Prunes background clusters in 1 step; keeps surviving patches in a flat list.
+    Safeguards against false pruning via Stage 2 detection overlap and dual-patch testing.
     """
     if not bounded_patches:
-        return []
+        return ([], []) if return_debug else []
 
     # If grouping is ablated, keep all bounded patches directly
     if not config.enable_feature_grouping or sam_model is None:
         if config.verbose:
             print(f"[Stage 4][Fallback] Feature grouping disabled by config or SAM3 absent; retaining all {len(bounded_patches)} bounded patches directly without semantic pruning.")
-        return bounded_patches
+        return (bounded_patches, []) if return_debug else bounded_patches
 
     # 1. Group patches using cached Stage 3 feature vectors
     groups = group_patches_by_cosine_similarity(
@@ -88,6 +98,7 @@ def run_feature_grouping_and_gating(
         print(f"[Stage 4][Non-Fallback] Reused Stage 3 feature embeddings (zero forward passes) to cluster {len(bounded_patches)} patches into {len(groups)} semantic groups (cos >= {config.grouping_sim_threshold:.2f}).")
 
     remaining_patches: List[BoundedPatch] = []
+    group_records: List[Dict[str, Any]] = []
 
     # 2. Active Object Gating per group
     for g_idx, member_indices in enumerate(groups):
@@ -107,23 +118,75 @@ def run_feature_grouping_and_gating(
         if rw < 8 or rh < 8:
             continue
 
-        # Run SAM3 detection against Active Objects
         has_active_match = False
-        try:
-            with torch.inference_mode():
-                _, processed_results, text_id = sam_model.batch_inference(
-                    rep_img, active_objects
-                )
-            for tid in text_id:
-                res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
-                scores = res.get('scores', [])
-                if any(s >= config.sam3_group_det_threshold for s in scores):
-                    has_active_match = True
+
+        # Safeguard A: Zero-cost Stage 2 detection overlap check
+        if detected_boxes:
+            for d_box in detected_boxes:
+                d_box_clean = tuple(int(round(float(c))) for c in d_box)
+                for mem_i in member_indices:
+                    if bounded_patches[mem_i].img_idx == rep_patch.img_idx:
+                        if bbox_intersects(bounded_patches[mem_i].box, d_box_clean):
+                            has_active_match = True
+                            if config.verbose:
+                                print(f"[Stage 4][Detection Anchor] Group {g_idx} intersects Stage 2 detected target {d_box_clean} -> automatically [KEPT].")
+                            break
+                if has_active_match:
                     break
-        except Exception as e:
-            if config.verbose:
-                print(f"[Stage 4][Exception Fallback] SAM3 group detection failed on Group {g_idx} ({e}); conservatively keeping group.")
-            has_active_match = True
+
+        # Safeguard B: SAM3 detection on representative patch
+        if not has_active_match:
+            try:
+                with torch.inference_mode():
+                    _, processed_results, text_id = sam_model.batch_inference(
+                        rep_img, active_objects
+                    )
+                for tid in text_id:
+                    res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
+                    scores = res.get('scores', [])
+                    if any(s >= config.sam3_group_det_threshold for s in scores):
+                        has_active_match = True
+                        break
+            except Exception as e:
+                if config.verbose:
+                    print(f"[Stage 4][Exception Fallback] SAM3 group detection failed on Group {g_idx} ({e}); conservatively keeping group.")
+                has_active_match = True
+
+        # Safeguard C: Dual-patch check on highest-entropy patch for multi-patch groups
+        if not has_active_match and len(member_indices) > 1:
+            best_entropy_idx = max(member_indices, key=lambda idx: bounded_patches[idx].entropy)
+            if best_entropy_idx != rep_idx:
+                he_patch = bounded_patches[best_entropy_idx]
+                he_box_ints = tuple(int(round(float(c))) for c in he_patch.box)
+                he_img = candidate_images[he_patch.img_idx].crop(he_box_ints)
+                hew, heh = he_img.size
+                if hew >= 8 and heh >= 8:
+                    try:
+                        with torch.inference_mode():
+                            _, processed_results, text_id = sam_model.batch_inference(
+                                he_img, active_objects
+                            )
+                        for tid in text_id:
+                            res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
+                            scores = res.get('scores', [])
+                            if any(s >= config.sam3_group_det_threshold for s in scores):
+                                has_active_match = True
+                                if config.verbose:
+                                    print(f"[Stage 4][Entropy Anchor] Group {g_idx} matched active object on secondary high-entropy patch -> [KEPT].")
+                                break
+                    except Exception:
+                        pass
+
+        # Record group debug telemetry
+        group_records.append({
+            "group_idx": g_idx,
+            "member_indices": member_indices,
+            "rep_idx": rep_idx,
+            "rep_box": list(rep_box_ints),
+            "img_idx": rep_patch.img_idx,
+            "status": "KEPT" if has_active_match else "PRUNED",
+            "num_patches": len(member_indices)
+        })
 
         if has_active_match:
             # Active object present -> KEEP all member patches into flat candidate pool
@@ -148,5 +211,7 @@ def run_feature_grouping_and_gating(
         prune_pct = (pruned_count / max(1, len(bounded_patches))) * 100
         print(f"[Stage 4][Non-Fallback Summary] Gating complete: {len(remaining_patches)}/{len(bounded_patches)} patches kept ({pruned_count} pruned, {prune_pct:.1f}% reduction).")
 
+    if return_debug:
+        return remaining_patches, group_records
     return remaining_patches
 

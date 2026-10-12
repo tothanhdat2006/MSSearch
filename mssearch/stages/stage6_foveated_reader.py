@@ -25,12 +25,15 @@ class EvidenceExtraction:
     source_branch: str
 
 
+import re
+
 @dataclass
 class FinalSearchResult:
     """Final output container for the Dual-Path Visual Search Engine."""
     answers: List[str]
     evidence_image_indices: List[int]
     extractions: List[EvidenceExtraction] = field(default_factory=list)
+    crop_records: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def expand_bounding_box(
@@ -60,46 +63,104 @@ def expand_bounding_box(
     return (int(ex1), int(ey1), int(ex2), int(ey2))
 
 
-
 def is_negative_or_unanswerable(text: str) -> bool:
-    """Detects whether VLM output indicates no answer / absence of target."""
+    """
+    Detects whether VLM output indicates absence / refusal / non-visibility of target object,
+    e.g. 'The image does not show a mailbox', 'There is no mailbox visible', etc.
+    """
     cleaned = text.strip().lower()
-    negative_phrases = [
-        "cannot answer", "not visible", "not clearly visible",
-        "no information", "cannot determine", "not enough information",
-        "unable to see", "none", "not present", "n/a", "cannot be seen"
+    if len(cleaned) < 2:
+        return True
+
+    # 1. Direct absence & refusal regex patterns
+    negative_patterns = [
+        r"does not (?:show|contain|depict|feature|display|include)\b",
+        r"doesn't (?:show|contain|depict|feature|display|include)\b",
+        r"did not (?:show|contain|depict|feature|display|include)\b",
+        r"didn't (?:show|contain|depict|feature|display|include)\b",
+        r"there is no\b",
+        r"there are no\b",
+        r"there's no\b",
+        r"no \w+ (?:is |are )?visible\b",
+        r"no visible\b",
+        r"not visible\b",
+        r"not clearly visible\b",
+        r"cannot be seen\b",
+        r"can't be seen\b",
+        r"cannot see\b",
+        r"can't see\b",
+        r"unable to see\b",
+        r"cannot find\b",
+        r"can't find\b",
+        r"unable to find\b",
+        r"cannot be found\b",
+        r"cannot answer\b",
+        r"can't answer\b",
+        r"unable to answer\b",
+        r"cannot determine\b",
+        r"can't determine\b",
+        r"unable to determine\b",
+        r"cannot be determined\b",
+        r"no information\b",
+        r"not enough information\b",
+        r"not present\b",
+        r"is absent\b",
+        r"are absent\b",
+        r"no indication of\b",
+        r"no sign of\b",
+        r"not depicted\b",
+        r"not in the (?:image|frame|crop|picture|photo)\b",
+        r"outside the (?:image|frame|crop|picture|photo)\b",
+        r"not visible in the (?:image|frame|crop|picture|photo)\b",
+        r"not visible in this (?:image|frame|crop|picture|photo)\b",
+        r"image (?:you provided )?does not show\b",
+        r"image (?:you provided )?does not contain\b",
+        r"image does not show\b",
+        r"image does not contain\b",
+        r"\bnone visible\b",
+        r"\bnot found\b",
     ]
-    return any(p in cleaned for p in negative_phrases) or len(cleaned) < 2
+
+    for pat in negative_patterns:
+        if re.search(pat, cleaned):
+            return True
+
+    return False
 
 
 def deduplicate_answers(answers: List[str], similarity_threshold: float = 0.85, verbose: bool = False) -> List[str]:
     """
     Deduplicates answer strings via Levenshtein / SequenceMatcher semantic similarity.
-    Keeps the most descriptive, higher-entropy answer among near-duplicates.
+    Keeps the most descriptive, higher-entropy answer among near-duplicates,
+    and returns unique answers sorted by support count (descending consensus).
     """
-    unique_answers: List[str] = []
+    valid_answers = [ans.strip() for ans in answers if ans.strip() and not is_negative_or_unanswerable(ans)]
+    if not valid_answers:
+        return []
 
-    for ans in answers:
-        norm_ans = ans.strip()
-        if not norm_ans or is_negative_or_unanswerable(norm_ans):
-            continue
+    unique_clusters: List[Dict[str, Any]] = []
 
-        is_duplicate = False
-        for idx, existing in enumerate(unique_answers):
-            ratio = SequenceMatcher(None, norm_ans.lower(), existing.lower()).ratio()
+    for ans in valid_answers:
+        matched = False
+        for cluster in unique_clusters:
+            rep = cluster["rep"]
+            ratio = SequenceMatcher(None, ans.lower(), rep.lower()).ratio()
             if ratio >= similarity_threshold:
-                is_duplicate = True
+                matched = True
+                cluster["count"] += 1
                 if verbose:
-                    print(f"[Stage 6][Deduplication] Near-duplicate detected (sim={ratio:.2f}): '{norm_ans}' vs '{existing}'. Merging.")
+                    print(f"[Stage 6][Deduplication] Near-duplicate detected (sim={ratio:.2f}): '{ans}' vs '{rep}'. Merging.")
                 # Keep whichever string is more descriptive
-                if len(norm_ans) > len(existing):
-                    unique_answers[idx] = norm_ans
+                if len(ans) > len(rep):
+                    cluster["rep"] = ans
                 break
 
-        if not is_duplicate:
-            unique_answers.append(norm_ans)
+        if not matched:
+            unique_clusters.append({"rep": ans, "count": 1})
 
-    return unique_answers
+    # Rank clusters: highest consensus support count first, then by length
+    unique_clusters.sort(key=lambda c: (c["count"], len(c["rep"])), reverse=True)
+    return [c["rep"] for c in unique_clusters]
 
 
 def run_foveated_vlm_reading(
@@ -115,6 +176,7 @@ def run_foveated_vlm_reading(
     """
     extractions: List[EvidenceExtraction] = []
     evidence_indices: set = set()
+    crop_records: List[Dict[str, Any]] = []
 
     if config.verbose:
         print(f"[Stage 6] Commencing exhaustive foveated reading across {len(unified_pool)} candidate crops (1.25x bbox expansion)...")
@@ -176,7 +238,21 @@ def run_foveated_vlm_reading(
                 print(f"[Stage 6][Fallback] Zoom VLM model absent; cannot read crop {c_idx}.")
             continue
 
-        if not is_negative_or_unanswerable(raw_answer):
+        is_ev = not is_negative_or_unanswerable(raw_answer)
+
+        # Collect detailed debug crop record for notebook visualization
+        crop_records.append({
+            "crop_idx": c_idx,
+            "img_idx": img_idx,
+            "box": list(item.box),
+            "expanded_box": list(exp_box),
+            "local_target_box": list(local_target_box),
+            "raw_answer": raw_answer,
+            "is_evidence": is_ev,
+            "source_branch": item.source_branch
+        })
+
+        if is_ev:
             extractions.append(
                 EvidenceExtraction(
                     img_idx=img_idx,
@@ -206,6 +282,7 @@ def run_foveated_vlm_reading(
     return FinalSearchResult(
         answers=final_dedup_answers,
         evidence_image_indices=sorted(list(evidence_indices)),
-        extractions=extractions
+        extractions=extractions,
+        crop_records=crop_records
     )
 
