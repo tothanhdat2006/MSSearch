@@ -1,3 +1,4 @@
+from typing import Optional, List, Dict, Any, Tuple
 import torch
 from torch.nn import CrossEntropyLoss
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
