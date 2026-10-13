@@ -17,17 +17,20 @@ from .stage3_partitioning import BoundedPatch
 
 def group_patches_by_cosine_similarity(
     patches: List[BoundedPatch],
-    sim_threshold: float = 0.80
-) -> List[List[int]]:
+    sim_threshold: float = 0.80,
+    return_sim_mat: bool = False
+) -> Union[List[List[int]], Tuple[List[List[int]], np.ndarray]]:
     """
     Groups patches into semantic clusters based on Stage 3 pooled feature cosine similarity.
     Reuses the features extracted during Stage 3 with zero redundant network forward passes.
     """
     n_patches = len(patches)
     if n_patches == 0:
-        return []
+        empty_mat = np.zeros((0, 0), dtype=np.float32)
+        return ([], empty_mat) if return_sim_mat else []
     if n_patches == 1:
-        return [[0]]
+        single_mat = np.ones((1, 1), dtype=np.float32)
+        return ([[0]], single_mat) if return_sim_mat else [[0]]
 
     # 1. Normalize feature vectors
     feats = np.stack([p.feature_vector for p in patches], axis=0)  # [N, C]
@@ -50,13 +53,15 @@ def group_patches_by_cosine_similarity(
         labels = clustering.fit_predict(dist_mat)
     except Exception:
         # Fallback each patch as its own group
-        return [[i] for i in range(n_patches)]
+        groups_list = [[i] for i in range(n_patches)]
+        return (groups_list, sim_mat) if return_sim_mat else groups_list
 
     groups: Dict[int, List[int]] = {}
     for idx, lbl in enumerate(labels):
         groups.setdefault(lbl, []).append(idx)
 
-    return list(groups.values())
+    groups_list = list(groups.values())
+    return (groups_list, sim_mat) if return_sim_mat else groups_list
 
 
 from typing import List, Dict, Tuple, Optional, Any, Union
@@ -90,9 +95,10 @@ def run_feature_grouping_and_gating(
         return (bounded_patches, []) if return_debug else bounded_patches
 
     # 1. Group patches using cached Stage 3 feature vectors
-    groups = group_patches_by_cosine_similarity(
+    groups, sim_mat = group_patches_by_cosine_similarity(
         bounded_patches,
-        sim_threshold=config.grouping_sim_threshold
+        sim_threshold=config.grouping_sim_threshold,
+        return_sim_mat=True
     )
     if config.verbose:
         print(f"[Stage 4][Non-Fallback] Reused Stage 3 feature embeddings (zero forward passes) to cluster {len(bounded_patches)} patches into {len(groups)} semantic groups (cos >= {config.grouping_sim_threshold:.2f}).")
@@ -119,6 +125,8 @@ def run_feature_grouping_and_gating(
             continue
 
         has_active_match = False
+        match_reason = "none_pruned"
+        best_entropy_idx = rep_idx
 
         # Safeguard A: Zero-cost Stage 2 detection overlap check
         if detected_boxes:
@@ -128,6 +136,7 @@ def run_feature_grouping_and_gating(
                     if bounded_patches[mem_i].img_idx == rep_patch.img_idx:
                         if bbox_intersects(bounded_patches[mem_i].box, d_box_clean):
                             has_active_match = True
+                            match_reason = "stage2_detection_anchor"
                             if config.verbose:
                                 print(f"[Stage 4][Detection Anchor] Group {g_idx} intersects Stage 2 detected target {d_box_clean} -> automatically [KEPT].")
                             break
@@ -146,11 +155,13 @@ def run_feature_grouping_and_gating(
                     scores = res.get('scores', [])
                     if any(s >= config.sam3_group_det_threshold for s in scores):
                         has_active_match = True
+                        match_reason = "representative_sam3_det"
                         break
             except Exception as e:
                 if config.verbose:
                     print(f"[Stage 4][Exception Fallback] SAM3 group detection failed on Group {g_idx} ({e}); conservatively keeping group.")
                 has_active_match = True
+                match_reason = "exception_fallback"
 
         # Safeguard C: Dual-patch check on highest-entropy patch for multi-patch groups
         if not has_active_match and len(member_indices) > 1:
@@ -171,21 +182,38 @@ def run_feature_grouping_and_gating(
                             scores = res.get('scores', [])
                             if any(s >= config.sam3_group_det_threshold for s in scores):
                                 has_active_match = True
+                                match_reason = "secondary_entropy_anchor"
                                 if config.verbose:
                                     print(f"[Stage 4][Entropy Anchor] Group {g_idx} matched active object on secondary high-entropy patch -> [KEPT].")
                                 break
                     except Exception:
                         pass
 
-        # Record group debug telemetry
+        # Pairwise cosine similarity submatrix for all member patches in this group
+        if sim_mat.size > 0 and len(member_indices) > 0:
+            sub_sim = sim_mat[member_indices][:, member_indices].tolist()
+        else:
+            sub_sim = [[1.0]]
+
+        rep_local = member_indices.index(rep_idx) if rep_idx in member_indices else 0
+        he_local = member_indices.index(best_entropy_idx) if best_entropy_idx in member_indices else 0
+
+        # Record rich group debug telemetry
         group_records.append({
             "group_idx": g_idx,
             "member_indices": member_indices,
             "rep_idx": rep_idx,
+            "rep_idx_local": rep_local,
+            "best_entropy_idx": best_entropy_idx,
+            "best_entropy_idx_local": he_local,
             "rep_box": list(rep_box_ints),
             "img_idx": rep_patch.img_idx,
             "status": "KEPT" if has_active_match else "PRUNED",
-            "num_patches": len(member_indices)
+            "match_reason": match_reason,
+            "num_patches": len(member_indices),
+            "pairwise_sim": sub_sim,
+            "member_boxes": [list(tuple(int(round(float(c))) for c in bounded_patches[i].box)) for i in member_indices],
+            "member_entropies": [float(bounded_patches[i].entropy) for i in member_indices],
         })
 
         if has_active_match:
