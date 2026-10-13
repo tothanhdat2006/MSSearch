@@ -71,6 +71,24 @@ def group_patches_by_cosine_similarity(
     return (groups_list, sim_mat) if return_sim_mat else groups_list
 
 
+def compute_target_coverage_ratio(patch_box: Tuple[int, int, int, int], target_box: Tuple[int, int, int, int]) -> float:
+    """Computes the fraction of target_box covered by patch_box."""
+    ix1, iy1 = max(patch_box[0], target_box[0]), max(patch_box[1], target_box[1])
+    ix2, iy2 = min(patch_box[2], target_box[2]), min(patch_box[3], target_box[3])
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    inter_area = float((ix2 - ix1) * (iy2 - iy1))
+    target_area = float(max(1, (target_box[2] - target_box[0]) * (target_box[3] - target_box[1])))
+    return inter_area / target_area
+
+
+def target_center_in_patch(patch_box: Tuple[int, int, int, int], target_box: Tuple[int, int, int, int]) -> bool:
+    """Checks whether the center point of target_box lies inside patch_box."""
+    cx = (target_box[0] + target_box[2]) / 2.0
+    cy = (target_box[1] + target_box[3]) / 2.0
+    return (patch_box[0] <= cx <= patch_box[2]) and (patch_box[1] <= cy <= patch_box[3])
+
+
 def bbox_intersects(b1: Tuple[int, int, int, int], b2: Tuple[int, int, int, int]) -> bool:
     """Checks whether two bounding boxes (x1, y1, x2, y2) intersect with non-zero area."""
     return not (b1[2] <= b2[0] or b1[0] >= b2[2] or b1[3] <= b2[1] or b1[1] >= b2[3])
@@ -132,24 +150,45 @@ def run_feature_grouping_and_gating(
         has_active_match = False
         match_reason = "none_pruned"
         best_entropy_idx = rep_idx
+        group_detected_objects: List[Dict[str, Any]] = []
+        max_det_score: float = 0.0
 
-        # Safeguard A: Zero-cost Stage 2 detection overlap check
+        # Safeguard A: Zero-cost Stage 2 detection anchor check (requires strict containment or >= 35% coverage)
         if detected_boxes:
-            for d_box in detected_boxes:
+            for d_idx, d_box in enumerate(detected_boxes):
                 d_box_clean = tuple(int(round(float(c))) for c in d_box)
                 for mem_i in member_indices:
                     if bounded_patches[mem_i].img_idx == rep_patch.img_idx:
-                        if bbox_intersects(bounded_patches[mem_i].box, d_box_clean):
+                        mem_box = bounded_patches[mem_i].box
+                        center_in = target_center_in_patch(mem_box, d_box_clean)
+                        cov_ratio = compute_target_coverage_ratio(mem_box, d_box_clean)
+                        
+                        if center_in or cov_ratio >= 0.35:
                             has_active_match = True
                             match_reason = "stage2_detection_anchor"
+                            target_label = active_objects[d_idx] if d_idx < len(active_objects) else f"Target_{d_idx}"
+                            
+                            # Relative coordinates inside member patch
+                            rel_bx1 = max(0, d_box_clean[0] - mem_box[0])
+                            rel_by1 = max(0, d_box_clean[1] - mem_box[1])
+                            rel_bx2 = min(mem_box[2] - mem_box[0], d_box_clean[2] - mem_box[0])
+                            rel_by2 = min(mem_box[3] - mem_box[1], d_box_clean[3] - mem_box[1])
+                            
+                            group_detected_objects.append({
+                                "label": target_label,
+                                "score": 1.0,
+                                "local_box": [rel_bx1, rel_by1, rel_bx2, rel_by2],
+                                "global_box": list(d_box_clean),
+                                "coverage_ratio": round(cov_ratio, 2)
+                            })
                             if config.verbose:
-                                print(f"[Stage 4][Detection Anchor] Group {g_idx} intersects Stage 2 detected target {d_box_clean} -> automatically [KEPT].")
+                                print(f"[Stage 4][Detection Anchor] Group {g_idx} encompasses Stage 2 target '{target_label}' (Coverage: {cov_ratio*100:.1f}%) -> automatically [KEPT].")
                             break
                 if has_active_match:
                     break
 
         # Safeguard B: SAM3 detection on representative patch
-        if not has_active_match:
+        if not has_active_match and sam_model is not None:
             try:
                 with torch.inference_mode():
                     _, processed_results, text_id = sam_model.batch_inference(
@@ -157,11 +196,23 @@ def run_feature_grouping_and_gating(
                     )
                 for tid in text_id:
                     res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
+                    boxes = res.get('boxes', [])
                     scores = res.get('scores', [])
-                    if any(s >= config.sam3_group_det_threshold for s in scores):
-                        has_active_match = True
-                        match_reason = "representative_sam3_det"
-                        break
+                    for b, s in zip(boxes, scores):
+                        s_float = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
+                        if s_float > max_det_score:
+                            max_det_score = s_float
+                        if s_float >= config.sam3_group_det_threshold:
+                            has_active_match = True
+                            match_reason = "representative_sam3_det"
+                            b_clean = [int(round(float(c))) for c in (b.tolist() if hasattr(b, 'tolist') else b)]
+                            group_detected_objects.append({
+                                "label": str(tid),
+                                "score": round(s_float, 2),
+                                "local_box": b_clean,
+                                "global_box": [b_clean[0] + rep_box_ints[0], b_clean[1] + rep_box_ints[1],
+                                               b_clean[2] + rep_box_ints[0], b_clean[3] + rep_box_ints[1]]
+                            })
             except Exception as e:
                 if config.verbose:
                     print(f"[Stage 4][Exception Fallback] SAM3 group detection failed on Group {g_idx} ({e}); conservatively keeping group.")
@@ -169,7 +220,7 @@ def run_feature_grouping_and_gating(
                 match_reason = "exception_fallback"
 
         # Safeguard C: Dual-patch check on highest-entropy patch for multi-patch groups
-        if not has_active_match and len(member_indices) > 1:
+        if not has_active_match and len(member_indices) > 1 and sam_model is not None:
             best_entropy_idx = max(member_indices, key=lambda idx: bounded_patches[idx].entropy)
             if best_entropy_idx != rep_idx:
                 he_patch = bounded_patches[best_entropy_idx]
@@ -184,13 +235,25 @@ def run_feature_grouping_and_gating(
                             )
                         for tid in text_id:
                             res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
+                            boxes = res.get('boxes', [])
                             scores = res.get('scores', [])
-                            if any(s >= config.sam3_group_det_threshold for s in scores):
-                                has_active_match = True
-                                match_reason = "secondary_entropy_anchor"
-                                if config.verbose:
-                                    print(f"[Stage 4][Entropy Anchor] Group {g_idx} matched active object on secondary high-entropy patch -> [KEPT].")
-                                break
+                            for b, s in zip(boxes, scores):
+                                s_float = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
+                                if s_float > max_det_score:
+                                    max_det_score = s_float
+                                if s_float >= config.sam3_group_det_threshold:
+                                    has_active_match = True
+                                    match_reason = "secondary_entropy_anchor"
+                                    b_clean = [int(round(float(c))) for c in (b.tolist() if hasattr(b, 'tolist') else b)]
+                                    group_detected_objects.append({
+                                        "label": str(tid),
+                                        "score": round(s_float, 2),
+                                        "local_box": b_clean,
+                                        "global_box": [b_clean[0] + he_box_ints[0], b_clean[1] + he_box_ints[1],
+                                                       b_clean[2] + he_box_ints[0], b_clean[3] + he_box_ints[1]]
+                                    })
+                                    if config.verbose:
+                                        print(f"[Stage 4][Entropy Anchor] Group {g_idx} matched active object on secondary high-entropy patch -> [KEPT].")
                     except Exception:
                         pass
 
@@ -218,7 +281,9 @@ def run_feature_grouping_and_gating(
             "num_patches": len(member_indices),
             "pairwise_sim": sub_sim,
             "member_boxes": [list(tuple(int(round(float(c))) for c in bounded_patches[i].box)) for i in member_indices],
-            "member_entropies": [float(bounded_patches[i].entropy) for i in member_indices],
+            "member_entropies": [bounded_patches[i].entropy for i in member_indices],
+            "detected_objects": group_detected_objects,
+            "max_det_score": round(max_det_score, 3)
         })
 
         if has_active_match:
