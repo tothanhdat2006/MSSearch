@@ -67,6 +67,23 @@ def compute_spatial_entropy(
     return float(np.clip(h_total, 0.0, 1.0))
 
 
+def split_4_subpatches(w: int, h: int) -> Tuple[int, int]:
+    """
+    CVSearch aspect-ratio aware 4-subpatch splitting (tree.py:L118-L125).
+    Inspects hw_ratio = h / w:
+      - If h / w >= 2.0: (1, 4) -> 1 column x 4 vertical slices (tall structure)
+      - If h / w <= 0.5: (4, 1) -> 4 columns x 1 horizontal slice (wide strip)
+      - Otherwise:       (2, 2) -> 2x2 quadrants
+    """
+    hw_ratio = h / max(1, w)
+    if hw_ratio >= 2.0:
+        return 1, 4
+    elif hw_ratio <= 0.5:
+        return 4, 1
+    else:
+        return 2, 2
+
+
 def partition_oversized_box(
     box: Tuple[int, int, int, int],
     img_w: int,
@@ -75,28 +92,49 @@ def partition_oversized_box(
     overlap_ratio: float = 0.10
 ) -> List[Tuple[int, int, int, int]]:
     """
-    Uniform aspect-ratio grid tiling ensuring all output patches satisfy max(W, H) <= max_patch_size.
-    Guarantees 100% canvas coverage without compounding overlap slivers, duplicate stacking, or missing regions.
+    Splits an oversized box into 4 subpatches using CVSearch's split_4_subpatches ratio:
+      - (1, 4) if H / W >= 2.0
+      - (4, 1) if H / W <= 0.5
+      - (2, 2) quadrants otherwise
+    Preserves 10% overlap padding while strictly following CVSearch aspect-ratio ratios.
     """
     x1, y1, x2, y2 = box
-    w, h = x2 - x1, y2 - y1
+    w = x2 - x1
+    h = y2 - y1
+
     if w <= max_patch_size and h <= max_patch_size:
         return [box]
 
-    stride = max(128, int(max_patch_size * (1.0 - overlap_ratio)))
-    nx = max(1, math.ceil(w / stride)) if w > max_patch_size else 1
-    ny = max(1, math.ceil(h / stride)) if h > max_patch_size else 1
+    nx, ny = split_4_subpatches(w, h)
+    w_stride = int(w // nx)
+    h_stride = int(h // ny)
 
-    xs = [x1 + int(i * (w - max_patch_size) / (nx - 1)) if nx > 1 else x1 for i in range(nx)]
-    ys = [y1 + int(j * (h - max_patch_size) / (ny - 1)) if ny > 1 else y1 for j in range(ny)]
+    sub_patches = []
+    for j in range(ny):
+        for i in range(nx):
+            sx1 = x1 + i * w_stride
+            sy1 = y1 + j * h_stride
+            sx2 = x2 if i == nx - 1 else sx1 + w_stride
+            sy2 = y2 if j == ny - 1 else sy1 + h_stride
 
-    tiles = []
-    for y in ys:
-        for x in xs:
-            bx2 = min(x2, x + max_patch_size)
-            by2 = min(y2, y + max_patch_size)
-            tiles.append((max(0, int(round(x))), max(0, int(round(y))), min(img_w, int(round(bx2))), min(img_h, int(round(by2)))))
-    return tiles
+            sub_w = sx2 - sx1
+            sub_h = sy2 - sy1
+
+            # Apply overlap padding when terminal to prevent compounding across depths
+            if max(sub_w, sub_h) <= max_patch_size:
+                pad_x = int(sub_w * overlap_ratio) if nx > 1 else 0
+                pad_y = int(sub_h * overlap_ratio) if ny > 1 else 0
+            else:
+                pad_x = 0
+                pad_y = 0
+
+            sub_patches.append((
+                max(0, sx1 - pad_x),
+                max(0, sy1 - pad_y),
+                min(img_w, sx2 + pad_x),
+                min(img_h, sy2 + pad_y)
+            ))
+    return sub_patches
 
 
 def partition_into_quadrants(
@@ -337,8 +375,8 @@ def partition_candidate_images(
             x1, y1, x2, y2 = box_ints
             pw, ph = x2 - x1, y2 - y1
 
-            # Check recursive bounding condition: longer side <= max_patch_size
-            if max(pw, ph) > config.max_patch_size:
+            # Check recursive bounding condition: longer side <= max_patch_size (with 15% tolerance for boundary overlap)
+            if max(pw, ph) > int(config.max_patch_size * 1.15):
                 crop = img_pil.crop(box_ints)
                 entropy = compute_spatial_entropy(crop, weights=config.entropy_weights)
 
