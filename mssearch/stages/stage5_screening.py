@@ -23,6 +23,11 @@ class CandidateCrop:
     score: float
     source_branch: str  # "Branch A (Direct)" or "Branch B (SigLIP)"
 
+    @property
+    def confidence_score(self) -> float:
+        """Alias for score to ensure backward compatibility."""
+        return self.score
+
 
 def run_resolution_screening(
     remaining_patches: List[BoundedPatch],
