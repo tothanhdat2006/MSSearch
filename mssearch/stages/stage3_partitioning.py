@@ -7,6 +7,7 @@ and reuses Stage 2 feature maps while caching pooled patch embeddings for Stage 
 
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional, Any
+import math
 import numpy as np
 from PIL import Image
 import cv2
@@ -74,47 +75,28 @@ def partition_oversized_box(
     overlap_ratio: float = 0.10
 ) -> List[Tuple[int, int, int, int]]:
     """
-    Direction-aware recursive partitioning:
-    - If both W > max_patch_size and H > max_patch_size -> 2x2 Quadrants (4 patches)
-    - If only W > max_patch_size -> Split horizontally (2 patches, Left & Right)
-    - If only H > max_patch_size -> Split vertically (2 patches, Top & Bottom)
-    - Preserves safety overlap padding while preventing thin sliver over-splitting.
+    Uniform aspect-ratio grid tiling ensuring all output patches satisfy max(W, H) <= max_patch_size.
+    Guarantees 100% canvas coverage without compounding overlap slivers, duplicate stacking, or missing regions.
     """
     x1, y1, x2, y2 = box
     w, h = x2 - x1, y2 - y1
-
-    split_x = (w > max_patch_size)
-    split_y = (h > max_patch_size)
-
-    # If neither exceeds max_patch_size, return original box
-    if not split_x and not split_y:
+    if w <= max_patch_size and h <= max_patch_size:
         return [box]
 
-    pad_x = int(w * overlap_ratio) if split_x else 0
-    pad_y = int(h * overlap_ratio) if split_y else 0
-    mid_x = x1 + w // 2
-    mid_y = y1 + h // 2
+    stride = max(128, int(max_patch_size * (1.0 - overlap_ratio)))
+    nx = max(1, math.ceil(w / stride)) if w > max_patch_size else 1
+    ny = max(1, math.ceil(h / stride)) if h > max_patch_size else 1
 
-    if split_x and split_y:
-        # 2x2 Quadrants
-        return [
-            (max(0, x1 - pad_x), max(0, y1 - pad_y), min(img_w, mid_x + pad_x), min(img_h, mid_y + pad_y)),
-            (max(0, mid_x - pad_x), max(0, y1 - pad_y), min(img_w, x2 + pad_x), min(img_h, mid_y + pad_y)),
-            (max(0, x1 - pad_x), max(0, mid_y - pad_y), min(img_w, mid_x + pad_x), min(img_h, y2 + pad_y)),
-            (max(0, mid_x - pad_x), max(0, mid_y - pad_y), min(img_w, x2 + pad_x), min(img_h, y2 + pad_y)),
-        ]
-    elif split_x:
-        # Split horizontally only (Left and Right)
-        return [
-            (max(0, x1 - pad_x), y1, min(img_w, mid_x + pad_x), y2),
-            (max(0, mid_x - pad_x), y1, min(img_w, x2 + pad_x), y2),
-        ]
-    else:
-        # Split vertically only (Top and Bottom)
-        return [
-            (x1, max(0, y1 - pad_y), x2, min(img_h, mid_y + pad_y)),
-            (x1, max(0, mid_y - pad_y), x2, min(img_h, y2 + pad_y)),
-        ]
+    xs = [x1 + int(i * (w - max_patch_size) / (nx - 1)) if nx > 1 else x1 for i in range(nx)]
+    ys = [y1 + int(j * (h - max_patch_size) / (ny - 1)) if ny > 1 else y1 for j in range(ny)]
+
+    tiles = []
+    for y in ys:
+        for x in xs:
+            bx2 = min(x2, x + max_patch_size)
+            by2 = min(y2, y + max_patch_size)
+            tiles.append((max(0, int(round(x))), max(0, int(round(y))), min(img_w, int(round(bx2))), min(img_h, int(round(by2)))))
+    return tiles
 
 
 def partition_into_quadrants(
@@ -415,9 +397,10 @@ def partition_candidate_images(
         # Safety Budget Cap: ensure number of bounded patches per image does not exceed budget
         if len(img_patches) > config.max_patches_per_image:
             if config.verbose:
-                print(f"[Stage 3][Budget Guard] Capping {len(img_patches)} bounded patches to top {config.max_patches_per_image} by spatial entropy.")
-            img_patches.sort(key=lambda p: p.entropy, reverse=True)
-            img_patches = img_patches[:config.max_patches_per_image]
+                print(f"[Stage 3][Budget Guard] Uniformly downsampling {len(img_patches)} bounded patches to {config.max_patches_per_image} across canvas.")
+            step = len(img_patches) / config.max_patches_per_image
+            indices = [int(i * step) for i in range(config.max_patches_per_image)]
+            img_patches = [img_patches[i] for i in indices]
 
         bounded_patches.extend(img_patches)
 
