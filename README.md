@@ -129,7 +129,7 @@ MSSearch/
 git clone https://github.com/tothanhdat2006/MSSearch.git
 cd MSSearch
 pip install -r requirements.txt
-pip install scikit-image scikit-learn networkx
+pip install iopath decord ftfy scikit-image scikit-learn networkx
 python -m spacy download en_core_web_sm
 ```
 
