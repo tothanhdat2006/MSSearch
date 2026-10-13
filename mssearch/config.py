@@ -70,3 +70,36 @@ class MSSearchConfig:
     # Diagnostic & Debug Logging
     # -------------------------------------------------------------------------
     verbose: bool = True                         # Print clear debug logs on fallback / non-fallback decisions
+
+    # -------------------------------------------------------------------------
+    # Backward Compatibility Aliases & Ingestion
+    # -------------------------------------------------------------------------
+    fast_path_enabled: Optional[bool] = None
+    feature_sim_threshold: Optional[float] = None
+    siglip_sim_threshold: Optional[float] = None
+    expansion_factor: Optional[float] = None
+
+    def __post_init__(self):
+        # Synchronize fast path toggle
+        if self.fast_path_enabled is not None:
+            self.enable_fast_path = self.fast_path_enabled
+        else:
+            self.fast_path_enabled = self.enable_fast_path
+
+        # Synchronize feature grouping similarity threshold
+        if self.feature_sim_threshold is not None:
+            self.grouping_sim_threshold = self.feature_sim_threshold
+        else:
+            self.feature_sim_threshold = self.grouping_sim_threshold
+
+        # Synchronize SigLIP screening threshold
+        if self.siglip_sim_threshold is not None:
+            self.branch_b_score_threshold = self.siglip_sim_threshold
+        else:
+            self.siglip_sim_threshold = self.branch_b_score_threshold
+
+        # Synchronize bounding box expansion factor
+        if self.expansion_factor is not None:
+            self.bbox_expansion_factor = self.expansion_factor
+        else:
+            self.expansion_factor = self.bbox_expansion_factor
