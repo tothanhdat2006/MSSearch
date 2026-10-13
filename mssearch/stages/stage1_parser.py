@@ -4,7 +4,7 @@ Extracts all key visual anchor entities from question q into A_q = [e_1, e_2, ..
 """
 
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple, Union
 from ..models.utils import include_pronouns, normalize_target_text, extract_visual_objects
 
 
@@ -13,8 +13,10 @@ def parse_question_to_active_objects(
     zoom_model=None,
     nlp_model=None,
     ic_examples: Optional[dict] = None,
-    verbose: bool = False
-) -> List[str]:
+    verbose: bool = False,
+    return_strategy: bool = False,
+    vlm_model=None
+) -> Union[List[str], Tuple[List[str], str]]:
     """
     Parses a natural language question into a normalized list of target anchor objects.
     
@@ -22,8 +24,11 @@ def parse_question_to_active_objects(
         "What symbol is shown on the blue sign next to the car?"
         -> ["car", "sign"]
     """
+    if zoom_model is None and vlm_model is not None:
+        zoom_model = vlm_model
+
     raw_targets = []
-    extraction_strategy = "unknown"
+    extraction_strategy = "Strategy 3: Regex Noun Extraction (Fallback)"
 
     # Strategy 1: Use VLM In-Context Cue Generator if available
     if zoom_model is not None and ic_examples is not None:
@@ -79,10 +84,17 @@ def parse_question_to_active_objects(
     # Strategy 4: Ultimate Fallback if no targets extracted
     if not clean_targets:
         clean_targets = ["object"]
+        extraction_strategy = "Strategy 4: Default Fallback ['object']"
         if verbose:
             print("[Stage 1][Ultimate Fallback] No targets extracted from question; defaulting to ['object'].")
     elif verbose:
         print(f"[Stage 1] Successfully parsed question into Active Object Set A_q: {clean_targets} via {extraction_strategy}")
 
+    if return_strategy:
+        return clean_targets, extraction_strategy
     return clean_targets
+
+
+# Backward-compatible alias
+parse_question_for_active_objects = parse_question_to_active_objects
 
