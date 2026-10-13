@@ -9,7 +9,10 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any
 from PIL import Image, ImageDraw
 import numpy as np
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 from ..config import MSSearchConfig
 
@@ -67,7 +70,7 @@ def render_visual_prompt_bbox(
     annotated = crop_img.copy()
     draw = ImageDraw.Draw(annotated)
     for box in local_boxes:
-        if isinstance(box, torch.Tensor):
+        if torch is not None and isinstance(box, torch.Tensor):
             box = box.detach().cpu().tolist()
         elif isinstance(box, np.ndarray):
             box = box.tolist()
@@ -192,7 +195,7 @@ def run_tool_based_fast_path(
             for b, s in zip(boxes, scores):
                 s_val = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
                 if s_val >= config.sam3_group_det_threshold:
-                    if isinstance(b, (torch.Tensor, np.ndarray)):
+                    if (torch is not None and isinstance(b, torch.Tensor)) or isinstance(b, np.ndarray):
                         b = b.tolist()
                     b_int = tuple(int(round(float(c))) for c in b)
                     confident_boxes.append(b_int)

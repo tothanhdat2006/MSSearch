@@ -8,8 +8,15 @@ and prunes background groups in a single step into a flat Remaining Patches pool
 from typing import List, Dict, Tuple, Optional, Any, Union
 import numpy as np
 from PIL import Image
-import torch
-from sklearn.cluster import AgglomerativeClustering
+try:
+    import torch
+except ImportError:
+    torch = None
+
+try:
+    from sklearn.cluster import AgglomerativeClustering
+except ImportError:
+    AgglomerativeClustering = None
 
 from ..config import MSSearchConfig
 from .stage3_partitioning import BoundedPatch

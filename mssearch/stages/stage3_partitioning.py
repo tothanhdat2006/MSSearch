@@ -10,14 +10,28 @@ from typing import List, Tuple, Dict, Optional, Any
 import math
 import numpy as np
 from PIL import Image
-import cv2
-from skimage.segmentation import slic
-from skimage.measure import regionprops
-from skimage import graph
-import networkx as nx
-from sklearn.cluster import AgglomerativeClustering
-from sklearn.metrics import silhouette_score
-from sklearn.preprocessing import StandardScaler
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
+    from skimage.segmentation import slic
+    from skimage.measure import regionprops
+    from skimage import graph
+    import networkx as nx
+    from sklearn.cluster import AgglomerativeClustering
+    from sklearn.metrics import silhouette_score
+    from sklearn.preprocessing import StandardScaler
+except ImportError:
+    slic = None
+    regionprops = None
+    graph = None
+    nx = None
+    AgglomerativeClustering = None
+    silhouette_score = None
+    StandardScaler = None
 
 from ..config import MSSearchConfig
 
@@ -41,9 +55,12 @@ def compute_spatial_entropy(
     """
     img_arr = np.array(crop_img)
     if img_arr.ndim == 3:
-        gray = cv2.cvtColor(img_arr, cv2.COLOR_RGB2GRAY)
+        if cv2 is not None:
+            gray = cv2.cvtColor(img_arr, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = (0.2989 * img_arr[:, :, 0] + 0.5870 * img_arr[:, :, 1] + 0.1140 * img_arr[:, :, 2]).astype(np.float32)
     else:
-        gray = img_arr
+        gray = img_arr.astype(np.float32)
 
     # 1. Normalized Shannon Entropy (histogram-based)
     hist, _ = np.histogram(gray, bins=256, range=(0, 256), density=True)
@@ -52,14 +69,23 @@ def compute_spatial_entropy(
     norm_shannon = float(np.clip(shannon / 8.0, 0.0, 1.0))
 
     # 2. Normalized Sobel Gradient Energy
-    grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-    grad_mag = np.sqrt(grad_x ** 2 + grad_y ** 2)
+    if cv2 is not None:
+        grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        grad_mag = np.sqrt(grad_x ** 2 + grad_y ** 2)
+    else:
+        gy, gx = np.gradient(gray)
+        grad_mag = np.sqrt(gx ** 2 + gy ** 2)
     norm_sobel = float(np.clip(grad_mag.mean() / 128.0, 0.0, 1.0))
 
     # 3. Normalized Laplacian Variance (detail & edge complexity)
-    laplacian = cv2.Laplacian(gray, cv2.CV_32F)
-    lap_var = float(laplacian.var())
+    if cv2 is not None:
+        laplacian = cv2.Laplacian(gray, cv2.CV_32F)
+        lap_var = float(laplacian.var())
+    else:
+        gy, gx = np.gradient(gray)
+        laplacian = np.gradient(gx)[1] + np.gradient(gy)[0]
+        lap_var = float(laplacian.var())
     norm_lap = float(np.clip(np.log1p(lap_var) / np.log1p(1000.0), 0.0, 1.0))
 
     w1, w2, w3 = weights
@@ -192,6 +218,11 @@ def partition_into_sam3_sgap(
     SAM3-SGAP (Semantic-Guided Adaptive Patching) adapted from CVSearch.
     Runs SLIC on normalized feature channels, builds RAG, and clusters atoms.
     """
+    if slic is None:
+        if verbose:
+            print("[Stage 3][Fallback] scikit-image/scikit-learn not available; falling back to direction-aware split.")
+        return partition_oversized_box(box, img_w, img_h, overlap_ratio=overlap_ratio)
+
     C, H_f, W_f = sub_feat.shape
     if H_f < 4 or W_f < 4:
         if verbose:
