@@ -277,3 +277,7 @@ def run_tool_based_fast_path(
         print(f"[Stage 2][Fallback to Stage 3] Fast Path did not trigger across all candidate images. Switching to Visual Search Branch. (Cached {len(feature_cache)} feature maps).")
 
     return FastPathResult(triggered=False, feature_cache=feature_cache)
+
+
+# Backward-compatible alias
+run_fast_path_check = run_tool_based_fast_path
