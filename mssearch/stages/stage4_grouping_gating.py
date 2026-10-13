@@ -5,7 +5,7 @@ reuses Stage 3 pooled embeddings (zero re-extraction), runs open-vocabulary SAM3
 and prunes background groups in a single step into a flat Remaining Patches pool.
 """
 
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any, Union
 import numpy as np
 from PIL import Image
 import torch
@@ -63,8 +63,6 @@ def group_patches_by_cosine_similarity(
     groups_list = list(groups.values())
     return (groups_list, sim_mat) if return_sim_mat else groups_list
 
-
-from typing import List, Dict, Tuple, Optional, Any, Union
 
 def bbox_intersects(b1: Tuple[int, int, int, int], b2: Tuple[int, int, int, int]) -> bool:
     """Checks whether two bounding boxes (x1, y1, x2, y2) intersect with non-zero area."""
