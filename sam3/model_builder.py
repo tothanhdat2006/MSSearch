@@ -806,3 +806,18 @@ def build_sam3_video_predictor(*model_args, gpus_to_use=None, **model_kwargs):
     return Sam3VideoPredictorMultiGPU(
         *model_args, gpus_to_use=gpus_to_use, **model_kwargs
     )
+
+
+def build_sam3_image_processor(checkpoint_path: Optional[str] = None, checkpoint: Optional[str] = None, device: str = "cuda" if torch.cuda.is_available() else "cpu", **kwargs):
+    """
+    Factory function to build SAM3 image processor / inference engine.
+    Compatible with both sam3.model.sam3_image_processor.Sam3Processor and mssearch.models.modeling_sam3.sam3_inference.
+    """
+    ckpt = checkpoint_path if checkpoint_path is not None else checkpoint
+    try:
+        from mssearch.models.modeling_sam3 import sam3_inference
+        return sam3_inference(model_path=ckpt, device=device)
+    except Exception:
+        from sam3.model.sam3_image_processor import Sam3Processor
+        model = build_sam3_image_model(checkpoint_path=ckpt, device=device, **kwargs)
+        return Sam3Processor(model, device=device)
