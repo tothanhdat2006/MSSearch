@@ -332,6 +332,11 @@ def run_feature_grouping_and_gating(
                     break
 
         # Dual VLM Gating
+        vlm_prompt = None
+        vlm_tested_patch_idx = None
+        vlm_tested_role = None
+        vlm_per_object_scores = {}
+
         if not has_active_match:
             if group_detected_objects:
                 # -------------------------------------------------------------
@@ -343,10 +348,15 @@ def run_feature_grouping_and_gating(
                 best_box_ints = tuple(int(round(float(c))) for c in best_patch.box)
                 best_patch_crop = candidate_images[best_patch.img_idx].crop(best_box_ints)
 
+                vlm_tested_patch_idx = best_det["patch_idx"]
+                vlm_tested_role = "Detection Crop"
+                vlm_prompt = config.existence_prompt_template.format(best_det["label"])
+
                 if config.enable_existence_gating and zoom_model is not None:
                     vlm_exist_score = _query_vlm_existence(
                         zoom_model, best_patch_crop, best_det["label"], config
                     )
+                    vlm_per_object_scores[best_det["label"]] = vlm_exist_score
                     if vlm_exist_score >= config.existence_confidence_threshold:
                         has_active_match = True
                         match_reason = f"sam3_det_vlm_confirmed (conf={vlm_exist_score:.2f} >= {config.existence_confidence_threshold:.2f})"
@@ -366,11 +376,18 @@ def run_feature_grouping_and_gating(
                 # Check VLM latent confidence on the representative centroid patch
                 # -------------------------------------------------------------
                 if config.enable_latent_gating and zoom_model is not None and active_objects:
-                    latent_scores = [
-                        _query_vlm_latent(zoom_model, rep_img, obj, config)
-                        for obj in active_objects
-                    ]
-                    vlm_latent_score = max(latent_scores) if latent_scores else -1.0
+                    vlm_tested_patch_idx = rep_idx
+                    vlm_tested_role = "Centroid (p_rep)"
+                    latent_scores_dict = {}
+                    for obj in active_objects:
+                        s = _query_vlm_latent(zoom_model, rep_img, obj, config)
+                        latent_scores_dict[obj] = s
+
+                    vlm_per_object_scores = latent_scores_dict
+                    best_obj = max(latent_scores_dict, key=latent_scores_dict.get) if latent_scores_dict else (active_objects[0] if active_objects else "")
+                    vlm_latent_score = latent_scores_dict[best_obj] if latent_scores_dict else -1.0
+                    vlm_prompt = config.latent_prompt_template.format(best_obj)
+
                     if vlm_latent_score >= config.latent_confidence_threshold:
                         has_active_match = True
                         match_reason = f"centroid_latent_confidence (conf={vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f})"
@@ -379,6 +396,14 @@ def run_feature_grouping_and_gating(
                     else:
                         if config.verbose:
                             print(f"[Stage 4][Latent Pruned] Group {g_idx} centroid latent confidence below threshold ({vlm_latent_score:.2f} < {config.latent_confidence_threshold:.2f}) -> [PRUNED].")
+                elif active_objects:
+                    # Simulation or no zoom model: record what prompt would be asked
+                    vlm_tested_patch_idx = rep_idx
+                    vlm_tested_role = "Centroid (p_rep)"
+                    vlm_prompt = config.latent_prompt_template.format(active_objects[0])
+        else:
+            vlm_tested_role = "Stage 2 Anchor"
+            vlm_prompt = "N/A (Bypassed VLM Gating via Stage 2 Global Anchor)"
 
         # Pairwise cosine similarity submatrix for member patches
         if sim_mat.size > 0 and len(member_indices) > 0:
@@ -405,7 +430,11 @@ def run_feature_grouping_and_gating(
             "detected_objects": group_detected_objects,
             "max_det_score": round(max_det_score, 3),
             "vlm_exist_score": round(vlm_exist_score, 3) if vlm_exist_score is not None else None,
-            "vlm_latent_score": round(vlm_latent_score, 3) if vlm_latent_score is not None else None
+            "vlm_latent_score": round(vlm_latent_score, 3) if vlm_latent_score is not None else None,
+            "vlm_prompt": vlm_prompt,
+            "vlm_tested_patch_idx": vlm_tested_patch_idx,
+            "vlm_tested_role": vlm_tested_role,
+            "vlm_per_object_scores": {k: round(v, 3) for k, v in vlm_per_object_scores.items()}
         })
 
         if has_active_match:
