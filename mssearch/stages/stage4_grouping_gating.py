@@ -94,7 +94,55 @@ def bbox_intersects(b1: Tuple[int, int, int, int], b2: Tuple[int, int, int, int]
     return not (b1[2] <= b2[0] or b1[0] >= b2[2] or b1[3] <= b2[1] or b1[1] >= b2[3])
 
 
-def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str, config: MSSearchConfig) -> float:
+def extract_micro_fovea_crop(
+    patch_crop: Image.Image,
+    local_box: List[int],
+    expansion_ratio: float = 1.75,
+    min_dim: int = 256
+) -> Tuple[Image.Image, List[int]]:
+    """
+    Challenge 1 (Resolution Dilution / Micro vs Macro View):
+    Extracts a focused foveated crop centered on the localized object with an expanded margin,
+    ensuring minimum dimension min_dim (default 256px) to maximize VLM visual token density.
+    """
+    pw, ph = patch_crop.size
+    lx1, ly1, lx2, ly2 = local_box
+    bw = max(1, lx2 - lx1)
+    bh = max(1, ly2 - ly1)
+    cx = (lx1 + lx2) / 2.0
+    cy = (ly1 + ly2) / 2.0
+
+    target_w = max(bw * expansion_ratio, min_dim)
+    target_h = max(bh * expansion_ratio, min_dim)
+    side = max(target_w, target_h)
+
+    fx1 = max(0, int(round(cx - side / 2.0)))
+    fy1 = max(0, int(round(cy - side / 2.0)))
+    fx2 = min(pw, int(round(cx + side / 2.0)))
+    fy2 = min(ph, int(round(cy + side / 2.0)))
+
+    # Adjust boundaries if clamped at edges
+    if fx2 - fx1 < side and fx1 == 0:
+        fx2 = min(pw, int(round(side)))
+    if fy2 - fy1 < side and fy1 == 0:
+        fy2 = min(ph, int(round(side)))
+    if fx2 - fx1 < side and fx2 == pw:
+        fx1 = max(0, int(round(pw - side)))
+    if fy2 - fy1 < side and fy2 == ph:
+        fy1 = max(0, int(round(ph - side)))
+
+    fovea_box = [fx1, fy1, fx2, fy2]
+    fovea_crop = patch_crop.crop((fx1, fy1, fx2, fy2))
+    return fovea_crop, fovea_box
+
+
+def _query_vlm_existence(
+    zoom_model,
+    image_pil: Image.Image,
+    query: str,
+    config: MSSearchConfig,
+    custom_prompt_template: Optional[str] = None
+) -> float:
     """Safely invokes VLM existence confidence query on crop with resolution safety shield."""
     if zoom_model is None or not hasattr(zoom_model, "get_confidence_value"):
         return 0.0
@@ -109,11 +157,12 @@ def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str, config:
 
     # Set custom existence prompt template if provided
     original_prompt = None
+    template_to_use = custom_prompt_template or getattr(config, "existence_prompt_template", None)
     if hasattr(zoom_model, "prompts") and isinstance(zoom_model.prompts, dict):
         search_prompts = zoom_model.prompts.get("search", {})
-        if "existence_prompt" in search_prompts and hasattr(config, "existence_prompt_template"):
+        if "existence_prompt" in search_prompts and template_to_use:
             original_prompt = search_prompts["existence_prompt"]
-            search_prompts["existence_prompt"] = config.existence_prompt_template
+            search_prompts["existence_prompt"] = template_to_use
 
     try:
         for kwarg in [{"node": None}, {"node_list": None}, {}]:
@@ -194,7 +243,8 @@ def run_feature_grouping_and_gating(
     config: MSSearchConfig,
     detected_boxes: Optional[List[Tuple[int, int, int, int]]] = None,
     zoom_model=None,
-    return_debug: bool = False
+    return_debug: bool = False,
+    question: Optional[str] = None
 ) -> Union[List[BoundedPatch], Tuple[List[BoundedPatch], List[Dict[str, Any]]]]:
     """
     Executes Feature Grouping and Active Object Gating.
@@ -335,17 +385,24 @@ def run_feature_grouping_and_gating(
                 if has_active_match:
                     break
 
-        # Dual VLM Gating
+        # Dual VLM Gating & Micro-Fovea / Attribute-Binding Telemetry
         vlm_prompt = None
         vlm_tested_patch_idx = None
         vlm_tested_role = None
         vlm_per_object_scores = {}
+        fovea_box = None
+        best_det_box = None
+        vlm_prompt_standard = None
+        vlm_score_standard = None
+        vlm_prompt_attribute = None
+        vlm_score_attribute = None
 
         if not has_active_match:
             if group_detected_objects:
                 # -------------------------------------------------------------
                 # Branch (2): Object Found by SAM3 in group
-                # Verify detection via VLM existence confidence
+                # Challenge 1: Micro-Fovea Extraction to avoid token dilution
+                # Challenge 2: Attribute-Binding Prompt for conflicting evidence
                 # -------------------------------------------------------------
                 best_det = max(group_detected_objects, key=lambda d: d["score"])
                 best_patch = bounded_patches[best_det["patch_idx"]]
@@ -353,22 +410,48 @@ def run_feature_grouping_and_gating(
                 best_patch_crop = candidate_images[best_patch.img_idx].crop(best_box_ints)
 
                 vlm_tested_patch_idx = best_det["patch_idx"]
-                vlm_tested_role = "Detection Crop"
-                vlm_prompt = config.existence_prompt_template.format(best_det["label"])
+                vlm_tested_role = "Detection Crop (Micro-Fovea)"
+                target_label = best_det["label"]
+
+                # Challenge 1: Extract focused micro-fovea crop around detected object
+                local_box = best_det.get("local_box", [0, 0, best_patch_crop.width, best_patch_crop.height])
+                best_det_box = local_box
+                fovea_crop, fovea_box = extract_micro_fovea_crop(best_patch_crop, local_box, expansion_ratio=1.75, min_dim=256)
+
+                # Challenge 2: Standard prompt vs Attribute-Binding prompt
+                vlm_prompt_standard = config.existence_prompt_template.format(target_label)
+                if question:
+                    clean_q = question.replace("{", "").replace("}", "")
+                    attr_template = f"Question context: '{clean_q}'. Does this crop show the '{{}}' described in the question? Answer Yes or No."
+                    vlm_prompt_attribute = f"Question context: '{clean_q}'. Does this crop show the '{target_label}' described in the question? Answer Yes or No."
+                else:
+                    attr_template = f"Does this crop show the target '{{}}' clearly? Answer Yes or No."
+                    vlm_prompt_attribute = f"Does this crop show the target '{target_label}' clearly? Answer Yes or No."
+
+                vlm_prompt = vlm_prompt_attribute
 
                 if config.enable_existence_gating and zoom_model is not None:
-                    vlm_exist_score = _query_vlm_existence(
-                        zoom_model, best_patch_crop, best_det["label"], config
+                    # Query standard generic prompt on micro-fovea crop
+                    vlm_score_standard = _query_vlm_existence(
+                        zoom_model, fovea_crop, target_label, config,
+                        custom_prompt_template=config.existence_prompt_template
                     )
-                    vlm_per_object_scores[best_det["label"]] = vlm_exist_score
+                    # Query attribute-binding prompt on micro-fovea crop
+                    vlm_score_attribute = _query_vlm_existence(
+                        zoom_model, fovea_crop, target_label, config,
+                        custom_prompt_template=attr_template
+                    )
+                    vlm_exist_score = vlm_score_attribute
+                    vlm_per_object_scores[target_label] = vlm_exist_score
+
                     if vlm_exist_score >= config.existence_confidence_threshold:
                         has_active_match = True
-                        match_reason = f"sam3_det_vlm_confirmed (conf={vlm_exist_score:.2f} >= {config.existence_confidence_threshold:.2f})"
+                        match_reason = f"sam3_det_vlm_confirmed (attr_conf={vlm_exist_score:.2f} >= {config.existence_confidence_threshold:.2f})"
                         if config.verbose:
-                            print(f"[Stage 4][Existence Confirmed] Group {g_idx} SAM3 detection '{best_det['label']}' verified by VLM existence (conf={vlm_exist_score:.2f}) -> [KEPT].")
+                            print(f"[Stage 4][Existence Confirmed] Group {g_idx} SAM3 detection '{target_label}' verified by VLM attribute existence (std={vlm_score_standard:.2f}, attr={vlm_score_attribute:.2f}) -> [KEPT].")
                     else:
                         if config.verbose:
-                            print(f"[Stage 4][Existence Rejected] Group {g_idx} SAM3 detection '{best_det['label']}' rejected by VLM existence (conf={vlm_exist_score:.2f} < {config.existence_confidence_threshold:.2f}).")
+                            print(f"[Stage 4][Existence Rejected] Group {g_idx} SAM3 detection '{target_label}' rejected by VLM attribute existence (std={vlm_score_standard:.2f}, attr={vlm_score_attribute:.2f} < {config.existence_confidence_threshold:.2f}).")
                 else:
                     # Gating disabled or zoom_model absent -> retain on SAM3 detection score
                     has_active_match = True
@@ -402,7 +485,15 @@ def run_feature_grouping_and_gating(
                     vlm_per_object_scores = latent_scores_dict
                     best_obj = max(latent_scores_dict, key=latent_scores_dict.get) if latent_scores_dict else (active_objects[0] if active_objects else "")
                     vlm_latent_score = latent_scores_dict[best_obj] if latent_scores_dict else -1.0
-                    vlm_prompt = config.latent_prompt_template.format(best_obj)
+                    vlm_prompt_standard = config.latent_prompt_template.format(best_obj)
+                    if question:
+                        clean_q = question.replace("{", "").replace("}", "")
+                        vlm_prompt_attribute = f"Question context: '{clean_q}'. Is it possible to find the '{best_obj}' described in the question by further zooming this sub-patch?"
+                    else:
+                        vlm_prompt_attribute = vlm_prompt_standard
+                    vlm_prompt = vlm_prompt_attribute
+                    vlm_score_standard = vlm_latent_score
+                    vlm_score_attribute = vlm_latent_score
 
                     if vlm_latent_score >= config.latent_confidence_threshold:
                         has_active_match = True
@@ -416,7 +507,14 @@ def run_feature_grouping_and_gating(
                     # Simulation or no zoom model: record what prompt would be asked
                     vlm_tested_patch_idx = best_det["patch_idx"] if group_detected_objects else rep_idx
                     vlm_tested_role = "Detection Crop (p_det)" if group_detected_objects else "Centroid (p_rep)"
-                    vlm_prompt = config.latent_prompt_template.format(active_objects[0])
+                    best_obj = active_objects[0]
+                    vlm_prompt_standard = config.latent_prompt_template.format(best_obj)
+                    if question:
+                        clean_q = question.replace("{", "").replace("}", "")
+                        vlm_prompt_attribute = f"Question context: '{clean_q}'. Is it possible to find the '{best_obj}' described in the question by further zooming this sub-patch?"
+                    else:
+                        vlm_prompt_attribute = vlm_prompt_standard
+                    vlm_prompt = vlm_prompt_attribute
         else:
             vlm_tested_role = "Stage 2 Anchor"
             vlm_prompt = "N/A (Bypassed VLM Gating via Stage 2 Global Anchor)"
@@ -450,7 +548,14 @@ def run_feature_grouping_and_gating(
             "vlm_prompt": vlm_prompt,
             "vlm_tested_patch_idx": vlm_tested_patch_idx,
             "vlm_tested_role": vlm_tested_role,
-            "vlm_per_object_scores": {k: round(v, 3) for k, v in vlm_per_object_scores.items()}
+            "vlm_per_object_scores": {k: round(v, 3) for k, v in vlm_per_object_scores.items()},
+            # Challenge 1 & 2 additions:
+            "fovea_box": fovea_box,
+            "best_det_box": best_det_box,
+            "vlm_prompt_standard": vlm_prompt_standard,
+            "vlm_score_standard": round(vlm_score_standard, 3) if vlm_score_standard is not None else None,
+            "vlm_prompt_attribute": vlm_prompt_attribute,
+            "vlm_score_attribute": round(vlm_score_attribute, 3) if vlm_score_attribute is not None else None
         })
 
         if has_active_match:

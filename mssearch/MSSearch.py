@@ -152,7 +152,8 @@ class MultiSourceSearchEngine:
             config=self.config,
             detected_boxes=fast_path_result.detected_boxes,
             zoom_model=self.zoom_model,
-            return_debug=True
+            return_debug=True,
+            question=question
         )
         telemetry["timings_sec"]["stage4_grouping_gating"] = round(time.perf_counter() - t0, 3)
         telemetry["num_remaining_patches"] = len(remaining_patches)
