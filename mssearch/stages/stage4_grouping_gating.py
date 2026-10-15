@@ -94,6 +94,98 @@ def bbox_intersects(b1: Tuple[int, int, int, int], b2: Tuple[int, int, int, int]
     return not (b1[2] <= b2[0] or b1[0] >= b2[2] or b1[3] <= b2[1] or b1[1] >= b2[3])
 
 
+def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str, config: MSSearchConfig) -> float:
+    """Safely invokes VLM existence confidence query on crop with resolution safety shield."""
+    if zoom_model is None or not hasattr(zoom_model, "get_confidence_value"):
+        return 0.0
+
+    safe_img = image_pil
+    if max(image_pil.width, image_pil.height) > 1024:
+        scale = 1024.0 / max(image_pil.width, image_pil.height)
+        safe_img = image_pil.resize(
+            (int(round(image_pil.width * scale)), int(round(image_pil.height * scale))),
+            Image.Resampling.LANCZOS
+        )
+
+    # Set custom existence prompt template if provided
+    original_prompt = None
+    if hasattr(zoom_model, "prompts") and isinstance(zoom_model.prompts, dict):
+        search_prompts = zoom_model.prompts.get("search", {})
+        if "existence_prompt" in search_prompts and hasattr(config, "existence_prompt_template"):
+            original_prompt = search_prompts["existence_prompt"]
+            search_prompts["existence_prompt"] = config.existence_prompt_template
+
+    try:
+        for kwarg in [{"node": None}, {"node_list": None}, {}]:
+            try:
+                conf = zoom_model.get_confidence_value(
+                    image_pil=safe_img,
+                    confidence_type="existence",
+                    input_ele=query,
+                    **kwarg
+                )
+                if hasattr(conf, "item"):
+                    conf = conf.item()
+                return float(conf)
+            except TypeError:
+                continue
+    except Exception as e:
+        if config.verbose:
+            print(f"[Stage 4][VLM Existence Notice] {e}")
+        return 0.0
+    finally:
+        if original_prompt is not None:
+            zoom_model.prompts["search"]["existence_prompt"] = original_prompt
+
+    return 0.0
+
+
+def _query_vlm_latent(zoom_model, image_pil: Image.Image, query: str, config: MSSearchConfig) -> float:
+    """Safely invokes VLM latent confidence query on centroid crop with resolution safety shield."""
+    if zoom_model is None or not hasattr(zoom_model, "get_confidence_value"):
+        return 0.0
+
+    safe_img = image_pil
+    if max(image_pil.width, image_pil.height) > 1024:
+        scale = 1024.0 / max(image_pil.width, image_pil.height)
+        safe_img = image_pil.resize(
+            (int(round(image_pil.width * scale)), int(round(image_pil.height * scale))),
+            Image.Resampling.LANCZOS
+        )
+
+    # Set custom latent prompt template if provided
+    original_prompt = None
+    if hasattr(zoom_model, "prompts") and isinstance(zoom_model.prompts, dict):
+        search_prompts = zoom_model.prompts.get("search", {})
+        if "latent_prompt" in search_prompts and hasattr(config, "latent_prompt_template"):
+            original_prompt = search_prompts["latent_prompt"]
+            search_prompts["latent_prompt"] = config.latent_prompt_template
+
+    try:
+        for kwarg in [{"node": None}, {"node_list": None}, {}]:
+            try:
+                conf = zoom_model.get_confidence_value(
+                    image_pil=safe_img,
+                    confidence_type="latent",
+                    input_ele=query,
+                    **kwarg
+                )
+                if hasattr(conf, "item"):
+                    conf = conf.item()
+                return float(conf)
+            except TypeError:
+                continue
+    except Exception as e:
+        if config.verbose:
+            print(f"[Stage 4][VLM Latent Notice] {e}")
+        return 0.0
+    finally:
+        if original_prompt is not None:
+            zoom_model.prompts["search"]["latent_prompt"] = original_prompt
+
+    return 0.0
+
+
 def run_feature_grouping_and_gating(
     bounded_patches: List[BoundedPatch],
     candidate_images: List[Image.Image],
@@ -101,12 +193,17 @@ def run_feature_grouping_and_gating(
     sam_model,
     config: MSSearchConfig,
     detected_boxes: Optional[List[Tuple[int, int, int, int]]] = None,
+    zoom_model=None,
     return_debug: bool = False
 ) -> Union[List[BoundedPatch], Tuple[List[BoundedPatch], List[Dict[str, Any]]]]:
     """
     Executes Feature Grouping and Active Object Gating.
-    Prunes background clusters in 1 step; keeps surviving patches in a flat list.
-    Safeguards against false pruning via Stage 2 detection overlap and dual-patch testing.
+    1. Runs SAM3 open-vocabulary detection across ALL candidate bounded patches.
+    2. Clusters patches by cosine similarity (cos >= 0.80).
+    3. For each group:
+       - If SAM3 detected an object: verify with VLM existence confidence on best detection.
+       - If SAM3 detected no object: query VLM latent confidence on the representative centroid patch.
+    Prunes non-matching clusters into a flat Remaining Patches pool.
     """
     if not bounded_patches:
         return ([], []) if return_debug else []
@@ -126,12 +223,56 @@ def run_feature_grouping_and_gating(
     if config.verbose:
         print(f"[Stage 4][Non-Fallback] Reused Stage 3 feature embeddings (zero forward passes) to cluster {len(bounded_patches)} patches into {len(groups)} semantic groups (cos >= {config.grouping_sim_threshold:.2f}).")
 
+    # 2. Run SAM3 open-vocabulary detection across ALL bounded patches
+    patch_detections: Dict[int, List[Dict[str, Any]]] = {}
+    if sam_model is not None and active_objects:
+        if config.verbose:
+            print(f"[Stage 4][SAM3 All-Patch Detection] Scanning all {len(bounded_patches)} bounded patches for active objects {active_objects}...")
+        for p_idx, patch in enumerate(bounded_patches):
+            p_box_ints = tuple(int(round(float(c))) for c in patch.box)
+            p_img = candidate_images[patch.img_idx].crop(p_box_ints)
+            pw, ph = p_img.size
+            if pw < 8 or ph < 8:
+                patch_detections[p_idx] = []
+                continue
+
+            dets = []
+            try:
+                if torch is not None and hasattr(torch, "inference_mode"):
+                    with torch.inference_mode():
+                        _, processed_results, text_id = sam_model.batch_inference(
+                            p_img, active_objects
+                        )
+                else:
+                    _, processed_results, text_id = sam_model.batch_inference(
+                        p_img, active_objects
+                    )
+                for tid in text_id:
+                    res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
+                    boxes = res.get('boxes', [])
+                    scores = res.get('scores', [])
+                    for b, s in zip(boxes, scores):
+                        s_float = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
+                        b_clean = [int(round(float(c))) for c in (b.tolist() if hasattr(b, 'tolist') else b)]
+                        dets.append({
+                            "label": str(tid),
+                            "score": round(s_float, 3),
+                            "local_box": b_clean,
+                            "global_box": [b_clean[0] + p_box_ints[0], b_clean[1] + p_box_ints[1],
+                                           b_clean[2] + p_box_ints[0], b_clean[3] + p_box_ints[1]],
+                            "patch_idx": p_idx
+                        })
+            except Exception as e:
+                if config.verbose:
+                    print(f"[Stage 4][SAM3 Detection Exception] Patch {p_idx} ({e})")
+            patch_detections[p_idx] = dets
+
     remaining_patches: List[BoundedPatch] = []
     group_records: List[Dict[str, Any]] = []
 
-    # 2. Active Object Gating per group
+    # 3. Dual Gating per group
     for g_idx, member_indices in enumerate(groups):
-        # Select representative patch (patch closest to group centroid)
+        # Select representative patch (patch closest to group centroid in feature space)
         if len(member_indices) == 1:
             rep_idx = member_indices[0]
         else:
@@ -143,17 +284,22 @@ def run_feature_grouping_and_gating(
         rep_patch = bounded_patches[rep_idx]
         rep_box_ints = tuple(int(round(float(c))) for c in rep_patch.box)
         rep_img = candidate_images[rep_patch.img_idx].crop(rep_box_ints)
-        rw, rh = rep_img.size
-        if rw < 8 or rh < 8:
-            continue
 
         has_active_match = False
         match_reason = "none_pruned"
-        best_entropy_idx = rep_idx
-        group_detected_objects: List[Dict[str, Any]] = []
-        max_det_score: float = 0.0
+        vlm_exist_score = None
+        vlm_latent_score = None
 
-        # Safeguard A: Zero-cost Stage 2 detection anchor check (requires strict containment or >= 35% coverage)
+        # Aggregate SAM3 detections across all member patches of this group
+        group_detected_objects: List[Dict[str, Any]] = []
+        for mem_i in member_indices:
+            for det in patch_detections.get(mem_i, []):
+                if det["score"] >= config.sam3_group_det_threshold:
+                    group_detected_objects.append(det)
+
+        max_det_score = max([d["score"] for d in group_detected_objects], default=0.0)
+
+        # Safeguard A: Zero-cost Stage 2 detection anchor check
         if detected_boxes:
             for d_idx, d_box in enumerate(detected_boxes):
                 d_box_clean = tuple(int(round(float(c))) for c in d_box)
@@ -162,18 +308,16 @@ def run_feature_grouping_and_gating(
                         mem_box = bounded_patches[mem_i].box
                         center_in = target_center_in_patch(mem_box, d_box_clean)
                         cov_ratio = compute_target_coverage_ratio(mem_box, d_box_clean)
-                        
+
                         if center_in or cov_ratio >= 0.35:
                             has_active_match = True
                             match_reason = "stage2_detection_anchor"
                             target_label = active_objects[d_idx] if d_idx < len(active_objects) else f"Target_{d_idx}"
-                            
-                            # Relative coordinates inside member patch
                             rel_bx1 = max(0, d_box_clean[0] - mem_box[0])
                             rel_by1 = max(0, d_box_clean[1] - mem_box[1])
                             rel_bx2 = min(mem_box[2] - mem_box[0], d_box_clean[2] - mem_box[0])
                             rel_by2 = min(mem_box[3] - mem_box[1], d_box_clean[3] - mem_box[1])
-                            
+
                             group_detected_objects.append({
                                 "label": target_label,
                                 "score": 1.0,
@@ -182,89 +326,67 @@ def run_feature_grouping_and_gating(
                                 "coverage_ratio": round(cov_ratio, 2)
                             })
                             if config.verbose:
-                                print(f"[Stage 4][Detection Anchor] Group {g_idx} encompasses Stage 2 target '{target_label}' (Coverage: {cov_ratio*100:.1f}%) -> automatically [KEPT].")
+                                print(f"[Stage 4][Detection Anchor] Group {g_idx} encompasses Stage 2 target '{target_label}' -> automatically [KEPT].")
                             break
                 if has_active_match:
                     break
 
-        # Safeguard B: SAM3 detection on representative patch
-        if not has_active_match and sam_model is not None:
-            try:
-                with torch.inference_mode():
-                    _, processed_results, text_id = sam_model.batch_inference(
-                        rep_img, active_objects
+        # Dual VLM Gating
+        if not has_active_match:
+            if group_detected_objects:
+                # -------------------------------------------------------------
+                # Branch (2): Object Found by SAM3 in group
+                # Verify detection via VLM existence confidence
+                # -------------------------------------------------------------
+                best_det = max(group_detected_objects, key=lambda d: d["score"])
+                best_patch = bounded_patches[best_det["patch_idx"]]
+                best_box_ints = tuple(int(round(float(c))) for c in best_patch.box)
+                best_patch_crop = candidate_images[best_patch.img_idx].crop(best_box_ints)
+
+                if config.enable_existence_gating and zoom_model is not None:
+                    vlm_exist_score = _query_vlm_existence(
+                        zoom_model, best_patch_crop, best_det["label"], config
                     )
-                for tid in text_id:
-                    res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
-                    boxes = res.get('boxes', [])
-                    scores = res.get('scores', [])
-                    for b, s in zip(boxes, scores):
-                        s_float = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
-                        if s_float > max_det_score:
-                            max_det_score = s_float
-                        if s_float >= config.sam3_group_det_threshold:
-                            has_active_match = True
-                            match_reason = "representative_sam3_det"
-                            b_clean = [int(round(float(c))) for c in (b.tolist() if hasattr(b, 'tolist') else b)]
-                            group_detected_objects.append({
-                                "label": str(tid),
-                                "score": round(s_float, 2),
-                                "local_box": b_clean,
-                                "global_box": [b_clean[0] + rep_box_ints[0], b_clean[1] + rep_box_ints[1],
-                                               b_clean[2] + rep_box_ints[0], b_clean[3] + rep_box_ints[1]]
-                            })
-            except Exception as e:
-                if config.verbose:
-                    print(f"[Stage 4][Exception Fallback] SAM3 group detection failed on Group {g_idx} ({e}); conservatively keeping group.")
-                has_active_match = True
-                match_reason = "exception_fallback"
+                    if vlm_exist_score >= config.existence_confidence_threshold:
+                        has_active_match = True
+                        match_reason = f"sam3_det_vlm_confirmed (conf={vlm_exist_score:.2f} >= {config.existence_confidence_threshold:.2f})"
+                        if config.verbose:
+                            print(f"[Stage 4][Existence Confirmed] Group {g_idx} SAM3 detection '{best_det['label']}' verified by VLM existence (conf={vlm_exist_score:.2f}) -> [KEPT].")
+                    else:
+                        if config.verbose:
+                            print(f"[Stage 4][Existence Rejected] Group {g_idx} SAM3 detection '{best_det['label']}' rejected by VLM existence (conf={vlm_exist_score:.2f} < {config.existence_confidence_threshold:.2f}).")
+                else:
+                    # Gating disabled or zoom_model absent -> retain on SAM3 detection score
+                    has_active_match = True
+                    match_reason = f"sam3_detection (score={best_det['score']:.2f})"
 
-        # Safeguard C: Dual-patch check on highest-entropy patch for multi-patch groups
-        if not has_active_match and len(member_indices) > 1 and sam_model is not None:
-            best_entropy_idx = max(member_indices, key=lambda idx: bounded_patches[idx].entropy)
-            if best_entropy_idx != rep_idx:
-                he_patch = bounded_patches[best_entropy_idx]
-                he_box_ints = tuple(int(round(float(c))) for c in he_patch.box)
-                he_img = candidate_images[he_patch.img_idx].crop(he_box_ints)
-                hew, heh = he_img.size
-                if hew >= 8 and heh >= 8:
-                    try:
-                        with torch.inference_mode():
-                            _, processed_results, text_id = sam_model.batch_inference(
-                                he_img, active_objects
-                            )
-                        for tid in text_id:
-                            res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
-                            boxes = res.get('boxes', [])
-                            scores = res.get('scores', [])
-                            for b, s in zip(boxes, scores):
-                                s_float = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
-                                if s_float > max_det_score:
-                                    max_det_score = s_float
-                                if s_float >= config.sam3_group_det_threshold:
-                                    has_active_match = True
-                                    match_reason = "secondary_entropy_anchor"
-                                    b_clean = [int(round(float(c))) for c in (b.tolist() if hasattr(b, 'tolist') else b)]
-                                    group_detected_objects.append({
-                                        "label": str(tid),
-                                        "score": round(s_float, 2),
-                                        "local_box": b_clean,
-                                        "global_box": [b_clean[0] + he_box_ints[0], b_clean[1] + he_box_ints[1],
-                                                       b_clean[2] + he_box_ints[0], b_clean[3] + he_box_ints[1]]
-                                    })
-                                    if config.verbose:
-                                        print(f"[Stage 4][Entropy Anchor] Group {g_idx} matched active object on secondary high-entropy patch -> [KEPT].")
-                    except Exception:
-                        pass
+            if not has_active_match:
+                # -------------------------------------------------------------
+                # Branch (1): No Object Found (or existence check rejected)
+                # Check VLM latent confidence on the representative centroid patch
+                # -------------------------------------------------------------
+                if config.enable_latent_gating and zoom_model is not None and active_objects:
+                    latent_scores = [
+                        _query_vlm_latent(zoom_model, rep_img, obj, config)
+                        for obj in active_objects
+                    ]
+                    vlm_latent_score = max(latent_scores) if latent_scores else -1.0
+                    if vlm_latent_score >= config.latent_confidence_threshold:
+                        has_active_match = True
+                        match_reason = f"centroid_latent_confidence (conf={vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f})"
+                        if config.verbose:
+                            print(f"[Stage 4][Latent Kept] Group {g_idx} centroid has latent zoom confidence ({vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f}) -> [KEPT].")
+                    else:
+                        if config.verbose:
+                            print(f"[Stage 4][Latent Pruned] Group {g_idx} centroid latent confidence below threshold ({vlm_latent_score:.2f} < {config.latent_confidence_threshold:.2f}) -> [PRUNED].")
 
-        # Pairwise cosine similarity submatrix for all member patches in this group
+        # Pairwise cosine similarity submatrix for member patches
         if sim_mat.size > 0 and len(member_indices) > 0:
             sub_sim = sim_mat[member_indices][:, member_indices].tolist()
         else:
             sub_sim = [[1.0]]
 
         rep_local = member_indices.index(rep_idx) if rep_idx in member_indices else 0
-        he_local = member_indices.index(best_entropy_idx) if best_entropy_idx in member_indices else 0
 
         # Record rich group debug telemetry
         group_records.append({
@@ -272,8 +394,6 @@ def run_feature_grouping_and_gating(
             "member_indices": member_indices,
             "rep_idx": rep_idx,
             "rep_idx_local": rep_local,
-            "best_entropy_idx": best_entropy_idx,
-            "best_entropy_idx_local": he_local,
             "rep_box": list(rep_box_ints),
             "img_idx": rep_patch.img_idx,
             "status": "KEPT" if has_active_match else "PRUNED",
@@ -283,19 +403,21 @@ def run_feature_grouping_and_gating(
             "member_boxes": [list(tuple(int(round(float(c))) for c in bounded_patches[i].box)) for i in member_indices],
             "member_entropies": [bounded_patches[i].entropy for i in member_indices],
             "detected_objects": group_detected_objects,
-            "max_det_score": round(max_det_score, 3)
+            "max_det_score": round(max_det_score, 3),
+            "vlm_exist_score": round(vlm_exist_score, 3) if vlm_exist_score is not None else None,
+            "vlm_latent_score": round(vlm_latent_score, 3) if vlm_latent_score is not None else None
         })
 
         if has_active_match:
-            # Active object present -> KEEP all member patches into flat candidate pool
+            # Active object present or latent context promising -> KEEP all member patches
             for i in member_indices:
                 remaining_patches.append(bounded_patches[i])
             if config.verbose:
-                print(f"[Stage 4] Group {g_idx} ({len(member_indices)} patches): Active object detected -> [KEPT].")
+                print(f"[Stage 4] Group {g_idx} ({len(member_indices)} patches): Match confirmed ({match_reason}) -> [KEPT].")
         else:
-            # Disjoint from A_q -> PRUNE entire group immediately (zero VLM cost!)
+            # PRUNE entire group immediately (zero downstream VLM cost!)
             if config.verbose:
-                print(f"[Stage 4] Group {g_idx} ({len(member_indices)} patches): No active objects -> [PRUNED] (Saved {len(member_indices)} downstream VLM calls).")
+                print(f"[Stage 4] Group {g_idx} ({len(member_indices)} patches): No target & latent < threshold -> [PRUNED] (Saved {len(member_indices)} downstream VLM calls).")
 
     # Safety fallback: if all groups got pruned, retain top 20% highest entropy patches
     if not remaining_patches and bounded_patches:

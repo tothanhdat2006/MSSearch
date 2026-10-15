@@ -151,11 +151,14 @@ class MultiSourceSearchEngine:
             sam_model=self.sam_model,
             config=self.config,
             detected_boxes=fast_path_result.detected_boxes,
+            zoom_model=self.zoom_model,
             return_debug=True
         )
         telemetry["timings_sec"]["stage4_grouping_gating"] = round(time.perf_counter() - t0, 3)
         telemetry["num_remaining_patches"] = len(remaining_patches)
         telemetry["stage4_groups"] = stage4_groups
+        telemetry["stage4_kept_groups"] = sum(1 for g in stage4_groups if g.get("status") == "KEPT")
+        telemetry["stage4_pruned_groups"] = sum(1 for g in stage4_groups if g.get("status") == "PRUNED")
         telemetry["stages_executed"].append("stage4_grouping_gating")
 
         # ---------------------------------------------------------------------

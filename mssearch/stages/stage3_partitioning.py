@@ -399,6 +399,7 @@ def partition_candidate_images(
                 print(f"[Stage 3][Fallback] Image {img_idx}: No Stage 2 feature map in cache; falling back to zero-initialized feature map.")
 
         img_patches: List[BoundedPatch] = []
+        discarded_candidates: List[Tuple[Tuple[int, int, int, int], float]] = []
 
         while work_queue:
             box, depth = work_queue.pop(0)
@@ -452,6 +453,12 @@ def partition_candidate_images(
                 # Patch satisfies longer side <= 1024px!
                 crop = img_pil.crop(box_ints)
                 entropy = compute_spatial_entropy(crop, weights=config.entropy_weights)
+
+                # Filter low-entropy background patches
+                if config.min_patch_entropy > 0.0 and entropy < config.min_patch_entropy:
+                    discarded_candidates.append((box_ints, entropy))
+                    continue
+
                 _, pooled_vec = slice_feature_map(feat_map, box_ints, img_w, img_h)
 
                 img_patches.append(
@@ -462,6 +469,23 @@ def partition_candidate_images(
                         entropy=entropy
                     )
                 )
+
+        # Safety fallback: prevent empty image patch list if all patches were low entropy
+        if not img_patches and discarded_candidates:
+            best_box, best_ent = max(discarded_candidates, key=lambda x: x[1])
+            _, pooled_vec = slice_feature_map(feat_map, best_box, img_w, img_h)
+            img_patches.append(
+                BoundedPatch(
+                    img_idx=img_idx,
+                    box=best_box,
+                    feature_vector=pooled_vec,
+                    entropy=best_ent
+                )
+            )
+            if config.verbose:
+                print(f"[Stage 3][Safety Fallback] Image {img_idx}: All patches had H < {config.min_patch_entropy:.2f}. Retained highest-entropy patch {best_box} (H={best_ent:.3f}).")
+        elif config.verbose and discarded_candidates:
+            print(f"[Stage 3][Entropy Pruning] Image {img_idx}: Pruned {len(discarded_candidates)} patches with H < {config.min_patch_entropy:.2f}. Retained {len(img_patches)} bounded patches.")
 
         # Safety Budget Cap: ensure number of bounded patches per image does not exceed budget
         if len(img_patches) > config.max_patches_per_image:
