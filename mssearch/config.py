@@ -42,6 +42,8 @@ class MSSearchConfig:
     max_patch_size: int = 1024                   # Recursive invariant: longer side <= 1024px
     max_partition_depth: int = 2                 # Maximum recursion depth before direct tiling
     max_patches_per_image: int = 64              # Maximum bounded patches budget per image
+    stage3_budget_mode: str = "entropy_descending"  # "entropy_descending" or "uniform_stride"
+    enable_entropy_budget_sorting: bool = True   # When True and budget exceeded, sort by entropy descending
     reuse_stage2_features: bool = True           # Reuse SAM3 vision features extracted in Stage 2
 
     # -------------------------------------------------------------------------
@@ -57,6 +59,13 @@ class MSSearchConfig:
     existence_confidence_threshold: float = 0.0  # Minimum VLM existence confidence [-1, 1] to confirm detection
     latent_prompt_template: str = "According to your common sense knowledge and the content of the image, is it possible to find a {} by further zooming the sub-patch? Answer Yes or No."
     existence_prompt_template: str = "Is there a '{}' in the image? Answer Yes or No."
+    # Group Retention Granularity & Global Hard Cap
+    enable_group_retention_caps: bool = True     # Cap number of member patches retained per group
+    max_patches_per_latent_group: int = 1        # Max patches kept for latent-retained groups (1 = centroid only)
+    max_patches_per_detected_group: int = 4      # Max patches kept for confirmed SAM3 detection groups
+    enable_retention_hard_cap: bool = True       # Cap total retained patches across all groups before Stage 5/6
+    max_retained_patches: int = 16               # Global upper bound on candidate patches pool
+    retention_ranking_metric: str = "confidence_hybrid"  # "confidence_hybrid", "entropy", "detection_first"
 
     # -------------------------------------------------------------------------
     # Stage 5: Resolution-Aware Dual-Branch Screening

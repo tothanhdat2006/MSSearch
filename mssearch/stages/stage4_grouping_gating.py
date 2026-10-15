@@ -520,20 +520,72 @@ def run_feature_grouping_and_gating(
         })
 
         if has_active_match:
-            # Active object present or latent context promising -> KEEP all member patches
-            for i in member_indices:
-                remaining_patches.append(bounded_patches[i])
+            is_detection = ("sam3_det" in match_reason or "detection" in match_reason or "stage2" in match_reason)
+            group_score = 0.0
+            if is_detection:
+                group_score = 2.0 + (vlm_exist_score if vlm_exist_score is not None else 0.5) + max_det_score
+            elif "latent" in match_reason:
+                group_score = 1.0 + (vlm_latent_score if vlm_latent_score is not None else 0.0)
+            else:
+                group_score = 0.5
+
+            # Granular group retention cap
+            if getattr(config, "enable_group_retention_caps", True):
+                if is_detection:
+                    k_det = getattr(config, "max_patches_per_detected_group", 4)
+                    # Prioritize patches containing actual SAM3 detections
+                    det_patch_indices = [d["patch_idx"] for d in group_detected_objects if d.get("patch_idx") in member_indices]
+                    other_indices = [i for i in member_indices if i not in det_patch_indices]
+                    other_sorted = sorted(other_indices, key=lambda i: bounded_patches[i].entropy, reverse=True)
+                    chosen_indices = (det_patch_indices + other_sorted)[:k_det]
+                else:
+                    # Latent speculation: keep representative centroid only (default 1 patch)
+                    k_lat = getattr(config, "max_patches_per_latent_group", 1)
+                    if rep_idx in member_indices:
+                        other_indices = [i for i in member_indices if i != rep_idx]
+                        chosen_indices = ([rep_idx] + other_indices)[:k_lat]
+                    else:
+                        chosen_indices = member_indices[:k_lat]
+            else:
+                chosen_indices = member_indices
+
+            for i in chosen_indices:
+                p = bounded_patches[i]
+                p.confidence_score = group_score
+                remaining_patches.append(p)
+
             if config.verbose:
-                print(f"[Stage 4] Group {g_idx} ({len(member_indices)} patches): Match confirmed ({match_reason}) -> [KEPT].")
+                cap_note = f" (retained {len(chosen_indices)}/{len(member_indices)} patches)" if len(chosen_indices) < len(member_indices) else ""
+                print(f"[Stage 4] Group {g_idx} ({len(member_indices)} patches): Match confirmed ({match_reason}) -> [KEPT]{cap_note}.")
         else:
             # PRUNE entire group immediately (zero downstream VLM cost!)
             if config.verbose:
                 print(f"[Stage 4] Group {g_idx} ({len(member_indices)} patches): No target & latent < threshold -> [PRUNED] (Saved {len(member_indices)} downstream VLM calls).")
 
-    # Safety fallback: if all groups got pruned, retain top 20% highest entropy patches
+    # Global Retained Pool Hard Cap (e.g. top 16 patches max based on hybrid confidence)
+    if getattr(config, "enable_retention_hard_cap", True) and len(remaining_patches) > config.max_retained_patches:
+        k_cap = config.max_retained_patches
+        metric = getattr(config, "retention_ranking_metric", "confidence_hybrid")
+        if metric == "entropy":
+            sorted_patches = sorted(remaining_patches, key=lambda p: p.entropy, reverse=True)
+        elif metric == "detection_first":
+            sorted_patches = sorted(remaining_patches, key=lambda p: (p.confidence_score or 0.0), reverse=True)
+        else:  # "confidence_hybrid"
+            sorted_patches = sorted(
+                remaining_patches,
+                key=lambda p: ((p.confidence_score or 0.0), p.entropy),
+                reverse=True
+            )
+
+        pruned_by_cap = len(remaining_patches) - k_cap
+        if config.verbose:
+            print(f"[Stage 4][Budget Guard] Global retention hard cap triggered: reducing {len(remaining_patches)} retained patches to top-{k_cap} (metric: {metric}, pruned {pruned_by_cap} excess patches).")
+        remaining_patches = sorted_patches[:k_cap]
+
+    # Safety fallback: if all groups got pruned, retain top highest entropy patches
     if not remaining_patches and bounded_patches:
         sorted_by_entropy = sorted(bounded_patches, key=lambda p: p.entropy, reverse=True)
-        fallback_k = max(1, len(bounded_patches) // 5)
+        fallback_k = max(1, min(len(bounded_patches) // 5, getattr(config, "max_retained_patches", 16)))
         remaining_patches = sorted_by_entropy[:fallback_k]
         if config.verbose:
             print(f"[Stage 4][Safety Fallback Trigger] All {len(groups)} groups were pruned! Fallback activated: keeping top {fallback_k} highest-entropy patches.")

@@ -43,6 +43,7 @@ class BoundedPatch:
     box: Tuple[int, int, int, int]           # (x1, y1, x2, y2) in original image coordinates
     feature_vector: np.ndarray              # Pooled feature embedding [C] for Stage 4 reuse
     entropy: float
+    confidence_score: Optional[float] = None # Composite confidence score for Stage 4 hard capping
 
 
 def compute_spatial_entropy(
@@ -500,11 +501,19 @@ def partition_candidate_images(
 
         # Safety Budget Cap: ensure number of bounded patches per image does not exceed budget
         if len(img_patches) > config.max_patches_per_image:
-            if config.verbose:
-                print(f"[Stage 3][Budget Guard] Uniformly downsampling {len(img_patches)} bounded patches to {config.max_patches_per_image} across canvas.")
-            step = len(img_patches) / config.max_patches_per_image
-            indices = [int(i * step) for i in range(config.max_patches_per_image)]
-            img_patches = [img_patches[i] for i in indices]
+            use_entropy_sorting = getattr(config, "enable_entropy_budget_sorting", True) and (
+                getattr(config, "stage3_budget_mode", "entropy_descending") == "entropy_descending"
+            )
+            if use_entropy_sorting:
+                if config.verbose:
+                    print(f"[Stage 3][Budget Guard] Entropy-ranking {len(img_patches)} patches -> retaining top {config.max_patches_per_image} highest-entropy patches (preventing spatial target loss).")
+                img_patches = sorted(img_patches, key=lambda p: p.entropy, reverse=True)[:config.max_patches_per_image]
+            else:
+                if config.verbose:
+                    print(f"[Stage 3][Budget Guard] Uniformly downsampling {len(img_patches)} bounded patches to {config.max_patches_per_image} across canvas.")
+                step = len(img_patches) / config.max_patches_per_image
+                indices = [int(i * step) for i in range(config.max_patches_per_image)]
+                img_patches = [img_patches[i] for i in indices]
 
         bounded_patches.extend(img_patches)
 
