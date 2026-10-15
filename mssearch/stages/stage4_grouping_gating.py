@@ -248,6 +248,10 @@ def run_feature_grouping_and_gating(
                         p_img, active_objects
                     )
                 for tid in text_id:
+                    # SAM3 batch_inference uses 1-based text indexing (1 -> active_objects[0], 2 -> active_objects[1], etc.)
+                    obj_idx = (int(tid) - 1) if str(tid).isdigit() else 0
+                    label_str = active_objects[obj_idx] if 0 <= obj_idx < len(active_objects) else str(tid)
+
                     res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
                     boxes = res.get('boxes', [])
                     scores = res.get('scores', [])
@@ -255,7 +259,7 @@ def run_feature_grouping_and_gating(
                         s_float = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
                         b_clean = [int(round(float(c))) for c in (b.tolist() if hasattr(b, 'tolist') else b)]
                         dets.append({
-                            "label": str(tid),
+                            "label": label_str,
                             "score": round(s_float, 3),
                             "local_box": b_clean,
                             "global_box": [b_clean[0] + p_box_ints[0], b_clean[1] + p_box_ints[1],
@@ -376,11 +380,23 @@ def run_feature_grouping_and_gating(
                 # Check VLM latent confidence on the representative centroid patch
                 # -------------------------------------------------------------
                 if config.enable_latent_gating and zoom_model is not None and active_objects:
-                    vlm_tested_patch_idx = rep_idx
-                    vlm_tested_role = "Centroid (p_rep)"
+                    # Target crop selection: prioritize candidate detection patch over centroid if detections exist
+                    if group_detected_objects:
+                        best_det = max(group_detected_objects, key=lambda d: d["score"])
+                        eval_patch = bounded_patches[best_det["patch_idx"]]
+                        vlm_tested_patch_idx = best_det["patch_idx"]
+                        vlm_tested_role = "Detection Crop (p_det)"
+                    else:
+                        eval_patch = rep_patch
+                        vlm_tested_patch_idx = rep_idx
+                        vlm_tested_role = "Centroid (p_rep)"
+
+                    eval_box_ints = tuple(int(round(float(c))) for c in eval_patch.box)
+                    eval_img = candidate_images[eval_patch.img_idx].crop(eval_box_ints)
+
                     latent_scores_dict = {}
                     for obj in active_objects:
-                        s = _query_vlm_latent(zoom_model, rep_img, obj, config)
+                        s = _query_vlm_latent(zoom_model, eval_img, obj, config)
                         latent_scores_dict[obj] = s
 
                     vlm_per_object_scores = latent_scores_dict
@@ -390,16 +406,16 @@ def run_feature_grouping_and_gating(
 
                     if vlm_latent_score >= config.latent_confidence_threshold:
                         has_active_match = True
-                        match_reason = f"centroid_latent_confidence (conf={vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f})"
+                        match_reason = f"latent_confidence (conf={vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f})"
                         if config.verbose:
-                            print(f"[Stage 4][Latent Kept] Group {g_idx} centroid has latent zoom confidence ({vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f}) -> [KEPT].")
+                            print(f"[Stage 4][Latent Kept] Group {g_idx} {vlm_tested_role} has latent zoom confidence ({vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f}) -> [KEPT].")
                     else:
                         if config.verbose:
-                            print(f"[Stage 4][Latent Pruned] Group {g_idx} centroid latent confidence below threshold ({vlm_latent_score:.2f} < {config.latent_confidence_threshold:.2f}) -> [PRUNED].")
+                            print(f"[Stage 4][Latent Pruned] Group {g_idx} {vlm_tested_role} latent confidence below threshold ({vlm_latent_score:.2f} < {config.latent_confidence_threshold:.2f}) -> [PRUNED].")
                 elif active_objects:
                     # Simulation or no zoom model: record what prompt would be asked
-                    vlm_tested_patch_idx = rep_idx
-                    vlm_tested_role = "Centroid (p_rep)"
+                    vlm_tested_patch_idx = best_det["patch_idx"] if group_detected_objects else rep_idx
+                    vlm_tested_role = "Detection Crop (p_det)" if group_detected_objects else "Centroid (p_rep)"
                     vlm_prompt = config.latent_prompt_template.format(active_objects[0])
         else:
             vlm_tested_role = "Stage 2 Anchor"
