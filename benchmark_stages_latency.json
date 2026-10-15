@@ -1,0 +1,213 @@
+{
+  "statistics": {
+    "stage1_parser": {
+      "mean": 0.0001,
+      "std": 0.0001,
+      "min": 0.0,
+      "max": 0.0002,
+      "p50": 0.0,
+      "p90": 0.0002,
+      "pct_total": 0.0
+    },
+    "stage2_fast_path": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "pct_total": 0.0
+    },
+    "stage3_partitioning": {
+      "mean": 2.0351,
+      "std": 0.4891,
+      "min": 1.4314,
+      "max": 2.5493,
+      "p50": 2.3221,
+      "p90": 2.497,
+      "pct_total": 95.08
+    },
+    "stage4_grouping_gating": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "p50": 0.0,
+      "p90": 0.0,
+      "pct_total": 0.0
+    },
+    "stage5_screening": {
+      "mean": 0.0254,
+      "std": 0.0074,
+      "min": 0.0176,
+      "max": 0.0374,
+      "p50": 0.0233,
+      "p90": 0.0344,
+      "pct_total": 1.19
+    },
+    "stage6_foveated_reader": {
+      "mean": 0.0799,
+      "std": 0.0185,
+      "min": 0.0552,
+      "max": 0.1068,
+      "p50": 0.0757,
+      "p90": 0.1018,
+      "pct_total": 3.73
+    },
+    "total_pipeline": {
+      "mean": 2.1404,
+      "std": 0.4935,
+      "min": 1.5044,
+      "max": 2.6484,
+      "p50": 2.4663,
+      "p90": 2.591
+    }
+  },
+  "per_sample": [
+    {
+      "timings": {
+        "stage1_parser": 0.0002,
+        "stage2_fast_path": 0.0,
+        "stage3_partitioning": 1.4314,
+        "stage4_grouping_gating": 0.0,
+        "stage5_screening": 0.0176,
+        "stage6_foveated_reader": 0.0552,
+        "total_pipeline": 1.5044
+      },
+      "stage_outputs": {
+        "active_objects": [
+          "number",
+          "entrance",
+          "woman"
+        ],
+        "parser_strategy": "Strategy 3: Regex Noun Extraction (Fallback)",
+        "fast_path_triggered": false,
+        "num_bounded_patches": 24,
+        "num_groups": 0,
+        "num_remaining_patches": 24,
+        "unified_pool_size": 24,
+        "num_read_crops": 24,
+        "answers": []
+      },
+      "canvas_size": [
+        4992,
+        7680
+      ]
+    },
+    {
+      "timings": {
+        "stage1_parser": 0.0,
+        "stage2_fast_path": 0.0,
+        "stage3_partitioning": 1.454,
+        "stage4_grouping_gating": 0.0,
+        "stage5_screening": 0.0299,
+        "stage6_foveated_reader": 0.0943,
+        "total_pipeline": 1.5782
+      },
+      "stage_outputs": {
+        "active_objects": [
+          "mailbox"
+        ],
+        "parser_strategy": "Strategy 3: Regex Noun Extraction (Fallback)",
+        "fast_path_triggered": false,
+        "num_bounded_patches": 24,
+        "num_groups": 0,
+        "num_remaining_patches": 24,
+        "unified_pool_size": 24,
+        "num_read_crops": 24,
+        "answers": []
+      },
+      "canvas_size": [
+        4992,
+        7680
+      ]
+    },
+    {
+      "timings": {
+        "stage1_parser": 0.0,
+        "stage2_fast_path": 0.0,
+        "stage3_partitioning": 2.3221,
+        "stage4_grouping_gating": 0.0,
+        "stage5_screening": 0.0374,
+        "stage6_foveated_reader": 0.1068,
+        "total_pipeline": 2.4663
+      },
+      "stage_outputs": {
+        "active_objects": [
+          "mailbox",
+          "left",
+          "woman"
+        ],
+        "parser_strategy": "Strategy 3: Regex Noun Extraction (Fallback)",
+        "fast_path_triggered": false,
+        "num_bounded_patches": 24,
+        "num_groups": 0,
+        "num_remaining_patches": 24,
+        "unified_pool_size": 24,
+        "num_read_crops": 24,
+        "answers": []
+      },
+      "canvas_size": [
+        4992,
+        7680
+      ]
+    },
+    {
+      "timings": {
+        "stage1_parser": 0.0001,
+        "stage2_fast_path": 0.0,
+        "stage3_partitioning": 2.5493,
+        "stage4_grouping_gating": 0.0,
+        "stage5_screening": 0.0233,
+        "stage6_foveated_reader": 0.0757,
+        "total_pipeline": 2.6484
+      },
+      "stage_outputs": {
+        "active_objects": [
+          "white",
+          "girl"
+        ],
+        "parser_strategy": "Strategy 3: Regex Noun Extraction (Fallback)",
+        "fast_path_triggered": false,
+        "num_bounded_patches": 17,
+        "num_groups": 0,
+        "num_remaining_patches": 17,
+        "unified_pool_size": 17,
+        "num_read_crops": 17,
+        "answers": []
+      },
+      "canvas_size": [
+        7680,
+        4992
+      ]
+    },
+    {
+      "timings": {
+        "stage1_parser": 0.0,
+        "stage2_fast_path": 0.0,
+        "stage3_partitioning": 2.4186,
+        "stage4_grouping_gating": 0.0,
+        "stage5_screening": 0.0189,
+        "stage6_foveated_reader": 0.0674,
+        "total_pipeline": 2.5049
+      },
+      "stage_outputs": {
+        "active_objects": [
+          "blue"
+        ],
+        "parser_strategy": "Strategy 3: Regex Noun Extraction (Fallback)",
+        "fast_path_triggered": false,
+        "num_bounded_patches": 15,
+        "num_groups": 0,
+        "num_remaining_patches": 15,
+        "unified_pool_size": 15,
+        "num_read_crops": 15,
+        "answers": []
+      },
+      "canvas_size": [
+        7680,
+        4992
+      ]
+    }
+  ]
+}

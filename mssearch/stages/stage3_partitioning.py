@@ -52,8 +52,19 @@ def compute_spatial_entropy(
     """
     Computes Tri-Factor Spatial Entropy:
     H(I) = w1 * H_Shannon + w2 * G_Sobel + w3 * V_Laplacian
+    Accelerated with bilinear downsampling (max dimension 512px) to prevent CPU bottlenecks on 8K images.
     """
-    img_arr = np.array(crop_img)
+    max_dim = max(crop_img.width, crop_img.height)
+    if max_dim > 512:
+        scale = 512.0 / max_dim
+        safe_img = crop_img.resize(
+            (int(round(crop_img.width * scale)), int(round(crop_img.height * scale))),
+            Image.Resampling.BILINEAR
+        )
+        img_arr = np.array(safe_img)
+    else:
+        img_arr = np.array(crop_img)
+
     if img_arr.ndim == 3:
         if cv2 is not None:
             gray = cv2.cvtColor(img_arr, cv2.COLOR_RGB2GRAY)
