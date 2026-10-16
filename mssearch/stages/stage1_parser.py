@@ -72,30 +72,57 @@ def parse_question_to_active_objects(
             if verbose:
                 print(f"[Stage 1][Fallback Trigger] In-context VLM generation failed ({e}); falling back to grammar regex.")
 
-    # Strategy 3: Grammar-Aware Multi-Word Regex Fallback (when models absent / simulation)
+    # Strategy 3: Robust Syntactic Clause-Delimited Noun Extraction (Fallback)
     if not raw_targets:
-        q_lower = question.lower()
-        cleaned_q = re.sub(
-            r'^(?:what\s+is|where\s+is|which\s+is|how\s+many|can\s+you\s+find|find)\s+(?:the\s+)?(?:relative\s+position\s+of|position\s+of|distance\s+between|color\s+of|number\s+of)?\s*',
-            '',
-            q_lower
-        )
-        pattern = r'\b(?:the|a|an)\s+([a-zA-Z0-9_\-]+(?:\s+[a-zA-Z0-9_\-]+){0,2})'
-        raw_matches = re.findall(pattern, cleaned_q)
-        
-        stopwords = {"image", "picture", "photo", "question", "color", "symbol", "word", "text", "relative", "position", "distance"}
-        for m in raw_matches:
-            tokens = [w for w in m.split() if w not in stopwords]
-            if tokens:
-                cand = ' '.join(tokens)
-                cand = re.sub(r'\s+(?:compared|to|of|in|on|at|near|next|and)$', '', cand).strip()
-                if cand and cand not in raw_targets:
-                    raw_targets.append(cand)
-                    
+        delimiters = {
+            'what', 'where', 'which', 'who', 'whom', 'whose', 'when', 'how', 'why',
+            'above', 'below', 'under', 'next', 'near', 'behind', 'front', 'compared', 'top',
+            'in', 'on', 'at', 'by', 'from', 'with', 'to', 'of', 'into', 'onto', 'around', 'between',
+            'is', 'are', 'was', 'were', 'standing', 'displayed', 'shown', 'parked', 'located', 'positioned',
+            'relative', 'position', 'distance', 'many'
+        }
+        abstract_heads = {
+            'position', 'distance', 'color', 'symbol', 'text', 'word', 'image', 'picture', 'photo', 'kind', 'type'
+        }
+
+        q_clean = question.rstrip('?.,! ')
+        raw_tokens = re.findall(r'\b[a-zA-Z0-9_\-]+\b', q_clean)
+
+        phrases = []
+        current_chunk = []
+
+        for t in raw_tokens:
+            tl = t.lower()
+            if tl in {'the', 'a', 'an'}:
+                if current_chunk:
+                    phrases.append(' '.join(current_chunk))
+                    current_chunk = []
+                continue
+            if tl in delimiters:
+                if current_chunk:
+                    phrases.append(' '.join(current_chunk))
+                    current_chunk = []
+                continue
+            current_chunk.append(tl)
+
+        if current_chunk:
+            phrases.append(' '.join(current_chunk))
+
+        for p in phrases:
+            words = p.strip().split()
+            words = [w for w in words if w not in delimiters and w not in {'the', 'a', 'an'}]
+            if not words:
+                continue
+            if len(words) == 1 and words[0] in abstract_heads:
+                continue
+            cand = ' '.join(words)
+            if cand and cand not in raw_targets:
+                raw_targets.append(cand)
+
         if raw_targets:
-            extraction_strategy = "Strategy 3: Grammar-Aware Regex Extraction (Fallback)"
+            extraction_strategy = "Strategy 3: Syntactic Clause Extraction (Fallback)"
             if verbose:
-                print(f"[Stage 1][Fallback] Grammar-aware regex extraction found anchor objects: {raw_targets}")
+                print(f"[Stage 1][Fallback] Syntactic clause extraction found anchor objects: {raw_targets}")
 
     # Post-process: Remove pronouns and normalize plurals
     clean_targets = []
