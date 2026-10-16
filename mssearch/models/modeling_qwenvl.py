@@ -415,6 +415,27 @@ class ModelQwenVL:
         return self.free_form_using_nodes(image_pil=image_pil, question=question, searched_nodes=[], return_zoomed_view=False)
 
     @torch.inference_mode()
+    def generate_text(self, prompt: str, max_new_tokens: int = 64) -> str:
+        """
+        Pure text generation interface (zero visual image overhead) for question parsing and entity extraction.
+        """
+        messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+        text_prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = self.processor(text=[text_prompt], return_tensors="pt").to(self.device)
+        if inputs.input_ids.shape[0] == 1 and "attention_mask" in inputs:
+            if not (inputs.attention_mask == 0).any():
+                inputs.pop("attention_mask", None)
+
+        generated_ids = self.model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            use_cache=True
+        )
+        trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, generated_ids)]
+        return self.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
+
+    @torch.inference_mode()
     def multiple_choices_inference(self, image_pil, question, options, searched_nodes: List[NodeA] = None):
         image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
         if len(image_list) > 1:

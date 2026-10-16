@@ -44,6 +44,7 @@ class BoundedPatch:
     feature_vector: np.ndarray              # Pooled feature embedding [C] for Stage 4 reuse
     entropy: float
     confidence_score: Optional[float] = None # Composite confidence score for Stage 4 hard capping
+    siglip_score: Optional[float] = None     # Zero-shot SigLIP alignment score (max over active objects)
 
 
 def compute_spatial_entropy(
@@ -386,7 +387,9 @@ def slice_feature_map(
 def partition_candidate_images(
     candidate_images: List[Image.Image],
     stage2_feature_cache: Dict[int, np.ndarray],
-    config: MSSearchConfig
+    config: MSSearchConfig,
+    active_objects: Optional[List[str]] = None,
+    siglip_model: Optional[Any] = None
 ) -> List[BoundedPatch]:
     """
     Executes Entropy-Gated Recursive Patch Partitioning across all candidate images.
@@ -501,10 +504,33 @@ def partition_candidate_images(
 
         # Safety Budget Cap: ensure number of bounded patches per image does not exceed budget
         if len(img_patches) > config.max_patches_per_image:
-            use_entropy_sorting = getattr(config, "enable_entropy_budget_sorting", True) and (
-                getattr(config, "stage3_budget_mode", "entropy_descending") == "entropy_descending"
-            )
-            if use_entropy_sorting:
+            budget_mode = getattr(config, "stage3_budget_mode", "siglip_similarity")
+            if budget_mode == "siglip_similarity" and siglip_model is not None and active_objects:
+                try:
+                    crops = [img_pil.crop(tuple(int(round(float(c))) for c in p.box)) for p in img_patches]
+                    bs = getattr(config, "siglip_budget_batch_size", 32)
+                    scores = []
+                    for b_i in range(0, len(crops), bs):
+                        batch_crops = crops[b_i:b_i + bs]
+                        scores.extend(siglip_model.score_crops(batch_crops, active_objects))
+
+                    for p, s in zip(img_patches, scores):
+                        p.siglip_score = float(s)
+
+                    max_s = max(scores) if scores else 0.0
+                    if config.verbose:
+                        print(f"[Stage 3][Budget Guard] SigLIP-ranking {len(img_patches)} patches against active objects {active_objects} -> retaining top {config.max_patches_per_image} semantic patches (max score: {max_s:.3f}).")
+
+                    img_patches = sorted(
+                        img_patches,
+                        key=lambda p: (p.siglip_score if p.siglip_score is not None else 0.0, p.entropy),
+                        reverse=True
+                    )[:config.max_patches_per_image]
+                except Exception as e:
+                    if config.verbose:
+                        print(f"[Stage 3][Budget Guard Notice] SigLIP scoring failed ({e}); falling back to entropy descending.")
+                    img_patches = sorted(img_patches, key=lambda p: p.entropy, reverse=True)[:config.max_patches_per_image]
+            elif budget_mode in ("entropy_descending", "siglip_similarity") and getattr(config, "enable_entropy_budget_sorting", True):
                 if config.verbose:
                     print(f"[Stage 3][Budget Guard] Entropy-ranking {len(img_patches)} patches -> retaining top {config.max_patches_per_image} highest-entropy patches (preventing spatial target loss).")
                 img_patches = sorted(img_patches, key=lambda p: p.entropy, reverse=True)[:config.max_patches_per_image]

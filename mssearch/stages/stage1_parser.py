@@ -30,48 +30,78 @@ def parse_question_to_active_objects(
     raw_targets = []
     extraction_strategy = "Strategy 3: Regex Noun Extraction (Fallback)"
 
-    # Strategy 1: Use VLM In-Context Cue Generator if available
-    if zoom_model is not None and ic_examples is not None:
+    # Strategy 1: Direct MLLM Zero-Shot Text Parser (Preferred - uses LLM backbone)
+    if zoom_model is not None and (hasattr(zoom_model, "generate_text") or hasattr(zoom_model, "generate_response")):
+        try:
+            mllm_prompt = (
+                "Extract only the concrete physical visual anchor objects mentioned in this visual search question.\n"
+                "Do NOT include abstract relation words (such as 'position', 'relative', 'distance', 'location'), question words, or options.\n"
+                "Return ONLY a valid JSON list of strings, for example: [\"pink banner\", \"green trash bin\"].\n\n"
+                f"Question: \"{question}\"\n"
+                "Visual Anchor Objects JSON:"
+            )
+            raw_text = ""
+            if hasattr(zoom_model, "generate_text"):
+                raw_text = zoom_model.generate_text(mllm_prompt, max_new_tokens=64)
+            elif hasattr(zoom_model, "generate_response"):
+                raw_text = zoom_model.generate_response(image_pil=None, question=mllm_prompt)
+
+            import json
+            json_match = re.search(r'\[.*?\]', raw_text, re.DOTALL)
+            if json_match:
+                parsed_cues = json.loads(json_match.group(0))
+                if isinstance(parsed_cues, list) and len(parsed_cues) > 0:
+                    raw_targets.extend([str(c).strip().lower() for c in parsed_cues if str(c).strip()])
+                    extraction_strategy = "Strategy 1: MLLM Zero-Shot Text Generation (Non-Fallback)"
+                    if verbose:
+                        print(f"[Stage 1][Non-Fallback] MLLM extracted anchor objects: {raw_targets}")
+        except Exception as e:
+            if verbose:
+                print(f"[Stage 1][Fallback Trigger] MLLM text extraction notice ({e}); proceeding to fallback.")
+
+    # Strategy 2: Use VLM In-Context Cue Generator if available and targets not yet found
+    if not raw_targets and zoom_model is not None and ic_examples is not None:
         try:
             generated_cues = zoom_model.generate_visual_cues_using_ic(ic_examples, question)
             if generated_cues:
                 raw_targets.extend(generated_cues)
-                extraction_strategy = "Strategy 1: VLM In-Context Generation (Non-Fallback)"
+                extraction_strategy = "Strategy 2: VLM In-Context Generation (Non-Fallback)"
                 if verbose:
                     print(f"[Stage 1][Non-Fallback] In-context VLM generated cues: {generated_cues}")
         except Exception as e:
             if verbose:
-                print(f"[Stage 1][Fallback Trigger] In-context VLM generation failed ({e}); falling back to SpaCy NLP.")
+                print(f"[Stage 1][Fallback Trigger] In-context VLM generation failed ({e}); falling back to grammar regex.")
 
-    # Strategy 2: SpaCy NLP Noun-Chunk Fallback
-    if not raw_targets and nlp_model is not None:
-        try:
-            spacy_targets = extract_visual_objects(nlp_model, question)
-            if spacy_targets:
-                raw_targets.extend(spacy_targets)
-                extraction_strategy = "Strategy 2: SpaCy NLP Fallback"
-                if verbose:
-                    print(f"[Stage 1][Fallback] SpaCy NLP extracted anchor objects: {spacy_targets}")
-        except Exception as e:
-            if verbose:
-                print(f"[Stage 1][Fallback Trigger] SpaCy NLP extraction failed ({e}); falling back to Regex.")
-
-    # Strategy 3: Heuristic Regex Fallback if both models are absent
+    # Strategy 3: Grammar-Aware Multi-Word Regex Fallback (when models absent / simulation)
     if not raw_targets:
-        matches = re.findall(r'\b(?:the|a|an)\s+([a-zA-Z0-9_\-]+)\b', question.lower())
-        stopwords = {"image", "picture", "photo", "question", "color", "symbol", "word", "text"}
-        raw_targets = [m for m in matches if m not in stopwords]
+        q_lower = question.lower()
+        cleaned_q = re.sub(
+            r'^(?:what\s+is|where\s+is|which\s+is|how\s+many|can\s+you\s+find|find)\s+(?:the\s+)?(?:relative\s+position\s+of|position\s+of|distance\s+between|color\s+of|number\s+of)?\s*',
+            '',
+            q_lower
+        )
+        pattern = r'\b(?:the|a|an)\s+([a-zA-Z0-9_\-]+(?:\s+[a-zA-Z0-9_\-]+){0,2})'
+        raw_matches = re.findall(pattern, cleaned_q)
+        
+        stopwords = {"image", "picture", "photo", "question", "color", "symbol", "word", "text", "relative", "position", "distance"}
+        for m in raw_matches:
+            tokens = [w for w in m.split() if w not in stopwords]
+            if tokens:
+                cand = ' '.join(tokens)
+                cand = re.sub(r'\s+(?:compared|to|of|in|on|at|near|next|and)$', '', cand).strip()
+                if cand and cand not in raw_targets:
+                    raw_targets.append(cand)
+                    
         if raw_targets:
-            extraction_strategy = "Strategy 3: Regex Noun Extraction (Fallback)"
+            extraction_strategy = "Strategy 3: Grammar-Aware Regex Extraction (Fallback)"
             if verbose:
-                print(f"[Stage 1][Fallback] Regex extraction found anchor objects: {raw_targets}")
+                print(f"[Stage 1][Fallback] Grammar-aware regex extraction found anchor objects: {raw_targets}")
 
     # Post-process: Remove pronouns and normalize plurals
     clean_targets = []
     for t in raw_targets:
         if not t:
             continue
-        # Filter out pronoun phrases like "his bag" if nlp_model is present
         if nlp_model is not None and include_pronouns(nlp_model, t):
             if verbose:
                 print(f"[Stage 1] Stripped pronoun target: '{t}'")

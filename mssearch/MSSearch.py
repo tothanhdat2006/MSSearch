@@ -134,7 +134,9 @@ class MultiSourceSearchEngine:
         bounded_patches = partition_candidate_images(
             candidate_images=candidate_images,
             stage2_feature_cache=feature_cache,
-            config=self.config
+            config=self.config,
+            active_objects=active_objects,
+            siglip_model=self.siglip_model
         )
         telemetry["timings_sec"]["stage3_partitioning"] = round(time.perf_counter() - t0, 3)
         telemetry["num_bounded_patches"] = len(bounded_patches)

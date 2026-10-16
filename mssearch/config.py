@@ -14,7 +14,8 @@ class MSSearchConfig:
     # -------------------------------------------------------------------------
     # Stage 1: Question Parsing & Active Object Set
     # -------------------------------------------------------------------------
-    use_nlp_fallback: bool = True
+    use_mllm_object_parser: bool = True          # Use MLLM language model directly for zero-shot object extraction
+    use_nlp_fallback: bool = False               # Deprecated in favor of MLLM + Grammar Regex
     nlp_model_name: str = "en_core_web_sm"
 
     # -------------------------------------------------------------------------
@@ -42,8 +43,9 @@ class MSSearchConfig:
     max_patch_size: int = 1024                   # Recursive invariant: longer side <= 1024px
     max_partition_depth: int = 2                 # Maximum recursion depth before direct tiling
     max_patches_per_image: int = 64              # Maximum bounded patches budget per image
-    stage3_budget_mode: str = "entropy_descending"  # "entropy_descending" or "uniform_stride"
-    enable_entropy_budget_sorting: bool = True   # When True and budget exceeded, sort by entropy descending
+    stage3_budget_mode: str = "siglip_similarity" # "siglip_similarity", "entropy_descending", "uniform_stride"
+    enable_entropy_budget_sorting: bool = True   # Backward compatibility toggle
+    siglip_budget_batch_size: int = 32           # Batch size for SigLIP crop scoring
     reuse_stage2_features: bool = True           # Reuse SAM3 vision features extracted in Stage 2
 
     # -------------------------------------------------------------------------
