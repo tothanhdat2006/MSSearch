@@ -217,17 +217,19 @@ def run_foveated_vlm_reading(
         if config.enable_textual_prompt_coords:
             text_coords_hint = f" Focal region: [{local_target_box[0]}, {local_target_box[1]}, {local_target_box[2]}, {local_target_box[3]}]."
 
-        # 3. Query VLM with full question q
-        prompt = f"{question}{text_coords_hint}"
+        # 3. Query VLM with full question q and concise answer instruction (Fix A)
+        concise_hint = " Answer concisely with just the direct answer in a few words." if getattr(config, "enable_concise_reading_prompt", True) else ""
+        prompt = f"{question}{text_coords_hint}{concise_hint}"
         raw_answer = ""
+        max_tokens = getattr(config, "max_vlm_tokens", 48)
         if zoom_model is not None:
             try:
                 if hasattr(zoom_model, "generate_response"):
-                    raw_answer = zoom_model.generate_response(image_pil=vlm_input_crop, question=prompt)
+                    raw_answer = zoom_model.generate_response(image_pil=vlm_input_crop, question=prompt, max_new_tokens=max_tokens)
                 elif hasattr(zoom_model, "free_form_using_nodes"):
-                    raw_answer = zoom_model.free_form_using_nodes(image_pil=vlm_input_crop, question=prompt, searched_nodes=[])
+                    raw_answer = zoom_model.free_form_using_nodes(image_pil=vlm_input_crop, question=prompt, searched_nodes=[], max_new_tokens=max_tokens)
                 elif hasattr(zoom_model, "generate"):
-                    raw_answer = zoom_model.generate(image_pil=vlm_input_crop, question=prompt)
+                    raw_answer = zoom_model.generate(image_pil=vlm_input_crop, question=prompt, max_new_tokens=max_tokens)
                 else:
                     raw_answer = str(zoom_model(image_pil=vlm_input_crop, question=prompt))
             except Exception as e:
@@ -279,6 +281,23 @@ def run_foveated_vlm_reading(
             evidence_indices.add(img_idx)
             if config.verbose:
                 print(f"[Stage 6][Evidence Found] Crop {c_idx} (Image {img_idx}, {item.source_branch}): '{raw_answer}'")
+
+            # Fix B: Early stopping when 2 or more distinct crops confirm the same consensus answer
+            if getattr(config, "enable_early_consensus_exit", True) and len(extractions) >= 2:
+                req_consensus = getattr(config, "early_consensus_count", 2)
+                cur_ans_norm = raw_answer.strip().lower()
+                matches = [
+                    prev for prev in extractions[:-1]
+                    if (
+                        SequenceMatcher(None, cur_ans_norm, prev.raw_answer.strip().lower()).ratio() >= 0.65
+                        or (len(cur_ans_norm) > 2 and cur_ans_norm in prev.raw_answer.strip().lower())
+                        or (len(prev.raw_answer.strip()) > 2 and prev.raw_answer.strip().lower() in cur_ans_norm)
+                    )
+                ]
+                if len(matches) + 1 >= req_consensus:
+                    if config.verbose:
+                        print(f"[Stage 6][Early Exit] Consensus confirmed ({len(matches) + 1} matching crops) on '{raw_answer}'. Halting remaining {len(unified_pool) - c_idx - 1} crops to optimize throughput.")
+                    break
         elif config.verbose:
             print(f"[Stage 6][Negative Filtered] Crop {c_idx} (Image {img_idx}) returned unanswerable response: '{raw_answer}'")
 

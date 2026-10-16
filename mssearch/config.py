@@ -61,6 +61,8 @@ class MSSearchConfig:
     existence_confidence_threshold: float = 0.0  # Minimum VLM existence confidence [-1, 1] to confirm detection
     latent_prompt_template: str = "According to your common sense knowledge and the content of the image, is it possible to find a {} by further zooming the sub-patch? Answer Yes or No."
     existence_prompt_template: str = "Is there a '{}' in the image? Answer Yes or No."
+    bypass_vlm_for_confirmed_groups: bool = True # Skip VLM existence check if SAM3 det >= threshold or SigLIP >= 0.45
+    max_latent_eval_groups: int = 8              # Cap speculative VLM latent checks to top 8 groups
     # Group Retention Granularity & Global Hard Cap
     enable_group_retention_caps: bool = True     # Cap number of member patches retained per group
     max_patches_per_latent_group: int = 1        # Max patches kept for latent-retained groups (1 = centroid only)
@@ -81,7 +83,10 @@ class MSSearchConfig:
     # Stage 6: Foveated VLM Reading & Semantic Deduplication
     # -------------------------------------------------------------------------
     bbox_expansion_factor: float = 1.25          # Independent 25% padding per patch
-    max_vlm_tokens: int = 256
+    max_vlm_tokens: int = 48                     # Concise response token budget (prevents verbose 256-token slowdown)
+    enable_concise_reading_prompt: bool = True   # Append concise answering instruction
+    enable_early_consensus_exit: bool = True     # Stop evaluating crops once 2 identical/near-identical answers are extracted
+    early_consensus_count: int = 2               # Minimum consensus extractions to trigger early exit
     answer_dedup_similarity: float = 0.85        # Semantic deduplication threshold
 
     # -------------------------------------------------------------------------

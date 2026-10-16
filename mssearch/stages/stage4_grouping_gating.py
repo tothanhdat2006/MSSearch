@@ -323,6 +323,7 @@ def run_feature_grouping_and_gating(
 
     remaining_patches: List[BoundedPatch] = []
     group_records: List[Dict[str, Any]] = []
+    latent_vlm_queries_count = 0
 
     # 3. Dual Gating per group
     for g_idx, member_indices in enumerate(groups):
@@ -393,10 +394,29 @@ def run_feature_grouping_and_gating(
         fovea_box = None
         best_det_box = None
 
+        # Safeguard B (Fix C): High-confidence SAM3 or SigLIP bypass (zero VLM latency)
+        max_siglip_score = max([bounded_patches[mem_i].siglip_score or 0.0 for mem_i in member_indices], default=0.0)
+        if getattr(config, "bypass_vlm_for_confirmed_groups", True) and not has_active_match:
+            if max_det_score >= config.sam3_group_det_threshold:
+                has_active_match = True
+                best_det = max(group_detected_objects, key=lambda d: d["score"])
+                match_reason = f"sam3_high_confidence (score={best_det['score']:.2f} >= {config.sam3_group_det_threshold:.2f})"
+                vlm_tested_patch_idx = best_det["patch_idx"]
+                vlm_tested_role = "Detection Crop (SAM3 Confirmed)"
+                if config.verbose:
+                    print(f"[Stage 4][SAM3 Confirmed] Group {g_idx} has confident detection '{best_det['label']}' (score={best_det['score']:.2f}) -> [KEPT] (bypassed VLM check).")
+            elif max_siglip_score >= 0.45:
+                has_active_match = True
+                match_reason = f"siglip_high_confidence (score={max_siglip_score:.2f} >= 0.45)"
+                vlm_tested_patch_idx = rep_idx
+                vlm_tested_role = "Centroid (SigLIP Confirmed)"
+                if config.verbose:
+                    print(f"[Stage 4][SigLIP Confirmed] Group {g_idx} has strong semantic similarity (score={max_siglip_score:.2f}) -> [KEPT] (bypassed VLM check).")
+
         if not has_active_match:
             if group_detected_objects:
                 # -------------------------------------------------------------
-                # Branch (2): Object Found by SAM3 in group
+                # Branch (2): Object Found by SAM3 in group (below bypass threshold)
                 # Challenge 1: Micro-Fovea Extraction to avoid token dilution
                 # Gating: Verified via Standard Existence Prompt on Micro-Fovea
                 # -------------------------------------------------------------
@@ -442,38 +462,40 @@ def run_feature_grouping_and_gating(
                 # Check VLM latent confidence on the representative centroid patch
                 # -------------------------------------------------------------
                 if config.enable_latent_gating and zoom_model is not None and active_objects:
-                    # Target crop selection: prioritize candidate detection patch over centroid if detections exist
-                    if group_detected_objects:
-                        best_det = max(group_detected_objects, key=lambda d: d["score"])
-                        eval_patch = bounded_patches[best_det["patch_idx"]]
-                        vlm_tested_patch_idx = best_det["patch_idx"]
-                        vlm_tested_role = "Detection Crop (p_det)"
-                    else:
-                        eval_patch = rep_patch
-                        vlm_tested_patch_idx = rep_idx
-                        vlm_tested_role = "Centroid (p_rep)"
-
-                    eval_box_ints = tuple(int(round(float(c))) for c in eval_patch.box)
-                    eval_img = candidate_images[eval_patch.img_idx].crop(eval_box_ints)
-
-                    latent_scores_dict = {}
-                    for obj in active_objects:
-                        s = _query_vlm_latent(zoom_model, eval_img, obj, config)
-                        latent_scores_dict[obj] = s
-
-                    vlm_per_object_scores = latent_scores_dict
-                    best_obj = max(latent_scores_dict, key=latent_scores_dict.get) if latent_scores_dict else (active_objects[0] if active_objects else "")
-                    vlm_latent_score = latent_scores_dict[best_obj] if latent_scores_dict else -1.0
-                    vlm_prompt = config.latent_prompt_template.format(best_obj)
-
-                    if vlm_latent_score >= config.latent_confidence_threshold:
-                        has_active_match = True
-                        match_reason = f"latent_confidence (conf={vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f})"
+                    max_latent_evals = getattr(config, "max_latent_eval_groups", 8)
+                    if latent_vlm_queries_count >= max_latent_evals:
                         if config.verbose:
-                            print(f"[Stage 4][Latent Kept] Group {g_idx} {vlm_tested_role} has latent zoom confidence ({vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f}) -> [KEPT].")
+                            print(f"[Stage 4][Latent Budget Guard] Max latent VLM evaluations reached ({max_latent_evals}) -> Group {g_idx} speculative check skipped to save latency.")
                     else:
-                        if config.verbose:
-                            print(f"[Stage 4][Latent Pruned] Group {g_idx} {vlm_tested_role} latent confidence below threshold ({vlm_latent_score:.2f} < {config.latent_confidence_threshold:.2f}) -> [PRUNED].")
+                        latent_vlm_queries_count += 1
+                        # Target crop selection: prioritize candidate detection patch over centroid if detections exist
+                        if group_detected_objects:
+                            best_det = max(group_detected_objects, key=lambda d: d["score"])
+                            eval_patch = bounded_patches[best_det["patch_idx"]]
+                            vlm_tested_patch_idx = best_det["patch_idx"]
+                            vlm_tested_role = "Detection Crop (p_det)"
+                        else:
+                            eval_patch = rep_patch
+                            vlm_tested_patch_idx = rep_idx
+                            vlm_tested_role = "Centroid (p_rep)"
+
+                        eval_box_ints = tuple(int(round(float(c))) for c in eval_patch.box)
+                        eval_img = candidate_images[eval_patch.img_idx].crop(eval_box_ints)
+
+                        # Fix C: Query primary active object target only (avoiding 3x multiplier per group)
+                        primary_obj = active_objects[0]
+                        vlm_latent_score = _query_vlm_latent(zoom_model, eval_img, primary_obj, config)
+                        vlm_per_object_scores = {primary_obj: vlm_latent_score}
+                        vlm_prompt = config.latent_prompt_template.format(primary_obj)
+
+                        if vlm_latent_score >= config.latent_confidence_threshold:
+                            has_active_match = True
+                            match_reason = f"latent_confidence (conf={vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f})"
+                            if config.verbose:
+                                print(f"[Stage 4][Latent Kept] Group {g_idx} {vlm_tested_role} has latent zoom confidence ({vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f}) -> [KEPT].")
+                        else:
+                            if config.verbose:
+                                print(f"[Stage 4][Latent Pruned] Group {g_idx} {vlm_tested_role} latent confidence below threshold ({vlm_latent_score:.2f} < {config.latent_confidence_threshold:.2f}) -> [PRUNED].")
                 elif active_objects:
                     # Simulation or no zoom model: record what prompt would be asked
                     vlm_tested_patch_idx = best_det["patch_idx"] if group_detected_objects else rep_idx

@@ -369,7 +369,7 @@ class ModelQwenVL:
         return confidence
 
     @torch.inference_mode()
-    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[NodeA], return_zoomed_view=False):
+    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[NodeA], return_zoomed_view=False, max_new_tokens: int = 64):
         image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
         if len(image_list) > 1:
             raw_image_resize, croped_view, zoom_view = image_list
@@ -396,7 +396,7 @@ class ModelQwenVL:
         if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
             if not (model_inputs.attention_mask == 0).any():
                 model_inputs.pop("attention_mask", None)
-        generated_ids = self.model.generate(**model_inputs, use_cache=True, max_new_tokens=256, do_sample=False)
+        generated_ids = self.model.generate(**model_inputs, use_cache=True, max_new_tokens=max_new_tokens, do_sample=False)
 
         generated_ids_trimmed = [
             out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)
@@ -410,9 +410,15 @@ class ModelQwenVL:
         return outputs
 
     @torch.inference_mode()
-    def generate_response(self, image_pil: Image.Image, question: str, **kwargs) -> str:
+    def generate_response(self, image_pil: Image.Image, question: str, max_new_tokens: int = 48, **kwargs) -> str:
         """Direct free-form text response generation interface for an image and question."""
-        return self.free_form_using_nodes(image_pil=image_pil, question=question, searched_nodes=[], return_zoomed_view=False)
+        return self.free_form_using_nodes(
+            image_pil=image_pil,
+            question=question,
+            searched_nodes=[],
+            return_zoomed_view=False,
+            max_new_tokens=max_new_tokens
+        )
 
     @torch.inference_mode()
     def generate_text(self, prompt: Union[str, List[Dict[str, Any]]], max_new_tokens: int = 64) -> str:
