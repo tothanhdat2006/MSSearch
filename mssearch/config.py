@@ -32,7 +32,7 @@ class MSSearchConfig:
     # Stage 3: Entropy-Gated Recursive Patch Partitioning & SAM3-SGAP
     # -------------------------------------------------------------------------
     entropy_threshold: float = 0.35              # H < 0.35 -> Quadrants, H >= 0.35 -> SAM3-SGAP
-    min_patch_entropy: float = 0.50              # Minimum entropy required to retain patch (H < min_patch_entropy -> pruned)
+    min_patch_entropy: float = 0.35              # Minimum entropy required to retain patch (H < min_patch_entropy -> pruned; 0.35 preserves smooth painted walls/signs)
     entropy_weights: Tuple[float, float, float] = (0.35, 0.35, 0.30)  # Shannon, Sobel, Laplacian
     partition_mode: str = "hybrid"               # "hybrid", "quadrant_only", "sgap_only"
     sgap_min_splits: int = 4                     # Default 4 splits (aligned with CVSearch)

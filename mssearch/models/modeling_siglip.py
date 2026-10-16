@@ -99,9 +99,9 @@ class SigLIPScorer:
 
         self._ensure_loaded()
 
-        # Format prompt according to model architecture
+        # Format prompt with descriptive templates to avoid zero-shot vocabulary shift
         prompts = [
-            q if self.is_siglip else f"a photo of a {q}"
+            q if q.startswith(("a ", "an ", "the ", "photo of")) else f"a photo of {q}"
             for q in text_queries
         ]
 
@@ -129,6 +129,7 @@ class SigLIPScorer:
         if self.dtype == torch.float16 and "pixel_values" in img_inputs:
             img_inputs["pixel_values"] = img_inputs["pixel_values"].to(self.dtype)
 
+        # 1. Global pooled feature extraction
         if self.is_siglip:
             image_features = self.model.get_image_features(**img_inputs)
         else:
@@ -137,12 +138,39 @@ class SigLIPScorer:
         image_features = _extract_embedding_tensor(image_features)
         image_features = F.normalize(image_features.float(), dim=-1)
 
-        # Pairwise cosine similarities: [num_crops, num_queries]
-        sim_matrix = torch.matmul(image_features, text_features.T)
+        # Pairwise global pooled cosine similarities: [num_crops, num_queries]
+        pooled_sim = torch.matmul(image_features, text_features.T)
 
-        # For each crop, take the maximum alignment over all active objects
-        max_scores = sim_matrix.max(dim=1).values.cpu().tolist()
-        return [max(0.0, float(s)) for s in max_scores]
+        # 2. Dense Spatial Token-Max Matching (prevents micro-targets from being diluted)
+        dense_sim = None
+        try:
+            vision_model = getattr(self.model, "vision_model", None)
+            if vision_model is not None:
+                vis_out = vision_model(pixel_values=img_inputs["pixel_values"])
+                if hasattr(vis_out, "last_hidden_state") and vis_out.last_hidden_state is not None:
+                    spatial_tokens = vis_out.last_hidden_state.float()  # [num_crops, num_tokens, D_vis]
+                    if hasattr(self.model, "visual_projection") and self.model.visual_projection is not None:
+                        spatial_tokens = self.model.visual_projection(spatial_tokens)
+                    if spatial_tokens.shape[-1] == text_features.shape[-1]:
+                        spatial_tokens = F.normalize(spatial_tokens, dim=-1)
+                        # [num_crops, num_tokens, num_queries] -> max over tokens -> [num_crops, num_queries]
+                        token_sims = torch.einsum("btd,qd->btq", spatial_tokens, text_features)
+                        dense_sim = token_sims.max(dim=1).values
+        except Exception:
+            dense_sim = None
+
+        if dense_sim is not None:
+            # Fuse global gestalt and peak local token alignment
+            sim_matrix = torch.maximum(pooled_sim, dense_sim)
+        else:
+            sim_matrix = pooled_sim
+
+        # 3. Dynamic Range Calibration (maps raw contrastive range [0.02, 0.25] to [0.0, 1.0])
+        # In zero-shot vision-language space, raw orthogonal cross-modal cos is ~0.00-0.03 for noise,
+        # and ~0.15-0.30 for salient semantic matches.
+        raw_max = sim_matrix.max(dim=1).values  # [num_crops]
+        calibrated_scores = torch.clamp((raw_max - 0.02) / 0.22, 0.0, 1.0)
+        return [float(min(1.0, max(0.0, s))) for s in calibrated_scores.cpu().tolist()]
 
     def score_single(self, crop: Image.Image, text_queries: List[str]) -> float:
         """Helper to score a single crop."""
