@@ -54,9 +54,19 @@ class SigLIPScorer:
             print(f"[SigLIPScorer] Loading '{self.model_name}' on {self.device} ({self.dtype})...")
             if self.is_siglip:
                 try:
-                    from transformers import SiglipModel, SiglipProcessor
+                    from transformers import SiglipModel, SiglipProcessor, AutoConfig
+                    # Sanitize upstream SigLIP checkpoint metadata where inherited CLIP token IDs (49406/49407)
+                    # exceed SigLIP's 32000 vocabulary size
+                    cfg = AutoConfig.from_pretrained(self.model_name)
+                    if hasattr(cfg, "text_config"):
+                        cfg.text_config.bos_token_id = None
+                        cfg.text_config.eos_token_id = None
+                    cfg.bos_token_id = None
+                    cfg.eos_token_id = None
+
                     self.model = SiglipModel.from_pretrained(
                         self.model_name,
+                        config=cfg,
                         torch_dtype=self.dtype,
                         low_cpu_mem_usage=True
                     ).to(self.device).eval()
