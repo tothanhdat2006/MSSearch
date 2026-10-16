@@ -103,8 +103,15 @@ class MSSearchConfig:
     feature_sim_threshold: Optional[float] = None
     siglip_sim_threshold: Optional[float] = None
     expansion_factor: Optional[float] = None
+    consensus_target: Optional[int] = None
 
     def __post_init__(self):
+        # Synchronize early consensus count alias
+        if self.consensus_target is not None:
+            self.early_consensus_count = self.consensus_target
+        else:
+            self.consensus_target = self.early_consensus_count
+
         # Synchronize fast path toggle
         if self.fast_path_enabled is not None:
             self.enable_fast_path = self.fast_path_enabled
