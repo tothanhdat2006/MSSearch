@@ -40,9 +40,9 @@ class MSSearchConfig:
     sgap_n_atoms: int = 100
     quadrant_overlap_ratio: float = 0.10         # 10% safety border expansion
     sgap_overlap_ratio: float = 0.10             # 10% safety border expansion
-    max_patch_size: int = 1024                   # Recursive invariant: longer side <= 1024px
-    max_partition_depth: int = 2                 # Maximum recursion depth before direct tiling
-    max_patches_per_image: int = 64              # Maximum bounded patches budget per image
+    max_patch_size: int = 512                    # Recursive invariant: longer side <= 512px
+    max_partition_depth: int = 3                 # Maximum recursion depth before direct tiling
+    max_patches_per_image: int = 100             # Maximum bounded patches budget per image
     stage3_budget_mode: str = "siglip_similarity" # "siglip_similarity", "entropy_descending", "uniform_stride"
     enable_entropy_budget_sorting: bool = True   # Backward compatibility toggle
     siglip_budget_batch_size: int = 32           # Batch size for SigLIP crop scoring

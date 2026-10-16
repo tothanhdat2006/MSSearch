@@ -127,7 +127,7 @@ def partition_oversized_box(
     box: Tuple[int, int, int, int],
     img_w: int,
     img_h: int,
-    max_patch_size: int = 1024,
+    max_patch_size: int = 512,
     overlap_ratio: float = 0.10
 ) -> List[Tuple[int, int, int, int]]:
     """
@@ -183,7 +183,7 @@ def partition_into_quadrants(
     overlap_ratio: float = 0.10
 ) -> List[Tuple[int, int, int, int]]:
     """Splits a box into direction-aware quadrants/halves with overlap padding."""
-    return partition_oversized_box(box, img_w, img_h, max_patch_size=1024, overlap_ratio=overlap_ratio)
+    return partition_oversized_box(box, img_w, img_h, max_patch_size=512, overlap_ratio=overlap_ratio)
 
 
 def compute_bbox_overlap_cost(atom_bboxes: np.ndarray, labels: np.ndarray, k: int) -> float:
