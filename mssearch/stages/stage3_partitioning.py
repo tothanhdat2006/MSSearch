@@ -530,7 +530,7 @@ def partition_candidate_images(
                     if config.verbose:
                         print(f"[Stage 3][Budget Guard Notice] SigLIP scoring failed ({e}); falling back to entropy descending.")
                     img_patches = sorted(img_patches, key=lambda p: p.entropy, reverse=True)[:config.max_patches_per_image]
-            elif budget_mode in ("entropy_descending", "siglip_similarity") and getattr(config, "enable_entropy_budget_sorting", True):
+            elif budget_mode in ("entropy_descending", "siglip_similarity"):
                 if config.verbose:
                     print(f"[Stage 3][Budget Guard] Entropy-ranking {len(img_patches)} patches -> retaining top {config.max_patches_per_image} highest-entropy patches (preventing spatial target loss).")
                 img_patches = sorted(img_patches, key=lambda p: p.entropy, reverse=True)[:config.max_patches_per_image]

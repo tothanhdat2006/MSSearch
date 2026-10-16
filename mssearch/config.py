@@ -44,7 +44,6 @@ class MSSearchConfig:
     max_partition_depth: int = 3                 # Maximum recursion depth before direct tiling
     max_patches_per_image: int = 100             # Maximum bounded patches budget per image
     stage3_budget_mode: str = "siglip_similarity" # "siglip_similarity", "entropy_descending", "uniform_stride"
-    enable_entropy_budget_sorting: bool = True   # Backward compatibility toggle
     siglip_budget_batch_size: int = 32           # Batch size for SigLIP crop scoring
     reuse_stage2_features: bool = True           # Reuse SAM3 vision features extracted in Stage 2
 
@@ -95,43 +94,3 @@ class MSSearchConfig:
     # Diagnostic & Debug Logging
     # -------------------------------------------------------------------------
     verbose: bool = True                         # Print clear debug logs on fallback / non-fallback decisions
-
-    # -------------------------------------------------------------------------
-    # Backward Compatibility Aliases & Ingestion
-    # -------------------------------------------------------------------------
-    fast_path_enabled: Optional[bool] = None
-    feature_sim_threshold: Optional[float] = None
-    siglip_sim_threshold: Optional[float] = None
-    expansion_factor: Optional[float] = None
-    consensus_target: Optional[int] = None
-
-    def __post_init__(self):
-        # Synchronize early consensus count alias
-        if self.consensus_target is not None:
-            self.early_consensus_count = self.consensus_target
-        else:
-            self.consensus_target = self.early_consensus_count
-
-        # Synchronize fast path toggle
-        if self.fast_path_enabled is not None:
-            self.enable_fast_path = self.fast_path_enabled
-        else:
-            self.fast_path_enabled = self.enable_fast_path
-
-        # Synchronize feature grouping similarity threshold
-        if self.feature_sim_threshold is not None:
-            self.grouping_sim_threshold = self.feature_sim_threshold
-        else:
-            self.feature_sim_threshold = self.grouping_sim_threshold
-
-        # Synchronize SigLIP screening threshold
-        if self.siglip_sim_threshold is not None:
-            self.branch_b_score_threshold = self.siglip_sim_threshold
-        else:
-            self.siglip_sim_threshold = self.branch_b_score_threshold
-
-        # Synchronize bounding box expansion factor
-        if self.expansion_factor is not None:
-            self.bbox_expansion_factor = self.expansion_factor
-        else:
-            self.expansion_factor = self.bbox_expansion_factor
