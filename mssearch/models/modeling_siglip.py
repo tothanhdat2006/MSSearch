@@ -4,10 +4,30 @@ Runs on GPU 0 with fp16 precision to preserve memory headroom alongside Qwen2.5-
 """
 
 import os
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Any
 from PIL import Image
 import torch
 import torch.nn.functional as F
+
+
+def _extract_embedding_tensor(output: Any) -> torch.Tensor:
+    """
+    Extracts the feature embedding tensor from model outputs across HuggingFace transformer variants.
+    Handles BaseModelOutputWithPooling, SiglipOutput, tuples, and raw torch.Tensor.
+    """
+    if isinstance(output, torch.Tensor):
+        return output
+    if hasattr(output, "pooler_output") and output.pooler_output is not None:
+        return output.pooler_output
+    if hasattr(output, "last_hidden_state") and output.last_hidden_state is not None:
+        return output.last_hidden_state.mean(dim=1)
+    if hasattr(output, "logits") and output.logits is not None:
+        return output.logits
+    if isinstance(output, (tuple, list)) and len(output) > 0:
+        first = output[0]
+        if isinstance(first, torch.Tensor):
+            return first
+    raise TypeError(f"Cannot extract tensor embedding from output of type {type(output).__name__}")
 
 
 class SigLIPScorer:
@@ -33,13 +53,22 @@ class SigLIPScorer:
         if self.model is None:
             print(f"[SigLIPScorer] Loading '{self.model_name}' on {self.device} ({self.dtype})...")
             if self.is_siglip:
-                from transformers import AutoModel, AutoProcessor
-                self.model = AutoModel.from_pretrained(
-                    self.model_name,
-                    torch_dtype=self.dtype,
-                    low_cpu_mem_usage=True
-                ).to(self.device).eval()
-                self.processor = AutoProcessor.from_pretrained(self.model_name)
+                try:
+                    from transformers import SiglipModel, SiglipProcessor
+                    self.model = SiglipModel.from_pretrained(
+                        self.model_name,
+                        torch_dtype=self.dtype,
+                        low_cpu_mem_usage=True
+                    ).to(self.device).eval()
+                    self.processor = SiglipProcessor.from_pretrained(self.model_name)
+                except Exception:
+                    from transformers import AutoModel, AutoProcessor
+                    self.model = AutoModel.from_pretrained(
+                        self.model_name,
+                        torch_dtype=self.dtype,
+                        low_cpu_mem_usage=True
+                    ).to(self.device).eval()
+                    self.processor = AutoProcessor.from_pretrained(self.model_name)
             else:
                 from transformers import CLIPModel, CLIPProcessor
                 self.model = CLIPModel.from_pretrained(
@@ -88,6 +117,7 @@ class SigLIPScorer:
         else:
             text_features = self.model.get_text_features(text_inputs["input_ids"])
 
+        text_features = _extract_embedding_tensor(text_features)
         text_features = F.normalize(text_features.float(), dim=-1)
 
         # Extract image embeddings: [num_crops, D]
@@ -104,6 +134,7 @@ class SigLIPScorer:
         else:
             image_features = self.model.get_image_features(img_inputs["pixel_values"])
 
+        image_features = _extract_embedding_tensor(image_features)
         image_features = F.normalize(image_features.float(), dim=-1)
 
         # Pairwise cosine similarities: [num_crops, num_queries]
