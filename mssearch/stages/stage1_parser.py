@@ -28,10 +28,24 @@ def parse_question_to_active_objects(
         zoom_model = vlm_model
 
     raw_targets = []
-    extraction_strategy = "Strategy 3: Regex Noun Extraction (Fallback)"
+    extraction_strategy = "Strategy 3: Syntactic Clause Extraction (Fallback)"
+
+    if verbose:
+        model_name = type(zoom_model).__name__ if zoom_model is not None else "None"
+        print(f"[Stage 1 Diagnostics] Model passed: {model_name}")
+        if zoom_model is not None:
+            has_gt = hasattr(zoom_model, "generate_text")
+            has_gr = hasattr(zoom_model, "generate_response")
+            print(f"  -> hasattr(generate_text): {has_gt} | hasattr(generate_response): {has_gr}")
+            if not has_gt and not has_gr:
+                print(f"  -> [Warning] Model '{model_name}' lacks text generation methods. Available: {[m for m in dir(zoom_model) if not m.startswith('_')]}")
+        else:
+            print("  -> [Notice] No VLM/LLM model provided (zoom_model=None). Skipping Strategy 1 & 2.")
 
     # Strategy 1: Direct MLLM Zero-Shot Text Parser (Preferred - uses LLM backbone)
     if zoom_model is not None and (hasattr(zoom_model, "generate_text") or hasattr(zoom_model, "generate_response")):
+        if verbose:
+            print("[Stage 1][Strategy 1] Initiating MLLM zero-shot question parsing...")
         try:
             mllm_prompt = (
                 "Extract only the concrete physical visual anchor objects mentioned in this visual search question.\n"
@@ -46,18 +60,56 @@ def parse_question_to_active_objects(
             elif hasattr(zoom_model, "generate_response"):
                 raw_text = zoom_model.generate_response(image_pil=None, question=mllm_prompt)
 
+            if verbose:
+                print(f"[Stage 1][Strategy 1] Raw MLLM output: {repr(raw_text)}")
+
+            parsed_cues = []
             import json
+            import ast
+
+            # 1. First attempt: JSON or Python AST extraction on [ ... ]
             json_match = re.search(r'\[.*?\]', raw_text, re.DOTALL)
             if json_match:
-                parsed_cues = json.loads(json_match.group(0))
-                if isinstance(parsed_cues, list) and len(parsed_cues) > 0:
-                    raw_targets.extend([str(c).strip().lower() for c in parsed_cues if str(c).strip()])
+                block = json_match.group(0).strip()
+                try:
+                    parsed_cues = json.loads(block)
+                except Exception as json_err:
+                    try:
+                        parsed_cues = ast.literal_eval(block)
+                    except Exception as ast_err:
+                        if verbose:
+                            print(f"[Stage 1][Strategy 1 Debug] Bracket block parsing failed: JSON ({json_err}) | AST ({ast_err})")
+
+            # 2. Second attempt: Markdown bullet points or numbered lists
+            if not parsed_cues or not isinstance(parsed_cues, list):
+                bullet_lines = re.findall(r'(?:^|\n)\s*(?:[-*•]|\d+\.)\s*([^\n]+)', raw_text)
+                if bullet_lines:
+                    parsed_cues = [b.strip().strip('"\'') for b in bullet_lines if b.strip()]
+
+            # 3. Third attempt: Comma-separated list if quotes present
+            if not parsed_cues or not isinstance(parsed_cues, list):
+                quoted_tokens = re.findall(r'["\']([^"\']+)["\']', raw_text)
+                if quoted_tokens and len(quoted_tokens) <= 5:
+                    parsed_cues = quoted_tokens
+
+            # Process candidates
+            if isinstance(parsed_cues, list) and len(parsed_cues) > 0:
+                valid_items = [str(c).strip().lower() for c in parsed_cues if str(c).strip()]
+                if valid_items:
+                    raw_targets.extend(valid_items)
                     extraction_strategy = "Strategy 1: MLLM Zero-Shot Text Generation (Non-Fallback)"
                     if verbose:
-                        print(f"[Stage 1][Non-Fallback] MLLM extracted anchor objects: {raw_targets}")
+                        print(f"[Stage 1][Non-Fallback] MLLM successfully extracted anchor objects: {raw_targets}")
+                elif verbose:
+                    print(f"[Stage 1][Strategy 1 Warning] Parsed items were empty after cleaning: {parsed_cues}")
+            elif verbose:
+                print(f"[Stage 1][Strategy 1 Warning] Could not extract valid entity list from raw MLLM output: {repr(raw_text)}")
+
         except Exception as e:
             if verbose:
-                print(f"[Stage 1][Fallback Trigger] MLLM text extraction notice ({e}); proceeding to fallback.")
+                import traceback
+                print(f"[Stage 1][Fallback Trigger] MLLM text extraction raised {type(e).__name__}: {e}")
+                traceback.print_exc()
 
     # Strategy 2: Use VLM In-Context Cue Generator if available and targets not yet found
     if not raw_targets and zoom_model is not None and ic_examples is not None:

@@ -421,7 +421,14 @@ class ModelQwenVL:
         """
         messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
         text_prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.processor(text=[text_prompt], return_tensors="pt").to(self.device)
+        inputs = self.processor(
+            text=[text_prompt],
+            images=None,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+            add_special_tokens=False
+        ).to(self.device)
         if inputs.input_ids.shape[0] == 1 and "attention_mask" in inputs:
             if not (inputs.attention_mask == 0).any():
                 inputs.pop("attention_mask", None)
