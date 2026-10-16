@@ -369,7 +369,7 @@ class ModelQwenVL:
         return confidence
 
     @torch.inference_mode()
-    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[NodeA], return_zoomed_view=False, max_new_tokens: int = 64):
+    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[NodeA], return_zoomed_view=False, max_new_tokens: int = 128):
         image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
         if len(image_list) > 1:
             raw_image_resize, croped_view, zoom_view = image_list
@@ -410,7 +410,7 @@ class ModelQwenVL:
         return outputs
 
     @torch.inference_mode()
-    def generate_response(self, image_pil: Image.Image, question: str, max_new_tokens: int = 48, **kwargs) -> str:
+    def generate_response(self, image_pil: Image.Image, question: str, max_new_tokens: int = 128, **kwargs) -> str:
         """Direct free-form text response generation interface for an image and question."""
         return self.free_form_using_nodes(
             image_pil=image_pil,

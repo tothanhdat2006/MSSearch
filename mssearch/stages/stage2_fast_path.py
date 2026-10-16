@@ -79,7 +79,7 @@ def render_visual_prompt_bbox(
     return annotated
 
 
-def _query_vlm_response(zoom_model, image_pil: Image.Image, question: str) -> str:
+def _query_vlm_response(zoom_model, image_pil: Image.Image, question: str, max_new_tokens: int = 128) -> str:
     """Safely invokes VLM response generation across model APIs with resolution safety shield."""
     safe_img = image_pil
     if max(image_pil.width, image_pil.height) > 1024:
@@ -89,11 +89,11 @@ def _query_vlm_response(zoom_model, image_pil: Image.Image, question: str) -> st
             Image.Resampling.LANCZOS
         )
     if hasattr(zoom_model, "generate_response"):
-        return zoom_model.generate_response(image_pil=safe_img, question=question)
+        return zoom_model.generate_response(image_pil=safe_img, question=question, max_new_tokens=max_new_tokens)
     elif hasattr(zoom_model, "free_form_using_nodes"):
-        return zoom_model.free_form_using_nodes(image_pil=safe_img, question=question, searched_nodes=[])
+        return zoom_model.free_form_using_nodes(image_pil=safe_img, question=question, searched_nodes=[], max_new_tokens=max_new_tokens)
     elif hasattr(zoom_model, "generate"):
-        return zoom_model.generate(image_pil=safe_img, question=question)
+        return zoom_model.generate(image_pil=safe_img, question=question, max_new_tokens=max_new_tokens)
     return str(zoom_model(image_pil=safe_img, question=question))
 
 
@@ -259,8 +259,9 @@ def run_tool_based_fast_path(
         # 8. Fast Path Decision Gate (> 0.70)
         if existence_conf > config.fast_path_conf_threshold:
             # High existence confidence confirmed -> Generate final answer immediately!
-            answer_prompt = f"{question}{text_coords_hint}"
-            answer_text = _query_vlm_response(zoom_model, vlm_crop, answer_prompt)
+            concise_hint = " Answer concisely with just the direct answer in a few words." if getattr(config, "enable_concise_reading_prompt", True) else ""
+            answer_prompt = f"{question}{text_coords_hint}{concise_hint}"
+            answer_text = _query_vlm_response(zoom_model, vlm_crop, answer_prompt, max_new_tokens=config.max_vlm_tokens)
 
             if config.verbose:
                 print(f"[Stage 2][Non-Fallback Early Exit] Instant answer confirmed on image {img_idx}: '{answer_text}'. Exiting in 1 step!")
