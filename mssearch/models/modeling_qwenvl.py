@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Union
 import torch
 from torch.nn import CrossEntropyLoss
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
@@ -415,11 +415,15 @@ class ModelQwenVL:
         return self.free_form_using_nodes(image_pil=image_pil, question=question, searched_nodes=[], return_zoomed_view=False)
 
     @torch.inference_mode()
-    def generate_text(self, prompt: str, max_new_tokens: int = 64) -> str:
+    def generate_text(self, prompt: Union[str, List[Dict[str, Any]]], max_new_tokens: int = 64) -> str:
         """
         Pure text generation interface (zero visual image overhead) for question parsing and entity extraction.
+        Supports both raw text prompt and structured chat message list with system/few-shot turns.
         """
-        messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+        if isinstance(prompt, str):
+            messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+        else:
+            messages = prompt
         text_prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = self.processor(
             text=[text_prompt],

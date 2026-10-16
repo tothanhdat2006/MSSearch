@@ -42,23 +42,68 @@ def parse_question_to_active_objects(
         else:
             print("  -> [Notice] No VLM/LLM model provided (zoom_model=None). Skipping Strategy 1 & 2.")
 
-    # Strategy 1: Direct MLLM Zero-Shot Text Parser (Preferred - uses LLM backbone)
+    # Strategy 1: Direct MLLM In-Context Text Parser (Preferred - uses LLM backbone)
     if zoom_model is not None and (hasattr(zoom_model, "generate_text") or hasattr(zoom_model, "generate_response")):
         if verbose:
-            print("[Stage 1][Strategy 1] Initiating MLLM zero-shot question parsing...")
+            print("[Stage 1][Strategy 1] Initiating MLLM in-context question parsing...")
         try:
-            mllm_prompt = (
-                "Extract only the concrete physical visual anchor objects mentioned in this visual search question.\n"
-                "Do NOT include abstract relation words (such as 'position', 'relative', 'distance', 'location'), question words, or options.\n"
-                "Return ONLY a valid JSON list of strings, for example: [\"pink banner\", \"green trash bin\"].\n\n"
+            mllm_messages = [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "You are an expert visual search assistant. Given a visual search question, extract all key visual entities, search targets, text/numbers, landmarks, and persons mentioned in the question that must be searched for or examined in the image. Return ONLY a valid JSON list of lowercase strings."}]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Question: \"What is the relative position of the pink banner compared to the green trash bin?\"\nExtract visual search entities as a JSON list:"}]
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '["pink banner", "green trash bin"]'}]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Question: \"Tell me the symbol on the black board above the dog.\"\nExtract visual search entities as a JSON list:"}]
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '["symbol", "black board", "dog"]'}]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Question: \"What is the number displayed above the entrance where the woman is standing?\"\nExtract visual search entities as a JSON list:"}]
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '["number", "entrance", "woman"]'}]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": f"Question: \"{question}\"\nExtract visual search entities as a JSON list:"}]
+                }
+            ]
+
+            few_shot_prompt = (
+                "You are an expert visual search assistant. Given a visual question, extract all key visual entities, search targets, text/numbers, landmarks, and persons mentioned in the question that must be searched for or examined in the image.\n\n"
+                "Examples:\n"
+                "Question: \"What is the relative position of the pink banner compared to the green trash bin?\"\n"
+                "Entities: [\"pink banner\", \"green trash bin\"]\n\n"
+                "Question: \"Tell me the symbol on the black board above the dog.\"\n"
+                "Entities: [\"symbol\", \"black board\", \"dog\"]\n\n"
+                "Question: \"What is the number displayed above the entrance where the woman is standing?\"\n"
+                "Entities: [\"number\", \"entrance\", \"woman\"]\n\n"
                 f"Question: \"{question}\"\n"
-                "Visual Anchor Objects JSON:"
+                "Entities:"
             )
+
             raw_text = ""
             if hasattr(zoom_model, "generate_text"):
-                raw_text = zoom_model.generate_text(mllm_prompt, max_new_tokens=64)
+                try:
+                    raw_text = zoom_model.generate_text(mllm_messages, max_new_tokens=64)
+                except Exception:
+                    # Fallback to string prompt if model does not support list of messages
+                    raw_text = zoom_model.generate_text(few_shot_prompt, max_new_tokens=64)
             elif hasattr(zoom_model, "generate_response"):
-                raw_text = zoom_model.generate_response(image_pil=None, question=mllm_prompt)
+                raw_text = zoom_model.generate_response(image_pil=None, question=few_shot_prompt)
 
             if verbose:
                 print(f"[Stage 1][Strategy 1] Raw MLLM output: {repr(raw_text)}")
