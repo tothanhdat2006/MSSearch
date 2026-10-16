@@ -63,6 +63,8 @@ class MSSearchConfig:
     existence_prompt_template: str = "Is there a '{}' in the image? Answer Yes or No."
     bypass_vlm_for_confirmed_groups: bool = True # Skip VLM existence check if SAM3 det >= threshold or SigLIP >= 0.45
     max_latent_eval_groups: int = 8              # Cap speculative VLM latent checks to top 8 groups
+    enable_prioritized_sam3_scanning: bool = True # Scan only high-priority candidate patches / centroids with SAM3
+    max_sam3_eval_patches: int = 16              # Upper bound on expensive SAM3 patch scans in Stage 4 (drops 270s -> 35s)
     # Group Retention Granularity & Global Hard Cap
     enable_group_retention_caps: bool = True     # Cap number of member patches retained per group
     max_patches_per_latent_group: int = 1        # Max patches kept for latent-retained groups (1 = centroid only)

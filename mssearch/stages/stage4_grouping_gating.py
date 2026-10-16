@@ -273,17 +273,73 @@ def run_feature_grouping_and_gating(
     if config.verbose:
         print(f"[Stage 4][Non-Fallback] Reused Stage 3 feature embeddings (zero forward passes) to cluster {len(bounded_patches)} patches into {len(groups)} semantic groups (cos >= {config.grouping_sim_threshold:.2f}).")
 
-    # 2. Run SAM3 open-vocabulary detection across ALL bounded patches
-    patch_detections: Dict[int, List[Dict[str, Any]]] = {}
-    if sam_model is not None and active_objects:
-        if config.verbose:
-            print(f"[Stage 4][SAM3 All-Patch Detection] Scanning all {len(bounded_patches)} bounded patches for active objects {active_objects}...")
+    # 2. Run SAM3 open-vocabulary detection across Prioritized / Centroid patches
+    patch_detections: Dict[int, List[Dict[str, Any]]] = {i: [] for i in range(len(bounded_patches))}
+
+    # Step 2a: Zero-cost inheritance of Stage 2 canvas detections (0 ms)
+    if detected_boxes:
         for p_idx, patch in enumerate(bounded_patches):
+            p_box = patch.box
+            for d_idx, d_box in enumerate(detected_boxes):
+                d_box_clean = tuple(int(round(float(c))) for c in d_box)
+                center_in = target_center_in_patch(p_box, d_box_clean)
+                cov_ratio = compute_target_coverage_ratio(p_box, d_box_clean)
+                if center_in or cov_ratio >= 0.25:
+                    target_label = active_objects[d_idx] if d_idx < len(active_objects) else f"Target_{d_idx}"
+                    rel_bx1 = max(0, d_box_clean[0] - p_box[0])
+                    rel_by1 = max(0, d_box_clean[1] - p_box[1])
+                    rel_bx2 = min(p_box[2] - p_box[0], d_box_clean[2] - p_box[0])
+                    rel_by2 = min(p_box[3] - p_box[1], d_box_clean[3] - p_box[1])
+                    patch_detections[p_idx].append({
+                        "label": target_label,
+                        "score": 1.0,
+                        "local_box": [rel_bx1, rel_by1, rel_bx2, rel_by2],
+                        "global_box": list(d_box_clean),
+                        "patch_idx": p_idx,
+                        "source": "stage2_anchor"
+                    })
+
+    # Step 2b: Prioritized Candidate Patch Selection for SAM3 crop inference
+    if sam_model is not None and active_objects:
+        if getattr(config, "enable_prioritized_sam3_scanning", True):
+            # Prioritize: 
+            # 1. Group centroids
+            # 2. Patches with high SigLIP scores (>= 0.15)
+            # 3. Highest entropy patches
+            group_rep_set = set()
+            for member_indices in groups:
+                if len(member_indices) == 1:
+                    group_rep_set.add(member_indices[0])
+                else:
+                    g_feats = np.stack([bounded_patches[i].feature_vector for i in member_indices], axis=0)
+                    centroid = g_feats.mean(axis=0, keepdims=True)
+                    dists = np.linalg.norm(g_feats - centroid, axis=1)
+                    group_rep_set.add(member_indices[int(np.argmin(dists))])
+
+            candidate_pool = sorted(
+                list(range(len(bounded_patches))),
+                key=lambda i: (
+                    1 if i in group_rep_set else 0,
+                    bounded_patches[i].siglip_score if bounded_patches[i].siglip_score is not None else 0.0,
+                    bounded_patches[i].entropy
+                ),
+                reverse=True
+            )
+            max_evals = getattr(config, "max_sam3_eval_patches", 16)
+            patches_to_scan = candidate_pool[:max_evals]
+            if config.verbose:
+                print(f"[Stage 4][Prioritized SAM3 Scan] Scanning top {len(patches_to_scan)} / {len(bounded_patches)} prioritized candidate patches/centroids (max_evals={max_evals})...")
+        else:
+            patches_to_scan = list(range(len(bounded_patches)))
+            if config.verbose:
+                print(f"[Stage 4][SAM3 All-Patch Detection] Scanning all {len(bounded_patches)} bounded patches for active objects {active_objects}...")
+
+        for p_idx in patches_to_scan:
+            patch = bounded_patches[p_idx]
             p_box_ints = tuple(int(round(float(c))) for c in patch.box)
             p_img = candidate_images[patch.img_idx].crop(p_box_ints)
             pw, ph = p_img.size
             if pw < 8 or ph < 8:
-                patch_detections[p_idx] = []
                 continue
 
             dets = []
@@ -319,7 +375,7 @@ def run_feature_grouping_and_gating(
             except Exception as e:
                 if config.verbose:
                     print(f"[Stage 4][SAM3 Detection Exception] Patch {p_idx} ({e})")
-            patch_detections[p_idx] = dets
+            patch_detections[p_idx].extend(dets)
 
     remaining_patches: List[BoundedPatch] = []
     group_records: List[Dict[str, Any]] = []
