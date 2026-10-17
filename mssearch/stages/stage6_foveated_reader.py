@@ -66,13 +66,31 @@ def expand_bounding_box(
 def is_negative_or_unanswerable(text: str) -> bool:
     """
     Detects whether VLM output indicates absence / refusal / non-visibility of target object,
-    e.g. 'The image does not show a mailbox', 'There is no mailbox visible', etc.
+    e.g. 'none', 'nothing', 'no person', 'no mailbox', 'The image does not show a mailbox', 'There is no mailbox visible', etc.
+    Preserves valid answers like numbers, single characters, and road/store signs ('No Entry', 'No Parking').
     """
-    cleaned = text.strip().lower()
-    if len(cleaned) < 2:
+    cleaned = text.strip().rstrip(".").rstrip(",")
+    if not cleaned:
+        return True
+    cleaned_lower = cleaned.lower()
+
+    # 1. Standalone negative words / short phrases
+    standalone_refusals = {
+        "none", "nothing", "null", "unknown", "na", "n/a", "nil", "empty",
+        "no answer", "no answer found", "unanswerable", "cannot answer",
+        "not found", "not visible", "no text", "no translation needed",
+        "no visible text", "no target", "no object", "none visible",
+        "not applicable", "no information", "not enough information"
+    }
+    if cleaned_lower in standalone_refusals:
         return True
 
-    # 1. Direct absence & refusal regex patterns
+    # 2. Short absence phrases: 'no <object>' (e.g. 'no mailbox', 'no person', 'no box, no clock')
+    # Negative lookahead protects road/store sign text like 'no entry', 'no parking', 'no turn'
+    if re.match(r"^no\s+(?!(?:entry|parking|turn|stopping|standing|trespassing|smoking|littering)\b)[a-z0-9_,\s]+$", cleaned_lower):
+        return True
+
+    # 3. Contextual absence and refusal regex patterns
     negative_patterns = [
         r"does not (?:show|contain|depict|feature|display|include)\b",
         r"doesn't (?:show|contain|depict|feature|display|include)\b",
@@ -120,10 +138,11 @@ def is_negative_or_unanswerable(text: str) -> bool:
         r"\bnone visible\b",
         r"\bnot found\b",
         r"no (?:\w+\s+){0,5}(?:found|detected|seen|present)\b",
+        r"no (?:\w+\s+){0,5}(?:or \w+\s+){0,3}present\b",
     ]
 
     for pat in negative_patterns:
-        if re.search(pat, cleaned):
+        if re.search(pat, cleaned_lower):
             return True
 
     return False

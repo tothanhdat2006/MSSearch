@@ -262,6 +262,12 @@ def run_tool_based_fast_path(
             answer_prompt = f"{question}{text_coords_hint}"
             answer_text = _query_vlm_response(zoom_model, vlm_crop, answer_prompt, max_new_tokens=config.max_vlm_tokens)
 
+            from .stage6_foveated_reader import is_negative_or_unanswerable
+            if is_negative_or_unanswerable(answer_text):
+                if config.verbose:
+                    print(f"[Stage 2][Negative Fast Path] Fast path answer was uninformative/refusal ('{answer_text}'); bypassing fast path.")
+                continue
+
             if config.verbose:
                 print(f"[Stage 2][Non-Fallback Early Exit] Instant answer confirmed on image {img_idx}: '{answer_text}'. Exiting in 1 step!")
             return FastPathResult(
