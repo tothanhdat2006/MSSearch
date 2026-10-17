@@ -85,7 +85,6 @@ class MSSearchConfig:
     # -------------------------------------------------------------------------
     bbox_expansion_factor: float = 1.25          # Independent 25% padding per patch
     max_vlm_tokens: int = 128                    # Response token budget (allows complete answers without truncation)
-    enable_concise_reading_prompt: bool = True   # Append concise answering instruction
     enable_early_consensus_exit: bool = True     # Stop evaluating crops once 2 identical/near-identical answers are extracted
     early_consensus_count: int = 2               # Minimum consensus extractions to trigger early exit
     answer_dedup_similarity: float = 0.85        # Semantic deduplication threshold

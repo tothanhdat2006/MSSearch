@@ -259,8 +259,7 @@ def run_tool_based_fast_path(
         # 8. Fast Path Decision Gate (> 0.70)
         if existence_conf > config.fast_path_conf_threshold:
             # High existence confidence confirmed -> Generate final answer immediately!
-            concise_hint = " Answer concisely with just the direct answer in a few words." if getattr(config, "enable_concise_reading_prompt", True) else ""
-            answer_prompt = f"{question}{text_coords_hint}{concise_hint}"
+            answer_prompt = f"{question}{text_coords_hint}"
             answer_text = _query_vlm_response(zoom_model, vlm_crop, answer_prompt, max_new_tokens=config.max_vlm_tokens)
 
             if config.verbose:

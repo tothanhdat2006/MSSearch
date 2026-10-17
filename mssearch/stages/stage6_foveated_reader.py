@@ -217,11 +217,10 @@ def run_foveated_vlm_reading(
         if config.enable_textual_prompt_coords:
             text_coords_hint = f" Focal region: [{local_target_box[0]}, {local_target_box[1]}, {local_target_box[2]}, {local_target_box[3]}]."
 
-        # 3. Query VLM with full question q and concise answer instruction (Fix A)
-        concise_hint = " Answer concisely with just the direct answer in a few words." if getattr(config, "enable_concise_reading_prompt", True) else ""
-        prompt = f"{question}{text_coords_hint}{concise_hint}"
+        # 3. Query VLM with full question q
+        prompt = f"{question}{text_coords_hint}"
         raw_answer = ""
-        max_tokens = getattr(config, "max_vlm_tokens", 48)
+        max_tokens = getattr(config, "max_vlm_tokens", 128)
         if zoom_model is not None:
             try:
                 if hasattr(zoom_model, "generate_response"):
