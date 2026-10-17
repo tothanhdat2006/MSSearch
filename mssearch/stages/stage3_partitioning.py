@@ -123,6 +123,50 @@ def split_4_subpatches(w: int, h: int) -> Tuple[int, int]:
         return 2, 2
 
 
+def split_box_into_subpatches(
+    box: Tuple[int, int, int, int],
+    img_w: int,
+    img_h: int,
+    overlap_ratio: float = 0.10
+) -> List[Tuple[int, int, int, int]]:
+    """
+    Unconditionally splits a box into 4 aspect-ratio aware subpatches with overlap padding:
+      - (1, 4) if H / W >= 2.0
+      - (4, 1) if H / W <= 0.5
+      - (2, 2) quadrants otherwise
+    Preserves overlap padding while strictly following CVSearch aspect-ratio ratios.
+    """
+    x1, y1, x2, y2 = box
+    w = x2 - x1
+    h = y2 - y1
+
+    nx, ny = split_4_subpatches(w, h)
+    w_stride = int(w // nx)
+    h_stride = int(h // ny)
+
+    sub_patches = []
+    for j in range(ny):
+        for i in range(nx):
+            sx1 = x1 + i * w_stride
+            sy1 = y1 + j * h_stride
+            sx2 = x2 if i == nx - 1 else sx1 + w_stride
+            sy2 = y2 if j == ny - 1 else sy1 + h_stride
+
+            sub_w = sx2 - sx1
+            sub_h = sy2 - sy1
+
+            pad_x = int(sub_w * overlap_ratio) if nx > 1 else 0
+            pad_y = int(sub_h * overlap_ratio) if ny > 1 else 0
+
+            sub_patches.append((
+                max(0, sx1 - pad_x),
+                max(0, sy1 - pad_y),
+                min(img_w, sx2 + pad_x),
+                min(img_h, sy2 + pad_y)
+            ))
+    return sub_patches
+
+
 def partition_oversized_box(
     box: Tuple[int, int, int, int],
     img_w: int,
@@ -144,36 +188,7 @@ def partition_oversized_box(
     if w <= max_patch_size and h <= max_patch_size:
         return [box]
 
-    nx, ny = split_4_subpatches(w, h)
-    w_stride = int(w // nx)
-    h_stride = int(h // ny)
-
-    sub_patches = []
-    for j in range(ny):
-        for i in range(nx):
-            sx1 = x1 + i * w_stride
-            sy1 = y1 + j * h_stride
-            sx2 = x2 if i == nx - 1 else sx1 + w_stride
-            sy2 = y2 if j == ny - 1 else sy1 + h_stride
-
-            sub_w = sx2 - sx1
-            sub_h = sy2 - sy1
-
-            # Apply overlap padding when terminal to prevent compounding across depths
-            if max(sub_w, sub_h) <= max_patch_size:
-                pad_x = int(sub_w * overlap_ratio) if nx > 1 else 0
-                pad_y = int(sub_h * overlap_ratio) if ny > 1 else 0
-            else:
-                pad_x = 0
-                pad_y = 0
-
-            sub_patches.append((
-                max(0, sx1 - pad_x),
-                max(0, sy1 - pad_y),
-                min(img_w, sx2 + pad_x),
-                min(img_h, sy2 + pad_y)
-            ))
-    return sub_patches
+    return split_box_into_subpatches(box, img_w, img_h, overlap_ratio=overlap_ratio)
 
 
 def partition_into_quadrants(
@@ -422,8 +437,99 @@ def partition_candidate_images(
             x1, y1, x2, y2 = box_ints
             pw, ph = x2 - x1, y2 - y1
 
-            # Check recursive bounding condition: longer side <= max_patch_size (with 15% tolerance for boundary overlap)
-            if max(pw, ph) > int(config.max_patch_size * 1.15):
+            cached_siglip_score: Optional[float] = None
+            sub_boxes: Optional[List[Tuple[int, int, int, int]]] = None
+
+            stopping_mode = getattr(config, "partition_stopping_mode", "saliency_plateau")
+
+            if stopping_mode == "fixed_size":
+                # Legacy invariant: longer side <= max_patch_size (with 15% tolerance for boundary overlap)
+                should_split = (max(pw, ph) > int(config.max_patch_size * 1.15))
+            else:
+                # Paradigm 2: Semantic Saliency-Plateau Stopping (Self-Terminating Zoom)
+                if depth == 0:
+                    # Root canvas must always be partitioned (SAM3-SGAP or direction-aware quadrants)
+                    should_split = True
+                elif depth >= config.max_partition_depth:
+                    # Maximum tree depth reached -> terminate zoom
+                    should_split = False
+                elif max(pw, ph) <= getattr(config, "min_plateau_size", 256):
+                    # Scale floor reached -> terminate zoom
+                    should_split = False
+                elif max(pw, ph) > getattr(config, "max_plateau_size", 1536):
+                    # Physical GPU safety ceiling exceeded -> must split
+                    should_split = True
+                else:
+                    # Dynamic scale range [min_plateau_size, max_plateau_size]: evaluate Saliency Plateau!
+                    candidate_sub_boxes = split_box_into_subpatches(
+                        box_ints, img_w, img_h, overlap_ratio=config.quadrant_overlap_ratio
+                    )
+                    crop_parent = img_pil.crop(box_ints)
+
+                    evaluated_with_siglip = False
+                    if siglip_model is not None and active_objects:
+                        try:
+                            child_crops = [
+                                img_pil.crop(tuple(int(round(float(c))) for c in sb))
+                                for sb in candidate_sub_boxes
+                            ]
+                            all_crops = [crop_parent] + child_crops
+                            scores = siglip_model.score_crops(all_crops, active_objects)
+                            s_parent = float(scores[0])
+                            s_children = [float(s) for s in scores[1:]]
+                            s_max_child = max(s_children) if s_children else 0.0
+                            delta_s = s_max_child - s_parent
+                            gain_thresh = getattr(config, "saliency_plateau_gain_threshold", 0.04)
+                            target_thresh = getattr(config, "saliency_target_threshold", 0.35)
+
+                            # Saliency Plateau Condition:
+                            # 1. Delta_s <= gain_thresh (zooming in does not improve semantic target concentration)
+                            # 2. Or parent already matches target confidently (>= target_thresh) and marginal gain <= 0.02
+                            is_plateau = (delta_s <= gain_thresh) or (s_parent >= target_thresh and delta_s <= 0.02)
+
+                            if is_plateau:
+                                if config.verbose:
+                                    print(f"[Stage 3][Plateau Stop] Patch {box_ints} ({pw}x{ph}, depth={depth}) reached saliency plateau (S_parent={s_parent:.3f}, S_max_child={s_max_child:.3f}, d_S={delta_s:+.3f} <= {gain_thresh:.2f}). Terminating zoom.")
+                                should_split = False
+                                cached_siglip_score = s_parent
+                            else:
+                                if config.verbose:
+                                    print(f"[Stage 3][Saliency Gain] Patch {box_ints} ({pw}x{ph}, depth={depth}) zooming deeper (S_parent={s_parent:.3f} -> S_max_child={s_max_child:.3f}, d_S={delta_s:+.3f} > {gain_thresh:.2f}).")
+                                should_split = True
+                                # Prune child quadrants that drop substantially below parent
+                                promising_sub_boxes = [
+                                    sb for sb, sc in zip(candidate_sub_boxes, s_children)
+                                    if sc >= (s_parent - 0.05) or sc == s_max_child
+                                ]
+                                sub_boxes = promising_sub_boxes if promising_sub_boxes else candidate_sub_boxes
+                            evaluated_with_siglip = True
+                        except Exception as e:
+                            if config.verbose:
+                                print(f"[Stage 3][Plateau Notice] SigLIP scoring failed ({e}); falling back to entropy plateau.")
+
+                    if not evaluated_with_siglip:
+                        # Fallback: Spatial Entropy Plateau
+                        ent_parent = compute_spatial_entropy(crop_parent, weights=config.entropy_weights)
+                        child_crops = [
+                            img_pil.crop(tuple(int(round(float(c))) for c in sb))
+                            for sb in candidate_sub_boxes
+                        ]
+                        ent_children = [
+                            compute_spatial_entropy(c, weights=config.entropy_weights)
+                            for c in child_crops
+                        ]
+                        max_child_ent = max(ent_children) if ent_children else 0.0
+                        delta_h = max_child_ent - ent_parent
+
+                        if delta_h <= 0.02 and ent_parent >= config.min_patch_entropy:
+                            if config.verbose:
+                                print(f"[Stage 3][Plateau Stop (Entropy)] Patch {box_ints} ({pw}x{ph}, depth={depth}) reached entropy plateau (H_p={ent_parent:.3f}, H_c={max_child_ent:.3f}, d_H={delta_h:+.3f}). Terminating zoom.")
+                            should_split = False
+                        else:
+                            should_split = True
+                            sub_boxes = candidate_sub_boxes
+
+            if should_split:
                 crop = img_pil.crop(box_ints)
                 entropy = compute_spatial_entropy(crop, weights=config.entropy_weights)
 
@@ -448,13 +554,12 @@ def partition_candidate_images(
                         overlap_ratio=config.sgap_overlap_ratio,
                         verbose=config.verbose
                     )
-                else:
+                elif sub_boxes is None:
                     # Direction-aware split: bisect only the oversized axis
-                    sub_boxes = partition_oversized_box(
+                    sub_boxes = split_box_into_subpatches(
                         box_ints,
                         img_w,
                         img_h,
-                        max_patch_size=config.max_patch_size,
                         overlap_ratio=config.quadrant_overlap_ratio
                     )
                     if config.verbose and depth <= 1:
@@ -465,14 +570,15 @@ def partition_candidate_images(
                     sb_ints = tuple(int(round(float(c))) for c in sb)
                     work_queue.append((sb_ints, depth + 1))
             else:
-                # Patch satisfies longer side <= 1024px!
+                # Patch accepted as bounded leaf!
                 crop = img_pil.crop(box_ints)
                 entropy = compute_spatial_entropy(crop, weights=config.entropy_weights)
 
-                # Filter low-entropy background patches
+                # Filter low-entropy background patches (unless explicitly kept with confident target match)
                 if config.min_patch_entropy > 0.0 and entropy < config.min_patch_entropy:
-                    discarded_candidates.append((box_ints, entropy))
-                    continue
+                    if cached_siglip_score is None or cached_siglip_score < getattr(config, "saliency_target_threshold", 0.35):
+                        discarded_candidates.append((box_ints, entropy))
+                        continue
 
                 _, pooled_vec = slice_feature_map(feat_map, box_ints, img_w, img_h)
 
@@ -481,7 +587,8 @@ def partition_candidate_images(
                         img_idx=img_idx,
                         box=box_ints,
                         feature_vector=pooled_vec,
-                        entropy=entropy
+                        entropy=entropy,
+                        siglip_score=cached_siglip_score
                     )
                 )
 
@@ -544,7 +651,12 @@ def partition_candidate_images(
         bounded_patches.extend(img_patches)
 
     if config.verbose:
-        print(f"[Stage 3] Partitioning finished: Aggregated {len(bounded_patches)} bounded patches (all longer side <= {config.max_patch_size}px) across {len(candidate_images)} candidate images.")
+        stopping_mode = getattr(config, "partition_stopping_mode", "saliency_plateau")
+        if stopping_mode == "fixed_size":
+            mode_desc = f"fixed_size, max_patch_size <= {config.max_patch_size}px"
+        else:
+            mode_desc = f"saliency_plateau (gain_thresh={getattr(config, 'saliency_plateau_gain_threshold', 0.04):.2f}, ceiling={getattr(config, 'max_plateau_size', 1536)}px)"
+        print(f"[Stage 3] Partitioning finished: Aggregated {len(bounded_patches)} bounded patches ({mode_desc}) across {len(candidate_images)} candidate images.")
 
     return bounded_patches
 

@@ -40,7 +40,12 @@ class MSSearchConfig:
     sgap_n_atoms: int = 100
     quadrant_overlap_ratio: float = 0.10         # 10% safety border expansion
     sgap_overlap_ratio: float = 0.10             # 10% safety border expansion
-    max_patch_size: int = 512                    # Recursive invariant: longer side <= 512px
+    partition_stopping_mode: str = "saliency_plateau"  # "saliency_plateau" (Paradigm 2 dynamic semantic zoom) or "fixed_size" (legacy max_patch_size)
+    max_patch_size: int = 512                    # Recursive invariant when partition_stopping_mode == "fixed_size": longer side <= 512px
+    min_plateau_size: int = 256                  # Scale floor in saliency_plateau mode: patches <= this dimension stop splitting
+    max_plateau_size: int = 1536                 # Physical ceiling in saliency_plateau mode: patches > this dimension must split (VRAM safety)
+    saliency_plateau_gain_threshold: float = 0.04 # Saliency gain (max_child - parent) required to justify deeper split
+    saliency_target_threshold: float = 0.35      # High confidence target threshold where marginal gain halts zoom
     max_partition_depth: int = 3                 # Maximum recursion depth before direct tiling
     max_patches_per_image: int = 100             # Maximum bounded patches budget per image
     stage3_budget_mode: str = "siglip_similarity" # "siglip_similarity", "entropy_descending", "uniform_stride"

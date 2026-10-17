@@ -64,7 +64,11 @@ def main():
     parser.add_argument("--enable-textual-prompt-coords", action="store_true")
     parser.add_argument("--entropy-threshold", type=float, default=0.35)
     parser.add_argument("--partition-mode", type=str, default="hybrid", choices=["hybrid", "quadrant_only", "sgap_only"])
-    parser.add_argument("--max-patch-size", type=int, default=1024)
+    parser.add_argument("--partition-stopping-mode", type=str, default="saliency_plateau", choices=["saliency_plateau", "fixed_size"], help="Stopping mode for Stage 3 partitioning: dynamic saliency plateau vs legacy fixed max_patch_size")
+    parser.add_argument("--max-patch-size", type=int, default=512, help="Patch size constraint when partition-stopping-mode is fixed_size")
+    parser.add_argument("--min-plateau-size", type=int, default=256, help="Scale floor for saliency plateau stopping")
+    parser.add_argument("--max-plateau-size", type=int, default=1536, help="Scale ceiling for saliency plateau stopping (GPU safety)")
+    parser.add_argument("--saliency-plateau-gain-threshold", type=float, default=0.04, help="Minimum saliency gain required to descend deeper")
     parser.add_argument("--bbox-expansion-factor", type=float, default=1.25)
     parser.add_argument("--verbose", action="store_true", default=True, help="Enable verbose debug logging on fallback/non-fallback decisions")
     parser.add_argument("--quiet", action="store_true", help="Silence verbose debug logging")
@@ -88,7 +92,11 @@ def main():
         enable_textual_prompt_coords=args.enable_textual_prompt_coords,
         entropy_threshold=args.entropy_threshold,
         partition_mode=args.partition_mode,
+        partition_stopping_mode=args.partition_stopping_mode,
         max_patch_size=args.max_patch_size,
+        min_plateau_size=args.min_plateau_size,
+        max_plateau_size=args.max_plateau_size,
+        saliency_plateau_gain_threshold=args.saliency_plateau_gain_threshold,
         bbox_expansion_factor=args.bbox_expansion_factor,
         siglip_model_name=args.siglip_model_name,
         verbose=is_verbose
