@@ -154,39 +154,18 @@ def parse_question_to_active_objects(
             mllm_messages = [
                 {
                     "role": "system",
-                    "content": [{"type": "text", "text": (
-                        "You are an expert visual search reasoning assistant. Given a visual search question, analyze its linguistic and spatial structure, and output a JSON object with:\n"
-                        "- \"anchors\": list of physical host objects and spatial landmarks (outermost/largest physical entities first, e.g. ['jacket', 'sleeve'], ['building', 'entrance'], ['car'])\n"
-                        "- \"target_element\": the specific attribute, text, symbol, or object asked about (e.g. 'text above logo', 'house number', 'symbol')\n"
-                        "- \"active_objects\": list of search entities prioritizing physical anchors FIRST, followed by target sub-elements\n"
-                        "- \"question_type\": one of ['relational_reading', 'spatial_orientation', 'counting', 'fine_grained_attribute', 'existence', 'general']\n"
-                        "- \"is_relational\": boolean, true if the question requires spatial reasoning, relative positioning, or dual-scale orientation context\n"
-                        "Return ONLY a valid JSON object."
-                    )}]
-                },
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": "Question: \"What is the relative position of the pink banner compared to the green trash bin?\""}]
-                },
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": '{"anchors": ["pink banner", "green trash bin"], "target_element": "relative position", "active_objects": ["pink banner", "green trash bin"], "question_type": "spatial_orientation", "is_relational": true}'}]
-                },
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": "Question: \"Tell me the symbol on the black board above the dog.\""}]
-                },
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": '{"anchors": ["black board", "dog"], "target_element": "symbol", "active_objects": ["black board", "dog", "symbol"], "question_type": "relational_reading", "is_relational": true}'}]
-                },
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": "Question: \"What is the number displayed above the entrance where the woman is standing?\""}]
-                },
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": '{"anchors": ["entrance", "woman"], "target_element": "number displayed", "active_objects": ["entrance", "woman", "number"], "question_type": "relational_reading", "is_relational": true}'}]
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            "You are an expert visual search parser. Given a question, extract search targets and return a JSON object with:\n"
+                            "- \"anchors\": physical host entities / spatial landmarks (outermost physical entities first)\n"
+                            "- \"target_element\": specific micro-attribute, text, or symbol to read\n"
+                            "- \"active_objects\": combined search entities prioritizing physical anchors first\n"
+                            "- \"question_type\": one of ['relational_reading', 'spatial_orientation', 'counting', 'fine_grained_attribute', 'general']\n"
+                            "- \"is_relational\": boolean (true if question requires relative spatial positioning or dual-scale context)\n"
+                            "Return ONLY valid JSON."
+                        )
+                    }]
                 },
                 {
                     "role": "user",
@@ -198,11 +177,11 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "Question: \"How many windows are on the upper floor of the brick building?\""}]
+                    "content": [{"type": "text", "text": "Question: \"How many windows are on the brick building?\""}]
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"anchors": ["brick building", "upper floor"], "target_element": "windows", "active_objects": ["brick building", "window"], "question_type": "counting", "is_relational": false}'}]
+                    "content": [{"type": "text", "text": '{"anchors": ["brick building"], "target_element": "windows", "active_objects": ["brick building", "window"], "question_type": "counting", "is_relational": false}'}]
                 },
                 {
                     "role": "user",
@@ -211,18 +190,13 @@ def parse_question_to_active_objects(
             ]
 
             few_shot_prompt = (
-                "You are an expert visual search reasoning assistant. Given a visual question, analyze its structure and return a JSON object with 'anchors', 'target_element', 'active_objects', 'question_type', and 'is_relational'.\n\n"
-                "Examples:\n"
-                "Question: \"What is the relative position of the pink banner compared to the green trash bin?\"\n"
-                "JSON: {\"anchors\": [\"pink banner\", \"green trash bin\"], \"target_element\": \"relative position\", \"active_objects\": [\"pink banner\", \"green trash bin\"], \"question_type\": \"spatial_orientation\", \"is_relational\": true}\n\n"
-                "Question: \"Tell me the symbol on the black board above the dog.\"\n"
-                "JSON: {\"anchors\": [\"black board\", \"dog\"], \"target_element\": \"symbol\", \"active_objects\": [\"black board\", \"dog\", \"symbol\"], \"question_type\": \"relational_reading\", \"is_relational\": true}\n\n"
-                "Question: \"What is the number displayed above the entrance where the woman is standing?\"\n"
-                "JSON: {\"anchors\": [\"entrance\", \"woman\"], \"target_element\": \"number displayed\", \"active_objects\": [\"entrance\", \"woman\", \"number\"], \"question_type\": \"relational_reading\", \"is_relational\": true}\n\n"
+                "You are an expert visual search parser. Given a question, return a JSON object with 'anchors', 'target_element', 'active_objects', 'question_type', and 'is_relational'.\n\n"
+                "Example 1:\n"
                 "Question: \"What is the text written above the logo on the jacket's sleeve?\"\n"
                 "JSON: {\"anchors\": [\"jacket\", \"sleeve\"], \"target_element\": \"text above logo\", \"active_objects\": [\"jacket\", \"sleeve\", \"logo\", \"text\"], \"question_type\": \"relational_reading\", \"is_relational\": true}\n\n"
-                "Question: \"How many windows are on the upper floor of the brick building?\"\n"
-                "JSON: {\"anchors\": [\"brick building\", \"upper floor\"], \"target_element\": \"windows\", \"active_objects\": [\"brick building\", \"window\"], \"question_type\": \"counting\", \"is_relational\": false}\n\n"
+                "Example 2:\n"
+                "Question: \"How many windows are on the brick building?\"\n"
+                "JSON: {\"anchors\": [\"brick building\"], \"target_element\": \"windows\", \"active_objects\": [\"brick building\", \"window\"], \"question_type\": \"counting\", \"is_relational\": false}\n\n"
                 f"Question: \"{question}\"\nJSON:"
             )
 
