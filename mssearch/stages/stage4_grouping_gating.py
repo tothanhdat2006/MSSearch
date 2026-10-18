@@ -189,7 +189,13 @@ def _query_vlm_existence(
     return 0.0
 
 
-def _query_vlm_latent(zoom_model, image_pil: Image.Image, query: str, config: MSSearchConfig) -> float:
+def _query_vlm_latent(
+    zoom_model,
+    image_pil: Image.Image,
+    query: str,
+    config: MSSearchConfig,
+    custom_prompt_template: Optional[str] = None
+) -> float:
     """Safely invokes VLM latent confidence query on centroid crop with resolution safety shield."""
     if zoom_model is None or not hasattr(zoom_model, "get_confidence_value"):
         return 0.0
@@ -204,11 +210,12 @@ def _query_vlm_latent(zoom_model, image_pil: Image.Image, query: str, config: MS
 
     # Set custom latent prompt template if provided
     original_prompt = None
+    template_to_use = custom_prompt_template or getattr(config, "latent_prompt_template", None)
     if hasattr(zoom_model, "prompts") and isinstance(zoom_model.prompts, dict):
         search_prompts = zoom_model.prompts.get("search", {})
-        if "latent_prompt" in search_prompts and hasattr(config, "latent_prompt_template"):
+        if "latent_prompt" in search_prompts and template_to_use:
             original_prompt = search_prompts["latent_prompt"]
-            search_prompts["latent_prompt"] = config.latent_prompt_template
+            search_prompts["latent_prompt"] = template_to_use
 
     try:
         for kwarg in [{"node": None}, {"node_list": None}, {}]:
@@ -523,8 +530,9 @@ def run_feature_grouping_and_gating(
                 # Check VLM latent confidence on the representative centroid patch
                 # -------------------------------------------------------------
                 if config.enable_latent_gating and zoom_model is not None and active_objects:
-                    max_latent_evals = getattr(config, "max_latent_eval_groups", 8)
+                    max_latent_evals = getattr(config, "max_latent_evals", getattr(config, "max_latent_eval_groups", 8))
                     if latent_vlm_queries_count >= max_latent_evals:
+                        match_reason = f"budget_capped (max {max_latent_evals} reached)"
                         if config.verbose:
                             print(f"[Stage 4][Latent Budget Guard] Max latent VLM evaluations reached ({max_latent_evals}) -> Group {g_idx} speculative check skipped to save latency.")
                     else:
@@ -543,11 +551,29 @@ def run_feature_grouping_and_gating(
                         eval_box_ints = tuple(int(round(float(c))) for c in eval_patch.box)
                         eval_img = candidate_images[eval_patch.img_idx].crop(eval_box_ints)
 
-                        # Fix C: Query primary active object target only (avoiding 3x multiplier per group)
+                        # Support both question-aware contextual probing and legacy target-object probing
+                        prompt_mode = getattr(config, "latent_prompt_mode", "question_aware")
                         primary_obj = active_objects[0]
-                        vlm_latent_score = _query_vlm_latent(zoom_model, eval_img, primary_obj, config)
-                        vlm_per_object_scores = {primary_obj: vlm_latent_score}
-                        vlm_prompt = config.latent_prompt_template.format(primary_obj)
+                        if prompt_mode == "question_aware" and question:
+                            latent_query = question
+                            latent_template = getattr(
+                                config,
+                                "latent_prompt_template_qa",
+                                "According to visual common sense and the content of the image, is it possible to find the information needed to answer '{}' by further zooming the sub-patch? Answer Yes or No."
+                            )
+                        else:
+                            latent_query = primary_obj
+                            latent_template = getattr(
+                                config,
+                                "latent_prompt_template",
+                                "According to your common sense knowledge and the content of the image, is it possible to find a {} by further zooming the sub-patch? Answer Yes or No."
+                            )
+
+                        vlm_prompt = latent_template.format(latent_query)
+                        vlm_latent_score = _query_vlm_latent(
+                            zoom_model, eval_img, latent_query, config, custom_prompt_template=latent_template
+                        )
+                        vlm_per_object_scores = {latent_query: vlm_latent_score}
 
                         if vlm_latent_score >= config.latent_confidence_threshold:
                             has_active_match = True
@@ -561,8 +587,22 @@ def run_feature_grouping_and_gating(
                     # Simulation or no zoom model: record what prompt would be asked
                     vlm_tested_patch_idx = best_det["patch_idx"] if group_detected_objects else rep_idx
                     vlm_tested_role = "Detection Crop (p_det)" if group_detected_objects else "Centroid (p_rep)"
-                    best_obj = active_objects[0]
-                    vlm_prompt = config.latent_prompt_template.format(best_obj)
+                    prompt_mode = getattr(config, "latent_prompt_mode", "question_aware")
+                    primary_obj = active_objects[0]
+                    if prompt_mode == "question_aware" and question:
+                        latent_template = getattr(
+                            config,
+                            "latent_prompt_template_qa",
+                            "According to visual common sense and the content of the image, is it possible to find the information needed to answer '{}' by further zooming the sub-patch? Answer Yes or No."
+                        )
+                        vlm_prompt = latent_template.format(question)
+                    else:
+                        latent_template = getattr(
+                            config,
+                            "latent_prompt_template",
+                            "According to your common sense knowledge and the content of the image, is it possible to find a {} by further zooming the sub-patch? Answer Yes or No."
+                        )
+                        vlm_prompt = latent_template.format(primary_obj)
         else:
             vlm_tested_role = "Stage 2 Anchor"
             vlm_prompt = "N/A (Bypassed VLM Gating via Stage 2 Global Anchor)"

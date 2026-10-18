@@ -145,7 +145,9 @@ class MultiSourceSearchEngine:
             zoom_model=self.zoom_model,
             nlp_model=self.nlp_model,
             ic_examples=ic_examples,
-            verbose=self.config.verbose
+            verbose=self.config.verbose,
+            image_pil=candidate_images[0] if candidate_images else None,
+            config=self.config
         )
         telemetry["timings_sec"]["stage1_parser"] = round(time.perf_counter() - t0, 3)
         telemetry["active_objects"] = list(active_objects)

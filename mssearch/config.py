@@ -16,6 +16,8 @@ class MSSearchConfig:
     # -------------------------------------------------------------------------
     use_mllm_object_parser: bool = True          # Use MLLM language model directly for zero-shot object extraction
     enable_anchor_first_ordering: bool = True    # Prioritize physical host entities ahead of abstract attributes
+    enable_image_grounded_anchors: bool = True   # Pass low-res canvas to VLM when text-only parsing yields no concrete physical anchors
+    image_grounded_anchor_resolution: int = 1024 # Max dimension for Stage 1 vision-grounded anchor discovery (default 1024, or 672)
     use_nlp_fallback: bool = False               # Deprecated in favor of MLLM + Grammar Regex
     nlp_model_name: str = "en_core_web_sm"
 
@@ -64,12 +66,15 @@ class MSSearchConfig:
     sam3_group_det_threshold: float = 0.35       # SAM3 confidence threshold to keep a group
     enable_latent_gating: bool = True            # Query VLM latent confidence on centroid patch if no SAM3 det
     latent_confidence_threshold: float = 0.0     # Minimum VLM latent confidence [-1, 1] to keep group (default 0.0 -> P(Yes)>=0.5)
+    latent_prompt_mode: str = "question_aware"   # "question_aware" (contextual QA prompt) or "target_object" (legacy target prompt)
+    latent_prompt_template: str = "According to your common sense knowledge and the content of the image, is it possible to find a {} by further zooming the sub-patch? Answer Yes or No."
+    latent_prompt_template_qa: str = "According to visual common sense and the content of the image, is it possible to find the information needed to answer '{}' by further zooming the sub-patch? Answer Yes or No."
     enable_existence_gating: bool = True         # Query VLM existence confidence to verify SAM3 detections
     existence_confidence_threshold: float = 0.0  # Minimum VLM existence confidence [-1, 1] to confirm detection
-    latent_prompt_template: str = "According to your common sense knowledge and the content of the image, is it possible to find a {} by further zooming the sub-patch? Answer Yes or No."
     existence_prompt_template: str = "Is there a '{}' in the image? Answer Yes or No."
     bypass_vlm_for_confirmed_groups: bool = True # Skip VLM existence check if SAM3 det >= threshold or SigLIP >= 0.45
-    max_latent_eval_groups: int = 8              # Cap speculative VLM latent checks to top 8 groups
+    max_latent_evals: int = 8                    # Cap speculative VLM latent checks to top K groups (surfaced parameter)
+    max_latent_eval_groups: int = 8              # Backward-compatible alias for max_latent_evals
     enable_prioritized_sam3_scanning: bool = True # Scan only high-priority candidate patches / centroids with SAM3
     max_sam3_eval_patches: int = 16              # Upper bound on expensive SAM3 patch scans in Stage 4 (drops 270s -> 35s)
     # Group Retention Granularity & Global Hard Cap
@@ -79,6 +84,13 @@ class MSSearchConfig:
     enable_retention_hard_cap: bool = True       # Cap total retained patches across all groups before Stage 5/6
     max_retained_patches: int = 16               # Global upper bound on candidate patches pool
     retention_ranking_metric: str = "confidence_hybrid"  # "confidence_hybrid", "entropy", "detection_first"
+
+    def __post_init__(self):
+        # Synchronize max_latent_evals and max_latent_eval_groups if one was explicitly overridden
+        if self.max_latent_evals != 8 and self.max_latent_eval_groups == 8:
+            self.max_latent_eval_groups = self.max_latent_evals
+        elif self.max_latent_eval_groups != 8 and self.max_latent_evals == 8:
+            self.max_latent_evals = self.max_latent_eval_groups
 
     # -------------------------------------------------------------------------
     # Stage 5: Direct Unified Candidate Pool Aggregation

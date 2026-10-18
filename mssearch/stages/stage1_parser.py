@@ -8,6 +8,8 @@ import json
 import ast
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union, Dict, Any
+from PIL import Image
+from ..config import MSSearchConfig
 from ..models.utils import include_pronouns, normalize_target_text, extract_visual_objects
 
 
@@ -110,7 +112,9 @@ def parse_question_to_active_objects(
     verbose: bool = False,
     return_strategy: bool = False,
     vlm_model=None,
-    enable_anchor_first: bool = True
+    enable_anchor_first: bool = True,
+    image_pil: Optional[Union[Image.Image, List[Image.Image]]] = None,
+    config: Optional[MSSearchConfig] = None
 ) -> Union[ParsedQuestion, Tuple[ParsedQuestion, str]]:
     """
     Parses a natural language question into a structured ParsedQuestion object.
@@ -267,6 +271,72 @@ def parse_question_to_active_objects(
                 import traceback
                 print(f"[Stage 1][Fallback Trigger] MLLM text extraction raised {type(e).__name__}: {e}")
                 traceback.print_exc()
+
+    # Strategy 1b: Image-Grounded Anchor Discovery (Hybrid Low-Res Vision Fallback)
+    # Triggered when text-only parsing yields no concrete physical host anchors (e.g. empty or abstract words like 'text'/'word')
+    enable_vision_anchors = getattr(config, "enable_image_grounded_anchors", True) if config else True
+    has_concrete_anchor = bool(parsed_anchors and any(all(w not in ABSTRACT_ATTRIBUTE_HEADS for w in a.lower().split()) for a in parsed_anchors))
+
+    if enable_vision_anchors and not has_concrete_anchor and image_pil is not None and zoom_model is not None and hasattr(zoom_model, "generate_response"):
+        res = getattr(config, "image_grounded_anchor_resolution", 1024) if config else 1024
+        target_img = image_pil[0] if isinstance(image_pil, (list, tuple)) else image_pil
+        if target_img is not None:
+            if max(target_img.width, target_img.height) > res:
+                scale = res / float(max(target_img.width, target_img.height))
+                lowres_img = target_img.resize(
+                    (int(round(target_img.width * scale)), int(round(target_img.height * scale))),
+                    Image.Resampling.LANCZOS
+                )
+            else:
+                lowres_img = target_img
+
+            if verbose:
+                print(f"[Stage 1][Strategy 1b] No concrete physical anchor in text; invoking Image-Grounded Anchor Discovery ({lowres_img.width}x{lowres_img.height}px, max_res={res})...")
+
+            prompt_vision = (
+                f"Question: \"{question}\"\n"
+                "Carefully inspect the provided image. Identify the concrete physical object(s) or host entities visible in the scene "
+                "that contain, display, or are most relevant to answering the question (e.g. storefront sign, road sign, vehicle, building, clothing, counter, screen).\n"
+                "Return ONLY a JSON object with:\n"
+                "- \"anchors\": list of physical host entities visible in the scene (outermost physical entities first)\n"
+                "- \"target_element\": specific micro-attribute or text to inspect\n"
+                "- \"active_objects\": combined search entities prioritizing physical anchors first\n"
+                "- \"question_type\": one of ['relational_reading', 'spatial_orientation', 'counting', 'fine_grained_attribute', 'general']\n"
+                "- \"is_relational\": boolean (true if question requires relative spatial positioning or dual-scale context)\n"
+                "Return ONLY valid JSON."
+            )
+
+            try:
+                raw_vision_text = zoom_model.generate_response(image_pil=lowres_img, question=prompt_vision, max_new_tokens=96)
+                dict_match = re.search(r'\{[\s\S]*?\}', raw_vision_text)
+                if dict_match:
+                    try:
+                        v_data = json.loads(dict_match.group(0))
+                    except Exception:
+                        try:
+                            v_data = ast.literal_eval(dict_match.group(0))
+                        except Exception:
+                            v_data = None
+
+                    if isinstance(v_data, dict):
+                        v_anchors = [str(a).strip().lower() for a in v_data.get("anchors", []) if str(a).strip()]
+                        if v_anchors:
+                            parsed_anchors = v_anchors
+                            parsed_target_element = str(v_data.get("target_element", parsed_target_element)).strip().lower()
+                            v_objs = v_data.get("active_objects", [])
+                            if isinstance(v_objs, list) and v_objs:
+                                raw_targets = [str(o).strip().lower() for o in v_objs if str(o).strip()]
+                            else:
+                                raw_targets = list(parsed_anchors) + ([parsed_target_element] if parsed_target_element else [])
+                            parsed_question_type = str(v_data.get("question_type", parsed_question_type)).strip().lower()
+                            parsed_is_relational = bool(v_data.get("is_relational", parsed_is_relational))
+                            extraction_strategy = f"Strategy 1b: Image-Grounded Semantic Parser ({res}px Low-Res Vision Fallback)"
+                            raw_text = raw_vision_text
+                            if verbose:
+                                print(f"[Stage 1][Image Grounding] Vision-discovered physical anchors: {parsed_anchors} | active_objects: {raw_targets}")
+            except Exception as e:
+                if verbose:
+                    print(f"[Stage 1][Image Grounding Notice] Vision anchor discovery exception: {e}")
 
     # Strategy 2: Use VLM In-Context Cue Generator if available and targets not yet found
     if not raw_targets and zoom_model is not None and ic_examples is not None:
