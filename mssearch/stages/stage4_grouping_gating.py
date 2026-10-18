@@ -258,11 +258,16 @@ def run_feature_grouping_and_gating(
     if not bounded_patches:
         return ([], []) if return_debug else []
 
-    # If grouping is ablated, keep all bounded patches directly
+    # If grouping is ablated, keep all bounded patches directly (ranked by confidence/entropy)
     if not config.enable_feature_grouping or sam_model is None:
         if config.verbose:
             print(f"[Stage 4][Fallback] Feature grouping disabled by config or SAM3 absent; retaining all {len(bounded_patches)} bounded patches directly without semantic pruning.")
-        return (bounded_patches, []) if return_debug else bounded_patches
+        sorted_bp = sorted(
+            bounded_patches,
+            key=lambda p: ((p.confidence_score or 0.0), (p.siglip_score if p.siglip_score is not None else 0.0), p.entropy),
+            reverse=True
+        )
+        return (sorted_bp, []) if return_debug else sorted_bp
 
     # 1. Group patches using cached Stage 3 feature vectors
     groups, sim_mat = group_patches_by_cosine_similarity(
@@ -640,9 +645,8 @@ def run_feature_grouping_and_gating(
             if config.verbose:
                 print(f"[Stage 4] Group {g_idx} ({len(member_indices)} patches): No target & latent < threshold -> [PRUNED] (Saved {len(member_indices)} downstream VLM calls).")
 
-    # Global Retained Pool Hard Cap (e.g. top 16 patches max based on hybrid confidence)
-    if getattr(config, "enable_retention_hard_cap", True) and len(remaining_patches) > config.max_retained_patches:
-        k_cap = config.max_retained_patches
+    # Always rank retained patches by detection confidence, SigLIP semantic similarity, and entropy
+    if remaining_patches:
         metric = getattr(config, "retention_ranking_metric", "confidence_hybrid")
         if metric == "entropy":
             sorted_patches = sorted(remaining_patches, key=lambda p: p.entropy, reverse=True)
@@ -651,14 +655,22 @@ def run_feature_grouping_and_gating(
         else:  # "confidence_hybrid"
             sorted_patches = sorted(
                 remaining_patches,
-                key=lambda p: ((p.confidence_score or 0.0), p.entropy),
+                key=lambda p: (
+                    (p.confidence_score or 0.0),
+                    (p.siglip_score if p.siglip_score is not None else 0.0),
+                    p.entropy
+                ),
                 reverse=True
             )
 
-        pruned_by_cap = len(remaining_patches) - k_cap
-        if config.verbose:
-            print(f"[Stage 4][Budget Guard] Global retention hard cap triggered: reducing {len(remaining_patches)} retained patches to top-{k_cap} (metric: {metric}, pruned {pruned_by_cap} excess patches).")
-        remaining_patches = sorted_patches[:k_cap]
+        if getattr(config, "enable_retention_hard_cap", True) and len(sorted_patches) > config.max_retained_patches:
+            k_cap = config.max_retained_patches
+            pruned_by_cap = len(sorted_patches) - k_cap
+            if config.verbose:
+                print(f"[Stage 4][Budget Guard] Global retention hard cap triggered: reducing {len(sorted_patches)} retained patches to top-{k_cap} (metric: {metric}, pruned {pruned_by_cap} excess patches).")
+            remaining_patches = sorted_patches[:k_cap]
+        else:
+            remaining_patches = sorted_patches
 
     # Safety fallback: if all groups got pruned, retain top highest entropy patches
     if not remaining_patches and bounded_patches:

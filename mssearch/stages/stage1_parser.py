@@ -17,7 +17,9 @@ RELATIONAL_KEYWORDS = {
 
 ABSTRACT_ATTRIBUTE_HEADS = {
     "text", "number", "digit", "word", "letter", "symbol", "logo", "sign",
-    "color", "colour", "shape", "appearance", "writing", "label"
+    "color", "colour", "shape", "appearance", "writing", "label", "written",
+    "reading", "font", "character", "displayed", "shown", "printed", "marked",
+    "engraved", "carved", "painted", "visible"
 }
 
 
@@ -30,15 +32,16 @@ def detect_relational_intent(question: str) -> bool:
 def reorder_anchor_first(targets: List[str]) -> List[str]:
     """
     Prioritizes physical host entities and landmarks ahead of abstract attributes/sub-elements.
-    Example: ['text', 'jacket', 'sleeve'] -> ['jacket', 'sleeve', 'text']
+    Example: ['text written', 'jacket s sleeve', 'logo'] -> ['jacket s sleeve', 'text written', 'logo']
     """
+    delimiters = {'the', 'a', 'an', 'on', 'in', 'of', 'at', 'above', 'below', 'is', 'are', 'to', 'where'}
     anchors = []
     attributes = []
     for t in targets:
-        words = t.lower().split()
-        if len(words) == 1 and words[0] in ABSTRACT_ATTRIBUTE_HEADS:
-            attributes.append(t)
-        elif len(words) > 1 and words[0] in ABSTRACT_ATTRIBUTE_HEADS and words[-1] in ABSTRACT_ATTRIBUTE_HEADS:
+        words = [w for w in t.lower().split() if w not in delimiters]
+        concrete = [w for w in words if w not in ABSTRACT_ATTRIBUTE_HEADS]
+        if not concrete:
+            # All substantive words are abstract attributes (e.g. 'text', 'text written', 'number displayed')
             attributes.append(t)
         else:
             anchors.append(t)

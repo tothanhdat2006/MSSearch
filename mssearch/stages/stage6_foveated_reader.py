@@ -102,7 +102,8 @@ def is_negative_or_unanswerable(text: str) -> bool:
         "no answer", "no answer found", "unanswerable", "cannot answer",
         "not found", "not visible", "no text", "no translation needed",
         "no visible text", "no target", "no object", "none visible",
-        "not applicable", "no information", "not enough information"
+        "not applicable", "no information", "not enough information",
+        "not present", "not clearly visible", "not depicted", "unclear"
     }
     if cleaned_lower in standalone_refusals:
         return True
@@ -291,13 +292,25 @@ def run_foveated_vlm_reading(
             if config.verbose and c_idx == 0:
                 print(f"[Stage 6][Dual-Scale] Spatial/relational query detected; using Dual-Scale [Global with BBox, Local Crop] mode.")
 
-        # 3. Query VLM with prompt-directed Final Answer directive
+        # 3. Query VLM with prompt-directed Final Answer directive & negative escape grounding
         if getattr(config, "prompt_directed_final_answer", True):
-            prompt = (
-                f"{question}{text_coords_hint}\n"
-                "Answer the question concisely. Conclude your response with:\n"
-                "Final Answer: <concise answer>"
-            )
+            if is_relational:
+                prompt = (
+                    f"{question}{text_coords_hint}\n"
+                    "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
+                    "If the target object or requested text/information is NOT clearly visible in this focal region, output:\n"
+                    "Final Answer: None\n\n"
+                    "Otherwise, answer concisely based strictly on what is visible in the focal region, concluding with:\n"
+                    "Final Answer: <concise answer>"
+                )
+            else:
+                prompt = (
+                    f"{question}{text_coords_hint}\n"
+                    "Carefully inspect this crop. If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
+                    "Final Answer: None\n\n"
+                    "Otherwise, answer concisely based strictly on what is visible in this crop, concluding with:\n"
+                    "Final Answer: <concise answer>"
+                )
         else:
             prompt = f"{question}{text_coords_hint}"
 
