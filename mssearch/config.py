@@ -15,14 +15,17 @@ class MSSearchConfig:
     # Stage 1: Question Parsing & Active Object Set
     # -------------------------------------------------------------------------
     use_mllm_object_parser: bool = True          # Use MLLM language model directly for zero-shot object extraction
+    enable_anchor_first_ordering: bool = True    # Prioritize physical host entities ahead of abstract attributes
     use_nlp_fallback: bool = False               # Deprecated in favor of MLLM + Grammar Regex
     nlp_model_name: str = "en_core_web_sm"
 
     # -------------------------------------------------------------------------
-    # Stage 2: Tool-Based Fast Path Canvas Check
+    # Stage 2: 2-Gate Early Assessment (Direct Global Answer & Fast Path)
     # -------------------------------------------------------------------------
-    enable_fast_path: bool = True
-    fast_path_conf_threshold: float = 0.70
+    enable_direct_answer: bool = True            # Phase 1: Direct Global Answer via Yes/No logit sufficiency probing
+    direct_answer_conf_threshold: float = 0.60   # Minimum sufficiency confidence c_q [-1, 1] to answer directly on root
+    enable_fast_path: bool = True                # Phase 2: Tool-Based Fast Path via SAM3 Proposals
+    fast_path_conf_threshold: float = 0.70       # Existence confidence threshold for fast path instant exit
     enable_visual_prompt_bbox: bool = True       # Draw bounding box on composite crop
     enable_textual_prompt_coords: bool = False   # Feed textual [x1, y1, x2, y2] coordinates into prompt
     visual_prompt_bbox_color: str = "red"
@@ -78,20 +81,23 @@ class MSSearchConfig:
     retention_ranking_metric: str = "confidence_hybrid"  # "confidence_hybrid", "entropy", "detection_first"
 
     # -------------------------------------------------------------------------
-    # Stage 5: Resolution-Aware Dual-Branch Screening
+    # Stage 5: Direct Unified Candidate Pool Aggregation
     # -------------------------------------------------------------------------
-    branch_b_size_cutoff: int = 336              # > 336px -> Branch A (Direct), <= 336px -> Branch B
-    branch_b_score_threshold: float = 0.50       # SigLIP similarity threshold to keep low-res crop
+    # Branch B SigLIP screening purged; surviving Stage 4 patches pass directly into Unified Pool
+    branch_b_score_threshold: Optional[float] = None  # Deprecated: Branch B SigLIP check purged in v3
     siglip_model_name: str = "google/siglip-base-patch16-384"
     siglip_device: str = "cuda:0"                # Shared on GPU 0 with Qwen2.5-VL layers 0-14
 
     # -------------------------------------------------------------------------
-    # Stage 6: Foveated VLM Reading & Semantic Deduplication
+    # Stage 6: Foveated VLM Reading, Dual-Scale & Collision-Free Consensus
     # -------------------------------------------------------------------------
     bbox_expansion_factor: float = 1.25          # Independent 25% padding per patch
     max_vlm_tokens: int = 128                    # Response token budget (allows complete answers without truncation)
     enable_early_consensus_exit: bool = True     # Stop evaluating crops once 2 identical/near-identical answers are extracted
     early_consensus_count: int = 2               # Minimum consensus extractions to trigger early exit
+    early_consensus_threshold: float = 0.75      # String similarity threshold on extracted core answers
+    enable_query_adaptive_dual_scale: bool = True # Input [Global with BBox, Local Crop] for relational/orientation queries
+    prompt_directed_final_answer: bool = True    # Instruct VLM to conclude with 'Final Answer: <concise answer>'
     answer_dedup_similarity: float = 0.85        # Semantic deduplication threshold
 
     # -------------------------------------------------------------------------

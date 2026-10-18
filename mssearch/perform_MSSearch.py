@@ -58,8 +58,13 @@ def main():
     parser.add_argument("--nlp-model-path", type=str, default="en_core_web_sm")
 
     # Ablation & Diagnostic Flags
-    parser.add_argument("--disable-fast-path", action="store_true")
-    parser.add_argument("--fast-path-threshold", type=float, default=0.70)
+    parser.add_argument("--disable-direct-answer", action="store_true", help="Disable Phase 1 Direct Answer probing")
+    parser.add_argument("--direct-answer-threshold", type=float, default=0.60, help="Confidence threshold for Phase 1 Direct Answer")
+    parser.add_argument("--disable-fast-path", action="store_true", help="Disable Stage 2 Tool-Based Fast Path")
+    parser.add_argument("--fast-path-threshold", type=float, default=0.70, help="Confidence threshold for Stage 2 Fast Path")
+    parser.add_argument("--disable-anchor-first", action="store_true", help="Disable anchor-first spatial reordering in Stage 1")
+    parser.add_argument("--disable-dual-scale", action="store_true", help="Disable Query-Adaptive Dual-Scale visual prompting in Stage 6")
+    parser.add_argument("--early-consensus-threshold", type=float, default=0.75, help="Similarity threshold for Stage 6 early consensus exit")
     parser.add_argument("--disable-visual-prompt-bbox", action="store_true")
     parser.add_argument("--enable-textual-prompt-coords", action="store_true")
     parser.add_argument("--entropy-threshold", type=float, default=0.35)
@@ -86,8 +91,13 @@ def main():
 
     # Build typed configuration dataclass
     config = MSSearchConfig(
+        enable_direct_answer=not args.disable_direct_answer,
+        direct_answer_conf_threshold=args.direct_answer_threshold,
         enable_fast_path=not args.disable_fast_path,
         fast_path_conf_threshold=args.fast_path_threshold,
+        enable_anchor_first_ordering=not args.disable_anchor_first,
+        enable_query_adaptive_dual_scale=not args.disable_dual_scale,
+        early_consensus_threshold=args.early_consensus_threshold,
         enable_visual_prompt_bbox=not args.disable_visual_prompt_bbox,
         enable_textual_prompt_coords=args.enable_textual_prompt_coords,
         entropy_threshold=args.entropy_threshold,
@@ -182,6 +192,8 @@ def main():
             # Record enriched outputs into annotation
             anno['mssearch_output'] = resp
             anno['output'] = resp.get('primary_answer', '')
+            anno['mssearch_prediction'] = resp.get('primary_answer', '')
+            anno['raw_vlm_response'] = resp.get('raw_vlm_response', '')
             anno['discovered_evidence_images'] = resp.get('evidence_images', [])
             anno['all_answers'] = resp.get('answers', [])
 

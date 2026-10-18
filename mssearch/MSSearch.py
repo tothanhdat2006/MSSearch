@@ -20,6 +20,8 @@ import numpy as np
 from .config import MSSearchConfig
 from .stages import (
     parse_question_to_active_objects,
+    run_direct_global_assessment,
+    DirectAnswerResult,
     run_tool_based_fast_path,
     partition_candidate_images,
     run_feature_grouping_and_gating,
@@ -63,7 +65,8 @@ class MultiSourceSearchEngine:
             print(f"\n[MSSearch] ====================================================================")
             print(f"[MSSearch] Starting Multi-Source Visual Search across {len(candidate_images)} candidate images.")
             print(f"[MSSearch] Question: '{question}'")
-            print(f"[MSSearch] Fast Path Enabled: {self.config.enable_fast_path} | Partition Mode: {self.config.partition_mode}")
+            print(f"[MSSearch] Direct Answer Enabled: {getattr(self.config, 'enable_direct_answer', True)} (Threshold: {getattr(self.config, 'direct_answer_conf_threshold', 0.60)})")
+            print(f"[MSSearch] Fast Path Enabled: {self.config.enable_fast_path} (Threshold: {self.config.fast_path_conf_threshold}) | Partition Mode: {self.config.partition_mode}")
             print(f"[MSSearch] ====================================================================")
 
         telemetry: Dict[str, Any] = {
@@ -71,6 +74,44 @@ class MultiSourceSearchEngine:
             "stages_executed": [],
             "timings_sec": {}
         }
+
+        # ---------------------------------------------------------------------
+        # Phase 1: Direct Global Answer Gate (Logit Sufficiency Probing)
+        # ---------------------------------------------------------------------
+        if getattr(self.config, "enable_direct_answer", True):
+            t0 = time.perf_counter()
+            direct_result: DirectAnswerResult = run_direct_global_assessment(
+                candidate_images=candidate_images,
+                question=question,
+                zoom_model=self.zoom_model,
+                config=self.config
+            )
+            telemetry["timings_sec"]["phase1_direct_answer"] = round(time.perf_counter() - t0, 3)
+            telemetry["stages_executed"].append("phase1_direct_answer")
+
+            if direct_result.triggered:
+                telemetry["route"] = "direct_global_answer"
+                telemetry["direct_answer_confidence"] = direct_result.confidence
+                telemetry["evidence_images"] = [direct_result.evidence_img_idx]
+                telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
+                img_w, img_h = candidate_images[direct_result.evidence_img_idx].size
+                return {
+                    "answers": [direct_result.answer],
+                    "primary_answer": direct_result.answer,
+                    "raw_vlm_response": direct_result.raw_response,
+                    "evidence_images": [direct_result.evidence_img_idx],
+                    "extractions": [
+                        {
+                            "img_idx": direct_result.evidence_img_idx,
+                            "box": [0, 0, img_w, img_h],
+                            "expanded_box": [0, 0, img_w, img_h],
+                            "raw_answer": direct_result.raw_response,
+                            "final_answer": direct_result.answer,
+                            "source_branch": "Direct Global Answer"
+                        }
+                    ],
+                    "telemetry": telemetry
+                }
 
         # ---------------------------------------------------------------------
         # Stage 1: Question Parsing & Active Object Set (A_q)
@@ -111,13 +152,15 @@ class MultiSourceSearchEngine:
             return {
                 "answers": [fast_path_result.answer],
                 "primary_answer": fast_path_result.answer,
+                "raw_vlm_response": fast_path_result.raw_response or fast_path_result.answer,
                 "evidence_images": [fast_path_result.evidence_img_idx],
                 "extractions": [
                     {
                         "img_idx": fast_path_result.evidence_img_idx,
                         "box": list(fast_path_result.detected_boxes[0]) if fast_path_result.detected_boxes else [0, 0, 100, 100],
                         "expanded_box": list(fast_path_result.detected_boxes[0]) if fast_path_result.detected_boxes else [0, 0, 100, 100],
-                        "raw_answer": fast_path_result.answer,
+                        "raw_answer": fast_path_result.raw_response or fast_path_result.answer,
+                        "final_answer": fast_path_result.answer,
                         "source_branch": "Fast Path"
                     }
                 ],
@@ -210,9 +253,20 @@ class MultiSourceSearchEngine:
         else:
             primary_answer = "No answer found"
 
+        # Find the raw VLM response corresponding to the primary answer
+        raw_vlm_resp = None
+        for e in final_result.extractions:
+            cand_clean = e.final_answer if e.final_answer else e.raw_answer
+            if cand_clean == primary_answer:
+                raw_vlm_resp = e.raw_answer
+                break
+        if raw_vlm_resp is None and final_result.extractions:
+            raw_vlm_resp = final_result.extractions[0].raw_answer
+
         return {
             "answers": final_result.answers,
             "primary_answer": primary_answer,
+            "raw_vlm_response": raw_vlm_resp,
             "evidence_images": final_result.evidence_image_indices,
             "extractions": [
                 {
@@ -220,6 +274,7 @@ class MultiSourceSearchEngine:
                     "box": list(e.box),
                     "expanded_box": list(e.expanded_box),
                     "raw_answer": e.raw_answer,
+                    "final_answer": e.final_answer,
                     "source_branch": e.source_branch
                 }
                 for e in final_result.extractions

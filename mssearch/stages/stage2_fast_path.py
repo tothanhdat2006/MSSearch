@@ -18,10 +18,21 @@ from ..config import MSSearchConfig
 
 
 @dataclass
+class DirectAnswerResult:
+    """Telemetry and outcome container for Phase 1 Direct Global Answer."""
+    triggered: bool
+    answer: Optional[str] = None
+    raw_response: Optional[str] = None
+    confidence: float = 0.0
+    evidence_img_idx: Optional[int] = None
+
+
+@dataclass
 class FastPathResult:
     """Telemetry and outcome container for Stage 2 Fast Path."""
     triggered: bool
     answer: Optional[str] = None
+    raw_response: Optional[str] = None
     evidence_img_idx: Optional[int] = None
     confidence: float = 0.0
     detected_boxes: List[Tuple[int, int, int, int]] = field(default_factory=list)
@@ -125,6 +136,91 @@ def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str) -> floa
                 print(f"[Stage 2][VLM Confidence Notice] {e}")
                 return 0.0
     return 0.0
+
+
+def run_direct_global_assessment(
+    candidate_images: List[Image.Image],
+    question: str,
+    zoom_model,
+    config: MSSearchConfig
+) -> DirectAnswerResult:
+    """
+    Phase 1: Probes whether the question can be confidently answered directly from
+    the root global image without tool invocation or multiscale decomposition.
+    Uses Yes/No answering confidence probing:
+      c_q = 2 * (Softmax(logits_Yes/No)[Yes] - 0.5) in [-1, 1].
+    If c_q > config.direct_answer_conf_threshold, generates concise answer directly.
+    """
+    if not getattr(config, "enable_direct_answer", True) or zoom_model is None:
+        return DirectAnswerResult(triggered=False)
+
+    threshold = getattr(config, "direct_answer_conf_threshold", 0.60)
+    if config.verbose:
+        print(f"[Phase 1][Direct Answer] Probing {len(candidate_images)} images with answering confidence (Threshold = {threshold:.2f})...")
+
+    from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer
+
+    for img_idx, img_pil in enumerate(candidate_images):
+        # 1. Probe answering confidence c_q on the root view (clamped to 1024px for safety)
+        conf = 0.0
+        if hasattr(zoom_model, "get_confidence_value"):
+            try:
+                safe_img = img_pil
+                if max(img_pil.width, img_pil.height) > 1024:
+                    scale = 1024.0 / max(img_pil.width, img_pil.height)
+                    safe_img = img_pil.resize(
+                        (int(round(img_pil.width * scale)), int(round(img_pil.height * scale))),
+                        Image.Resampling.BILINEAR
+                    )
+                val = zoom_model.get_confidence_value(
+                    node=[],
+                    image_pil=safe_img,
+                    confidence_type="answering",
+                    input_ele=question,
+                    root_anyres=False
+                )
+                if isinstance(val, torch.Tensor):
+                    val = val.item()
+                conf = float(val)
+            except Exception as e:
+                if config.verbose:
+                    print(f"[Phase 1][Direct Answer Notice] Image {img_idx} confidence probing error ({e})")
+                conf = 0.0
+
+        if config.verbose:
+            print(f"[Phase 1][Direct Answer] Image {img_idx}: answering confidence = {conf:.3f} (Threshold = {threshold:.2f})")
+
+        # 2. Check threshold gate
+        if conf > threshold:
+            if getattr(config, "prompt_directed_final_answer", True):
+                prompt = (
+                    f"{question}\n\n"
+                    "Answer the question concisely. Conclude your response with:\n"
+                    "Final Answer: <concise answer>"
+                )
+            else:
+                prompt = question
+
+            raw_answer = _query_vlm_response(zoom_model, img_pil, prompt, max_new_tokens=getattr(config, "max_vlm_tokens", 128))
+            final_ans = extract_final_answer(raw_answer) if getattr(config, "prompt_directed_final_answer", True) else raw_answer
+
+            # Safety check: bypass if answer is a refusal / unanswerable
+            if is_negative_or_unanswerable(raw_answer) or (final_ans and is_negative_or_unanswerable(final_ans)):
+                if config.verbose:
+                    print(f"[Phase 1][Direct Answer Refusal] Global response was uninformative ('{raw_answer}'); bypassing Phase 1.")
+                continue
+
+            if config.verbose:
+                print(f"[Phase 1][Direct Answer Triggered] Confirmed on image {img_idx} (conf={conf:.3f}): '{final_ans}'. Bypassing all deep search stages!")
+            return DirectAnswerResult(
+                triggered=True,
+                answer=final_ans,
+                raw_response=raw_answer,
+                confidence=conf,
+                evidence_img_idx=img_idx
+            )
+
+    return DirectAnswerResult(triggered=False)
 
 
 def run_tool_based_fast_path(
@@ -259,20 +355,29 @@ def run_tool_based_fast_path(
         # 8. Fast Path Decision Gate (> 0.70)
         if existence_conf > config.fast_path_conf_threshold:
             # High existence confidence confirmed -> Generate final answer immediately!
-            answer_prompt = f"{question}{text_coords_hint}"
+            if getattr(config, "prompt_directed_final_answer", True):
+                answer_prompt = (
+                    f"{question}{text_coords_hint}\n\n"
+                    "Answer the question concisely. Conclude your response with:\n"
+                    "Final Answer: <concise answer>"
+                )
+            else:
+                answer_prompt = f"{question}{text_coords_hint}"
             answer_text = _query_vlm_response(zoom_model, vlm_crop, answer_prompt, max_new_tokens=config.max_vlm_tokens)
 
-            from .stage6_foveated_reader import is_negative_or_unanswerable
-            if is_negative_or_unanswerable(answer_text):
+            from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer
+            final_ans = extract_final_answer(answer_text) if getattr(config, "prompt_directed_final_answer", True) else answer_text
+            if is_negative_or_unanswerable(answer_text) or (final_ans and is_negative_or_unanswerable(final_ans)):
                 if config.verbose:
                     print(f"[Stage 2][Negative Fast Path] Fast path answer was uninformative/refusal ('{answer_text}'); bypassing fast path.")
                 continue
 
             if config.verbose:
-                print(f"[Stage 2][Non-Fallback Early Exit] Instant answer confirmed on image {img_idx}: '{answer_text}'. Exiting in 1 step!")
+                print(f"[Stage 2][Non-Fallback Early Exit] Instant answer confirmed on image {img_idx}: '{final_ans}'. Exiting in 1 step!")
             return FastPathResult(
                 triggered=True,
-                answer=answer_text,
+                answer=final_ans,
+                raw_response=answer_text,
                 evidence_img_idx=img_idx,
                 confidence=float(existence_conf),
                 detected_boxes=matched_boxes_by_obj,

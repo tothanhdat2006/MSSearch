@@ -23,9 +23,31 @@ class EvidenceExtraction:
     expanded_box: Tuple[int, int, int, int]
     raw_answer: str
     source_branch: str
+    final_answer: str = ""
 
 
 import re
+
+def extract_final_answer(text: str) -> str:
+    """
+    Extracts the clean, concise final answer from a model response concluding with:
+    'Final Answer: <concise answer>' or inside '<answer>...</answer>' tags.
+    Falls back gracefully to the raw response if no structured demarcation is found.
+    """
+    if not text:
+        return ""
+    # Match 'Final Answer:', '**Final Answer:**', or 'Final Answer is:'
+    m = re.search(r'(?:\*\*|__)?Final Answer(?:\*\*|__)?\s*(?:is|:)?\s*([^\n\r]+)', text, flags=re.IGNORECASE)
+    if m:
+        val = m.group(1).strip()
+        val = re.sub(r'^[\*\[\"\'\s]+|[\*\]\"\'\.\s]+$', '', val).strip()
+        if val:
+            return val
+    # Fallback to <answer> tags if present
+    m = re.search(r'<answer>([\s\S]*?)</answer>', text, flags=re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
 
 @dataclass
 class FinalSearchResult:
@@ -236,20 +258,56 @@ def run_foveated_vlm_reading(
         if config.enable_textual_prompt_coords:
             text_coords_hint = f" Focal region: [{local_target_box[0]}, {local_target_box[1]}, {local_target_box[2]}, {local_target_box[3]}]."
 
-        # 3. Query VLM with full question q
-        prompt = f"{question}{text_coords_hint}"
+        # Query-Adaptive Dual-Scale Context:
+        # If question queries spatial relations or orientation, provide [Global with BBox, Local Zoomed Crop]
+        is_relational = False
+        if getattr(config, "enable_query_adaptive_dual_scale", True):
+            from .stage1_parser import detect_relational_intent
+            is_relational = detect_relational_intent(question)
+
+        vlm_image_input: Union[Image.Image, List[Image.Image]] = vlm_input_crop
+        if is_relational:
+            # Annotate focus box on global image
+            global_annotated = render_visual_prompt_bbox(
+                img_pil,
+                [item.box],
+                color=config.visual_prompt_bbox_color,
+                width=max(2, img_w // 200)
+            )
+            # Downsample global image if excessively large to protect token budget
+            max_global_dim = 768
+            if img_w > max_global_dim or img_h > max_global_dim:
+                scale = max_global_dim / max(img_w, img_h)
+                global_annotated = global_annotated.resize(
+                    (int(round(img_w * scale)), int(round(img_h * scale))),
+                    Image.Resampling.BILINEAR
+                )
+            vlm_image_input = [global_annotated, vlm_input_crop]
+            if config.verbose and c_idx == 0:
+                print(f"[Stage 6][Dual-Scale] Spatial/relational query detected; using Dual-Scale [Global with BBox, Local Crop] mode.")
+
+        # 3. Query VLM with prompt-directed Final Answer directive
+        if getattr(config, "prompt_directed_final_answer", True):
+            prompt = (
+                f"{question}{text_coords_hint}\n"
+                "Answer the question concisely. Conclude your response with:\n"
+                "Final Answer: <concise answer>"
+            )
+        else:
+            prompt = f"{question}{text_coords_hint}"
+
         raw_answer = ""
         max_tokens = getattr(config, "max_vlm_tokens", 128)
         if zoom_model is not None:
             try:
                 if hasattr(zoom_model, "generate_response"):
-                    raw_answer = zoom_model.generate_response(image_pil=vlm_input_crop, question=prompt, max_new_tokens=max_tokens)
+                    raw_answer = zoom_model.generate_response(image_pil=vlm_image_input, question=prompt, max_new_tokens=max_tokens)
                 elif hasattr(zoom_model, "free_form_using_nodes"):
-                    raw_answer = zoom_model.free_form_using_nodes(image_pil=vlm_input_crop, question=prompt, searched_nodes=[], max_new_tokens=max_tokens)
+                    raw_answer = zoom_model.free_form_using_nodes(image_pil=vlm_image_input, question=prompt, searched_nodes=[], max_new_tokens=max_tokens)
                 elif hasattr(zoom_model, "generate"):
-                    raw_answer = zoom_model.generate(image_pil=vlm_input_crop, question=prompt, max_new_tokens=max_tokens)
+                    raw_answer = zoom_model.generate(image_pil=vlm_image_input, question=prompt, max_new_tokens=max_tokens)
                 else:
-                    raw_answer = str(zoom_model(image_pil=vlm_input_crop, question=prompt))
+                    raw_answer = str(zoom_model(image_pil=vlm_image_input, question=prompt))
             except Exception as e:
                 if config.verbose:
                     print(f"[Stage 6][Error Fallback] Crop {c_idx} (Image {img_idx}) VLM generation failed ({e}); skipping crop.")
@@ -261,18 +319,19 @@ def run_foveated_vlm_reading(
             target_hit = (nx1 <= 0.51 and nx2 >= 0.42 and ny1 <= 0.16 and ny2 >= 0.10)
 
             if item.source_branch == "fast_path" or target_hit:
-                raw_answer = "The house number visible on the mailbox / entrance is 27B."
+                raw_answer = "The house number visible on the mailbox / entrance is 27B.\nFinal Answer: 27B"
             else:
                 if ny2 < 0.35:
-                    raw_answer = "This crop shows upper building facade and sky; no mailbox or house number is visible."
+                    raw_answer = "This crop shows upper building facade and sky; no mailbox or house number is visible.\nFinal Answer: None"
                 elif nx1 > 0.60:
-                    raw_answer = "No mailbox or number visible in this right-hand architectural section."
+                    raw_answer = "No mailbox or number visible in this right-hand architectural section.\nFinal Answer: None"
                 elif ny1 > 0.60:
-                    raw_answer = "Ground-level pathway and pavement; no house number found."
+                    raw_answer = "Ground-level pathway and pavement; no house number found.\nFinal Answer: None"
                 else:
-                    raw_answer = "There is no mailbox or house number visible in this region."
+                    raw_answer = "There is no mailbox or house number visible in this region.\nFinal Answer: None"
 
-        is_ev = not is_negative_or_unanswerable(raw_answer)
+        final_ans = extract_final_answer(raw_answer)
+        is_ev = not is_negative_or_unanswerable(final_ans if final_ans else raw_answer)
 
         # Collect detailed debug crop record for notebook visualization
         crop_records.append({
@@ -282,8 +341,10 @@ def run_foveated_vlm_reading(
             "expanded_box": list(exp_box),
             "local_target_box": list(local_target_box),
             "raw_answer": raw_answer,
+            "final_answer": final_ans,
             "is_evidence": is_ev,
-            "source_branch": item.source_branch
+            "source_branch": item.source_branch,
+            "is_dual_scale": is_relational
         })
 
         if is_ev:
@@ -293,36 +354,40 @@ def run_foveated_vlm_reading(
                     box=item.box,
                     expanded_box=exp_box,
                     raw_answer=raw_answer,
-                    source_branch=item.source_branch
+                    source_branch=item.source_branch,
+                    final_answer=final_ans
                 )
             )
             evidence_indices.add(img_idx)
             if config.verbose:
-                print(f"[Stage 6][Evidence Found] Crop {c_idx} (Image {img_idx}, {item.source_branch}): '{raw_answer}'")
+                print(f"[Stage 6][Evidence Found] Crop {c_idx} (Image {img_idx}, {item.source_branch}): Final Answer: '{final_ans}' (Raw: '{raw_answer[:60]}...')")
 
-            # Fix B: Early stopping when 2 or more distinct crops confirm the same consensus answer
+            # Fix B: Collision-Free Early Stopping comparing extracted core answers (no preamble collision)
             if getattr(config, "enable_early_consensus_exit", True) and len(extractions) >= 2:
                 req_consensus = getattr(config, "early_consensus_count", 2)
-                cur_ans_norm = raw_answer.strip().lower()
-                matches = [
-                    prev for prev in extractions[:-1]
-                    if (
-                        SequenceMatcher(None, cur_ans_norm, prev.raw_answer.strip().lower()).ratio() >= 0.65
-                        or (len(cur_ans_norm) > 2 and cur_ans_norm in prev.raw_answer.strip().lower())
-                        or (len(prev.raw_answer.strip()) > 2 and prev.raw_answer.strip().lower() in cur_ans_norm)
-                    )
-                ]
+                thresh = getattr(config, "early_consensus_threshold", 0.75)
+                cur_core = (extractions[-1].final_answer or extract_final_answer(raw_answer)).strip().lower()
+
+                matches = []
+                for prev in extractions[:-1]:
+                    prev_core = (prev.final_answer or extract_final_answer(prev.raw_answer)).strip().lower()
+                    ratio = SequenceMatcher(None, cur_core, prev_core).ratio()
+                    # Check substring match only if substantive length (>= 3 chars)
+                    has_sub = (len(cur_core) >= 3 and cur_core in prev_core) or (len(prev_core) >= 3 and prev_core in cur_core)
+                    if ratio >= thresh or has_sub:
+                        matches.append(prev)
+
                 if len(matches) + 1 >= req_consensus:
                     if config.verbose:
-                        print(f"[Stage 6][Early Exit] Consensus confirmed ({len(matches) + 1} matching crops) on '{raw_answer}'. Halting remaining {len(unified_pool) - c_idx - 1} crops to optimize throughput.")
+                        print(f"[Stage 6][Early Exit] Consensus confirmed ({len(matches) + 1} matching crops) on '{final_ans}'. Halting remaining {len(unified_pool) - c_idx - 1} crops to optimize throughput.")
                     break
         elif config.verbose:
             print(f"[Stage 6][Negative Filtered] Crop {c_idx} (Image {img_idx}) returned unanswerable response: '{raw_answer}'")
 
-    # 4. Semantic Deduplication of Answer Memory
-    raw_ans_list = [e.raw_answer for e in extractions]
+    # 4. Semantic Deduplication of Answer Memory using clean final answers
+    clean_ans_list = [e.final_answer if e.final_answer else e.raw_answer for e in extractions]
     final_dedup_answers = deduplicate_answers(
-        raw_ans_list,
+        clean_ans_list,
         similarity_threshold=config.answer_dedup_similarity,
         verbose=config.verbose
     )

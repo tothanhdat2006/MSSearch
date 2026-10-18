@@ -3,7 +3,13 @@ Modular stages for the Dual-Path Multi-Source Visual Search Engine (MSSearch).
 """
 
 from .stage1_parser import parse_question_to_active_objects, parse_question_for_active_objects
-from .stage2_fast_path import run_tool_based_fast_path, run_fast_path_check, FastPathResult
+from .stage2_fast_path import (
+    run_direct_global_assessment,
+    DirectAnswerResult,
+    run_tool_based_fast_path,
+    run_fast_path_check,
+    FastPathResult
+)
 from .stage3_partitioning import (
     partition_candidate_images,
     BoundedPatch,
@@ -17,6 +23,8 @@ from .stage5_screening import run_resolution_screening, CandidateCrop
 from .stage6_foveated_reader import run_foveated_vlm_reading, FinalSearchResult, is_negative_or_unanswerable, deduplicate_answers
 
 __all__ = [
+    "run_direct_global_assessment",
+    "DirectAnswerResult",
     "parse_question_to_active_objects",
     "parse_question_for_active_objects",
     "run_tool_based_fast_path",

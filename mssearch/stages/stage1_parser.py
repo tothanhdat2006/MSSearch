@@ -8,6 +8,43 @@ from typing import List, Optional, Tuple, Union
 from ..models.utils import include_pronouns, normalize_target_text, extract_visual_objects
 
 
+RELATIONAL_KEYWORDS = {
+    "left", "right", "above", "below", "behind", "in front of",
+    "between", "next to", "facing", "direction", "relative to",
+    "orient", "orientation", "towards", "closer", "further",
+    "north", "south", "east", "west", "beside", "adjacent"
+}
+
+ABSTRACT_ATTRIBUTE_HEADS = {
+    "text", "number", "digit", "word", "letter", "symbol", "logo", "sign",
+    "color", "colour", "shape", "appearance", "writing", "label"
+}
+
+
+def detect_relational_intent(question: str) -> bool:
+    """Detects whether a visual question queries spatial relationships or orientation."""
+    q_lower = question.lower()
+    return any(re.search(rf"\b{kw}\b", q_lower) for kw in RELATIONAL_KEYWORDS)
+
+
+def reorder_anchor_first(targets: List[str]) -> List[str]:
+    """
+    Prioritizes physical host entities and landmarks ahead of abstract attributes/sub-elements.
+    Example: ['text', 'jacket', 'sleeve'] -> ['jacket', 'sleeve', 'text']
+    """
+    anchors = []
+    attributes = []
+    for t in targets:
+        words = t.lower().split()
+        if len(words) == 1 and words[0] in ABSTRACT_ATTRIBUTE_HEADS:
+            attributes.append(t)
+        elif len(words) > 1 and words[0] in ABSTRACT_ATTRIBUTE_HEADS and words[-1] in ABSTRACT_ATTRIBUTE_HEADS:
+            attributes.append(t)
+        else:
+            anchors.append(t)
+    return anchors + attributes if anchors else targets
+
+
 def parse_question_to_active_objects(
     question: str,
     zoom_model=None,
@@ -15,14 +52,16 @@ def parse_question_to_active_objects(
     ic_examples: Optional[dict] = None,
     verbose: bool = False,
     return_strategy: bool = False,
-    vlm_model=None
+    vlm_model=None,
+    enable_anchor_first: bool = True
 ) -> Union[List[str], Tuple[List[str], str]]:
     """
     Parses a natural language question into a normalized list of target anchor objects.
+    Enforces Anchor-First ordering: physical host entities precede abstract attributes.
     
     Example:
-        "What symbol is shown on the blue sign next to the car?"
-        -> ["car", "sign"]
+        "What is the text written above the logo on the jacket's sleeve?"
+        -> ["jacket", "sleeve", "logo", "text"]
     """
     if zoom_model is None and vlm_model is not None:
         zoom_model = vlm_model
@@ -45,12 +84,12 @@ def parse_question_to_active_objects(
     # Strategy 1: Direct MLLM In-Context Text Parser (Preferred - uses LLM backbone)
     if zoom_model is not None and (hasattr(zoom_model, "generate_text") or hasattr(zoom_model, "generate_response")):
         if verbose:
-            print("[Stage 1][Strategy 1] Initiating MLLM in-context question parsing...")
+            print("[Stage 1][Strategy 1] Initiating MLLM in-context question parsing (Anchor-First)...")
         try:
             mllm_messages = [
                 {
                     "role": "system",
-                    "content": [{"type": "text", "text": "You are an expert visual search assistant. Given a visual search question, extract all key visual entities, search targets, text/numbers, landmarks, and persons mentioned in the question that must be searched for or examined in the image. Return ONLY a valid JSON list of lowercase strings."}]
+                    "content": [{"type": "text", "text": "You are an expert visual search assistant. Given a visual search question, extract all key visual entities mentioned in the question. IMPORTANT: Always order the physical host objects and landmarks FIRST (e.g. jacket, entrance, building, car, person), and place abstract attributes/sub-elements (e.g. text, number, color, symbol, logo) LAST. Return ONLY a valid JSON list of lowercase strings."}]
                 },
                 {
                     "role": "user",
@@ -66,7 +105,7 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '["symbol", "black board", "dog"]'}]
+                    "content": [{"type": "text", "text": '["black board", "dog", "symbol"]'}]
                 },
                 {
                     "role": "user",
@@ -74,7 +113,15 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '["number", "entrance", "woman"]'}]
+                    "content": [{"type": "text", "text": '["entrance", "woman", "number"]'}]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Question: \"What is the text written above the logo on the jacket's sleeve?\"\nExtract visual search entities as a JSON list:"}]
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '["jacket", "sleeve", "logo", "text"]'}]
                 },
                 {
                     "role": "user",
@@ -83,14 +130,16 @@ def parse_question_to_active_objects(
             ]
 
             few_shot_prompt = (
-                "You are an expert visual search assistant. Given a visual question, extract all key visual entities, search targets, text/numbers, landmarks, and persons mentioned in the question that must be searched for or examined in the image.\n\n"
+                "You are an expert visual search assistant. Given a visual question, extract all key visual entities mentioned in the question. Always order physical host objects and landmarks FIRST, and abstract attributes (text, number, color, logo) LAST.\n\n"
                 "Examples:\n"
                 "Question: \"What is the relative position of the pink banner compared to the green trash bin?\"\n"
                 "Entities: [\"pink banner\", \"green trash bin\"]\n\n"
                 "Question: \"Tell me the symbol on the black board above the dog.\"\n"
-                "Entities: [\"symbol\", \"black board\", \"dog\"]\n\n"
+                "Entities: [\"black board\", \"dog\", \"symbol\"]\n\n"
                 "Question: \"What is the number displayed above the entrance where the woman is standing?\"\n"
-                "Entities: [\"number\", \"entrance\", \"woman\"]\n\n"
+                "Entities: [\"entrance\", \"woman\", \"number\"]\n\n"
+                "Question: \"What is the text written above the logo on the jacket's sleeve?\"\n"
+                "Entities: [\"jacket\", \"sleeve\", \"logo\", \"text\"]\n\n"
                 f"Question: \"{question}\"\n"
                 "Entities:"
             )
@@ -241,8 +290,11 @@ def parse_question_to_active_objects(
         extraction_strategy = "Strategy 4: Default Fallback ['object']"
         if verbose:
             print("[Stage 1][Ultimate Fallback] No targets extracted from question; defaulting to ['object'].")
-    elif verbose:
-        print(f"[Stage 1] Successfully parsed question into Active Object Set A_q: {clean_targets} via {extraction_strategy}")
+    else:
+        if enable_anchor_first:
+            clean_targets = reorder_anchor_first(clean_targets)
+        if verbose:
+            print(f"[Stage 1] Successfully parsed question into Active Object Set A_q: {clean_targets} via {extraction_strategy}")
 
     if return_strategy:
         return clean_targets, extraction_strategy
