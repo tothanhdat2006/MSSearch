@@ -125,7 +125,8 @@ class MultiSourceSearchEngine:
             verbose=self.config.verbose
         )
         telemetry["timings_sec"]["stage1_parser"] = round(time.perf_counter() - t0, 3)
-        telemetry["active_objects"] = active_objects
+        telemetry["active_objects"] = list(active_objects)
+        telemetry["parsed_question"] = active_objects.to_dict() if hasattr(active_objects, "to_dict") else {}
         telemetry["stages_executed"].append("stage1_parser")
 
         # ---------------------------------------------------------------------
@@ -228,12 +229,16 @@ class MultiSourceSearchEngine:
         # Stage 6: Foveated VLM Reading with 1.25x Padding & Deduplication
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
+        is_relational = getattr(active_objects, "is_relational", None)
+        question_type = getattr(active_objects, "question_type", None)
         final_result: FinalSearchResult = run_foveated_vlm_reading(
             unified_pool=unified_pool,
             candidate_images=candidate_images,
             question=question,
             zoom_model=self.zoom_model,
-            config=self.config
+            config=self.config,
+            is_relational=is_relational,
+            question_type=question_type
         )
         telemetry["timings_sec"]["stage6_reading"] = round(time.perf_counter() - t0, 3)
         telemetry["evidence_images"] = final_result.evidence_image_indices

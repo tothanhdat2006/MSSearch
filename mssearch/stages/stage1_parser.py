@@ -4,7 +4,10 @@ Extracts all key visual anchor entities from question q into A_q = [e_1, e_2, ..
 """
 
 import re
-from typing import List, Optional, Tuple, Union
+import json
+import ast
+from dataclasses import dataclass
+from typing import List, Optional, Tuple, Union, Dict, Any
 from ..models.utils import include_pronouns, normalize_target_text, extract_visual_objects
 
 
@@ -23,9 +26,60 @@ ABSTRACT_ATTRIBUTE_HEADS = {
 }
 
 
-def detect_relational_intent(question: str) -> bool:
-    """Detects whether a visual question queries spatial relationships or orientation."""
-    q_lower = question.lower()
+@dataclass
+class ParsedQuestion(list):
+    """
+    Structured question parsing result produced by Stage 1 LLM reasoning.
+    Subclasses list so that it duck-types List[str] seamlessly for 100% backward compatibility
+    with all downstream model and pipeline interfaces (e.g. len(p), p[0], iteration, SAM3 input).
+    """
+    def __init__(
+        self,
+        active_objects: List[str],
+        anchors: Optional[List[str]] = None,
+        target_element: str = "",
+        question_type: str = "general",
+        is_relational: bool = False,
+        strategy: str = "",
+        raw_response: str = ""
+    ):
+        super().__init__(active_objects)
+        self.active_objects = list(active_objects)
+        self.anchors = list(anchors) if anchors else []
+        self.target_element = str(target_element)
+        self.question_type = str(question_type)
+        self.is_relational = bool(is_relational)
+        self.strategy = str(strategy)
+        self.raw_response = str(raw_response)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "active_objects": self.active_objects,
+            "anchors": self.anchors,
+            "target_element": self.target_element,
+            "question_type": self.question_type,
+            "is_relational": self.is_relational,
+            "strategy": self.strategy,
+            "raw_response": self.raw_response
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"ParsedQuestion(active_objects={self.active_objects}, "
+            f"anchors={self.anchors}, target_element='{self.target_element}', "
+            f"question_type='{self.question_type}', is_relational={self.is_relational})"
+        )
+
+
+def detect_relational_intent(question_or_parsed: Union[str, ParsedQuestion, Any]) -> bool:
+    """
+    Detects whether a visual question queries spatial relationships or orientation.
+    If a ParsedQuestion (or object with .is_relational) is provided, uses its semantic flag.
+    Otherwise falls back to keyword regex matching over RELATIONAL_KEYWORDS.
+    """
+    if hasattr(question_or_parsed, "is_relational"):
+        return bool(question_or_parsed.is_relational)
+    q_lower = str(question_or_parsed).lower()
     return any(re.search(rf"\b{kw}\b", q_lower) for kw in RELATIONAL_KEYWORDS)
 
 
@@ -57,19 +111,27 @@ def parse_question_to_active_objects(
     return_strategy: bool = False,
     vlm_model=None,
     enable_anchor_first: bool = True
-) -> Union[List[str], Tuple[List[str], str]]:
+) -> Union[ParsedQuestion, Tuple[ParsedQuestion, str]]:
     """
-    Parses a natural language question into a normalized list of target anchor objects.
-    Enforces Anchor-First ordering: physical host entities precede abstract attributes.
-    
-    Example:
-        "What is the text written above the logo on the jacket's sleeve?"
-        -> ["jacket", "sleeve", "logo", "text"]
+    Parses a natural language question into a structured ParsedQuestion object.
+    Leverages the LLM backbone of the VLM to perform unified semantic reasoning:
+    - Extracts physical host anchors and spatial landmarks
+    - Identifies target attributes / elements
+    - Classifies question type ('relational_reading', 'spatial_orientation', 'counting', etc.)
+    - Determines relational intent (is_relational: True/False)
+    - Enforces Anchor-First ordering: physical host entities precede abstract attributes.
+
+    Returns ParsedQuestion (subclasses list, duck-typing List[str] for 100% backward compatibility).
     """
     if zoom_model is None and vlm_model is not None:
         zoom_model = vlm_model
 
     raw_targets = []
+    parsed_anchors = []
+    parsed_target_element = ""
+    parsed_question_type = "general"
+    parsed_is_relational = False
+    raw_text = ""
     extraction_strategy = "Strategy 3: Syntactic Clause Extraction (Fallback)"
 
     if verbose:
@@ -84,123 +146,147 @@ def parse_question_to_active_objects(
         else:
             print("  -> [Notice] No VLM/LLM model provided (zoom_model=None). Skipping Strategy 1 & 2.")
 
-    # Strategy 1: Direct MLLM In-Context Text Parser (Preferred - uses LLM backbone)
+    # Strategy 1: Direct MLLM In-Context Semantic Parser (Preferred - uses LLM backbone)
     if zoom_model is not None and (hasattr(zoom_model, "generate_text") or hasattr(zoom_model, "generate_response")):
         if verbose:
-            print("[Stage 1][Strategy 1] Initiating MLLM in-context question parsing (Anchor-First)...")
+            print("[Stage 1][Strategy 1] Initiating MLLM in-context unified semantic parsing (Anchors, Question Type, Relational Intent)...")
         try:
             mllm_messages = [
                 {
                     "role": "system",
-                    "content": [{"type": "text", "text": "You are an expert visual search assistant. Given a visual search question, extract all key visual entities mentioned in the question. IMPORTANT: Always order the physical host objects and landmarks FIRST (e.g. jacket, entrance, building, car, person), and place abstract attributes/sub-elements (e.g. text, number, color, symbol, logo) LAST. Return ONLY a valid JSON list of lowercase strings."}]
+                    "content": [{"type": "text", "text": (
+                        "You are an expert visual search reasoning assistant. Given a visual search question, analyze its linguistic and spatial structure, and output a JSON object with:\n"
+                        "- \"anchors\": list of physical host objects and spatial landmarks (outermost/largest physical entities first, e.g. ['jacket', 'sleeve'], ['building', 'entrance'], ['car'])\n"
+                        "- \"target_element\": the specific attribute, text, symbol, or object asked about (e.g. 'text above logo', 'house number', 'symbol')\n"
+                        "- \"active_objects\": list of search entities prioritizing physical anchors FIRST, followed by target sub-elements\n"
+                        "- \"question_type\": one of ['relational_reading', 'spatial_orientation', 'counting', 'fine_grained_attribute', 'existence', 'general']\n"
+                        "- \"is_relational\": boolean, true if the question requires spatial reasoning, relative positioning, or dual-scale orientation context\n"
+                        "Return ONLY a valid JSON object."
+                    )}]
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "Question: \"What is the relative position of the pink banner compared to the green trash bin?\"\nExtract visual search entities as a JSON list:"}]
+                    "content": [{"type": "text", "text": "Question: \"What is the relative position of the pink banner compared to the green trash bin?\""}]
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '["pink banner", "green trash bin"]'}]
+                    "content": [{"type": "text", "text": '{"anchors": ["pink banner", "green trash bin"], "target_element": "relative position", "active_objects": ["pink banner", "green trash bin"], "question_type": "spatial_orientation", "is_relational": true}'}]
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "Question: \"Tell me the symbol on the black board above the dog.\"\nExtract visual search entities as a JSON list:"}]
+                    "content": [{"type": "text", "text": "Question: \"Tell me the symbol on the black board above the dog.\""}]
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '["black board", "dog", "symbol"]'}]
+                    "content": [{"type": "text", "text": '{"anchors": ["black board", "dog"], "target_element": "symbol", "active_objects": ["black board", "dog", "symbol"], "question_type": "relational_reading", "is_relational": true}'}]
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "Question: \"What is the number displayed above the entrance where the woman is standing?\"\nExtract visual search entities as a JSON list:"}]
+                    "content": [{"type": "text", "text": "Question: \"What is the number displayed above the entrance where the woman is standing?\""}]
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '["entrance", "woman", "number"]'}]
+                    "content": [{"type": "text", "text": '{"anchors": ["entrance", "woman"], "target_element": "number displayed", "active_objects": ["entrance", "woman", "number"], "question_type": "relational_reading", "is_relational": true}'}]
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "Question: \"What is the text written above the logo on the jacket's sleeve?\"\nExtract visual search entities as a JSON list:"}]
+                    "content": [{"type": "text", "text": "Question: \"What is the text written above the logo on the jacket's sleeve?\""}]
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '["jacket", "sleeve", "logo", "text"]'}]
+                    "content": [{"type": "text", "text": '{"anchors": ["jacket", "sleeve"], "target_element": "text above logo", "active_objects": ["jacket", "sleeve", "logo", "text"], "question_type": "relational_reading", "is_relational": true}'}]
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": f"Question: \"{question}\"\nExtract visual search entities as a JSON list:"}]
+                    "content": [{"type": "text", "text": "Question: \"How many windows are on the upper floor of the brick building?\""}]
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"anchors": ["brick building", "upper floor"], "target_element": "windows", "active_objects": ["brick building", "window"], "question_type": "counting", "is_relational": false}'}]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": f"Question: \"{question}\""}]
                 }
             ]
 
             few_shot_prompt = (
-                "You are an expert visual search assistant. Given a visual question, extract all key visual entities mentioned in the question. Always order physical host objects and landmarks FIRST, and abstract attributes (text, number, color, logo) LAST.\n\n"
+                "You are an expert visual search reasoning assistant. Given a visual question, analyze its structure and return a JSON object with 'anchors', 'target_element', 'active_objects', 'question_type', and 'is_relational'.\n\n"
                 "Examples:\n"
                 "Question: \"What is the relative position of the pink banner compared to the green trash bin?\"\n"
-                "Entities: [\"pink banner\", \"green trash bin\"]\n\n"
+                "JSON: {\"anchors\": [\"pink banner\", \"green trash bin\"], \"target_element\": \"relative position\", \"active_objects\": [\"pink banner\", \"green trash bin\"], \"question_type\": \"spatial_orientation\", \"is_relational\": true}\n\n"
                 "Question: \"Tell me the symbol on the black board above the dog.\"\n"
-                "Entities: [\"black board\", \"dog\", \"symbol\"]\n\n"
+                "JSON: {\"anchors\": [\"black board\", \"dog\"], \"target_element\": \"symbol\", \"active_objects\": [\"black board\", \"dog\", \"symbol\"], \"question_type\": \"relational_reading\", \"is_relational\": true}\n\n"
                 "Question: \"What is the number displayed above the entrance where the woman is standing?\"\n"
-                "Entities: [\"entrance\", \"woman\", \"number\"]\n\n"
+                "JSON: {\"anchors\": [\"entrance\", \"woman\"], \"target_element\": \"number displayed\", \"active_objects\": [\"entrance\", \"woman\", \"number\"], \"question_type\": \"relational_reading\", \"is_relational\": true}\n\n"
                 "Question: \"What is the text written above the logo on the jacket's sleeve?\"\n"
-                "Entities: [\"jacket\", \"sleeve\", \"logo\", \"text\"]\n\n"
-                f"Question: \"{question}\"\n"
-                "Entities:"
+                "JSON: {\"anchors\": [\"jacket\", \"sleeve\"], \"target_element\": \"text above logo\", \"active_objects\": [\"jacket\", \"sleeve\", \"logo\", \"text\"], \"question_type\": \"relational_reading\", \"is_relational\": true}\n\n"
+                "Question: \"How many windows are on the upper floor of the brick building?\"\n"
+                "JSON: {\"anchors\": [\"brick building\", \"upper floor\"], \"target_element\": \"windows\", \"active_objects\": [\"brick building\", \"window\"], \"question_type\": \"counting\", \"is_relational\": false}\n\n"
+                f"Question: \"{question}\"\nJSON:"
             )
 
             raw_text = ""
             if hasattr(zoom_model, "generate_text"):
                 try:
-                    raw_text = zoom_model.generate_text(mllm_messages, max_new_tokens=64)
+                    raw_text = zoom_model.generate_text(mllm_messages, max_new_tokens=96)
                 except Exception:
-                    # Fallback to string prompt if model does not support list of messages
-                    raw_text = zoom_model.generate_text(few_shot_prompt, max_new_tokens=64)
+                    raw_text = zoom_model.generate_text(few_shot_prompt, max_new_tokens=96)
             elif hasattr(zoom_model, "generate_response"):
-                raw_text = zoom_model.generate_response(image_pil=None, question=few_shot_prompt)
+                raw_text = zoom_model.generate_response(image_pil=None, question=few_shot_prompt, max_new_tokens=96)
 
             if verbose:
                 print(f"[Stage 1][Strategy 1] Raw MLLM output: {repr(raw_text)}")
 
-            parsed_cues = []
-            import json
-            import ast
-
-            # 1. First attempt: JSON or Python AST extraction on [ ... ]
-            json_match = re.search(r'\[.*?\]', raw_text, re.DOTALL)
-            if json_match:
-                block = json_match.group(0).strip()
+            # 1. Parse JSON dict object
+            dict_match = re.search(r'\{[\s\S]*?\}', raw_text)
+            if dict_match:
                 try:
-                    parsed_cues = json.loads(block)
-                except Exception as json_err:
+                    data = json.loads(dict_match.group(0))
+                except Exception:
                     try:
-                        parsed_cues = ast.literal_eval(block)
-                    except Exception as ast_err:
-                        if verbose:
-                            print(f"[Stage 1][Strategy 1 Debug] Bracket block parsing failed: JSON ({json_err}) | AST ({ast_err})")
+                        data = ast.literal_eval(dict_match.group(0))
+                    except Exception:
+                        data = None
 
-            # 2. Second attempt: Markdown bullet points or numbered lists
-            if not parsed_cues or not isinstance(parsed_cues, list):
+                if isinstance(data, dict):
+                    parsed_anchors = [str(a).strip().lower() for a in data.get("anchors", []) if str(a).strip()]
+                    parsed_target_element = str(data.get("target_element", "")).strip().lower()
+                    objs = data.get("active_objects", [])
+                    if isinstance(objs, list) and objs:
+                        raw_targets = [str(o).strip().lower() for o in objs if str(o).strip()]
+                    elif parsed_anchors:
+                        raw_targets = list(parsed_anchors)
+                        if parsed_target_element and parsed_target_element not in raw_targets:
+                            raw_targets.append(parsed_target_element)
+
+                    parsed_question_type = str(data.get("question_type", "general")).strip().lower()
+                    parsed_is_relational = bool(data.get("is_relational", False))
+                    extraction_strategy = "Strategy 1: MLLM Unified Semantic Parser (Non-Fallback)"
+
+            # 2. Fallback to bracket list [ ... ] if dict not matched
+            if not raw_targets:
+                json_match = re.search(r'\[.*?\]', raw_text, re.DOTALL)
+                if json_match:
+                    try:
+                        parsed_cues = json.loads(json_match.group(0).strip())
+                    except Exception:
+                        try:
+                            parsed_cues = ast.literal_eval(json_match.group(0).strip())
+                        except Exception:
+                            parsed_cues = []
+                    if isinstance(parsed_cues, list):
+                        raw_targets = [str(c).strip().lower() for c in parsed_cues if str(c).strip()]
+                        if raw_targets:
+                            extraction_strategy = "Strategy 1: MLLM Entity List Parser (Non-Fallback)"
+
+            # 3. Fallback to bullet lines
+            if not raw_targets:
                 bullet_lines = re.findall(r'(?:^|\n)\s*(?:[-*•]|\d+\.)\s*([^\n]+)', raw_text)
                 if bullet_lines:
-                    parsed_cues = [b.strip().strip('"\'') for b in bullet_lines if b.strip()]
-
-            # 3. Third attempt: Comma-separated list if quotes present
-            if not parsed_cues or not isinstance(parsed_cues, list):
-                quoted_tokens = re.findall(r'["\']([^"\']+)["\']', raw_text)
-                if quoted_tokens and len(quoted_tokens) <= 5:
-                    parsed_cues = quoted_tokens
-
-            # Process candidates
-            if isinstance(parsed_cues, list) and len(parsed_cues) > 0:
-                valid_items = [str(c).strip().lower() for c in parsed_cues if str(c).strip()]
-                if valid_items:
-                    raw_targets.extend(valid_items)
-                    extraction_strategy = "Strategy 1: MLLM Zero-Shot Text Generation (Non-Fallback)"
-                    if verbose:
-                        print(f"[Stage 1][Non-Fallback] MLLM successfully extracted anchor objects: {raw_targets}")
-                elif verbose:
-                    print(f"[Stage 1][Strategy 1 Warning] Parsed items were empty after cleaning: {parsed_cues}")
-            elif verbose:
-                print(f"[Stage 1][Strategy 1 Warning] Could not extract valid entity list from raw MLLM output: {repr(raw_text)}")
+                    raw_targets = [b.strip().strip('"\'').lower() for b in bullet_lines if b.strip()]
+                    if raw_targets:
+                        extraction_strategy = "Strategy 1: MLLM Bullet Parser (Non-Fallback)"
 
         except Exception as e:
             if verbose:
@@ -293,15 +379,48 @@ def parse_question_to_active_objects(
         extraction_strategy = "Strategy 4: Default Fallback ['object']"
         if verbose:
             print("[Stage 1][Ultimate Fallback] No targets extracted from question; defaulting to ['object'].")
-    else:
-        if enable_anchor_first:
-            clean_targets = reorder_anchor_first(clean_targets)
-        if verbose:
-            print(f"[Stage 1] Successfully parsed question into Active Object Set A_q: {clean_targets} via {extraction_strategy}")
+
+    if enable_anchor_first:
+        clean_targets = reorder_anchor_first(clean_targets)
+
+    # Derive anchors, question_type, and relational intent if not set by Strategy 1
+    if not parsed_anchors:
+        parsed_anchors = [t for t in clean_targets if t not in ABSTRACT_ATTRIBUTE_HEADS]
+    if not parsed_target_element and len(clean_targets) > len(parsed_anchors):
+        parsed_target_element = clean_targets[-1]
+    if extraction_strategy != "Strategy 1: MLLM Unified Semantic Parser (Non-Fallback)":
+        parsed_is_relational = detect_relational_intent(question)
+        q_lower = question.lower()
+        if parsed_is_relational:
+            parsed_question_type = "relational_reading" if any(w in q_lower for w in ["text", "word", "letter", "symbol", "number", "sign"]) else "spatial_orientation"
+        elif any(w in q_lower for w in ["how many", "count", "number of"]):
+            parsed_question_type = "counting"
+        elif any(w in q_lower for w in ["what color", "colour", "shape", "appearance"]):
+            parsed_question_type = "fine_grained_attribute"
+        else:
+            parsed_question_type = "general"
+
+    parsed_question = ParsedQuestion(
+        active_objects=clean_targets,
+        anchors=parsed_anchors,
+        target_element=parsed_target_element,
+        question_type=parsed_question_type,
+        is_relational=parsed_is_relational,
+        strategy=extraction_strategy,
+        raw_response=raw_text
+    )
+
+    if verbose:
+        print(f"[Stage 1] Unified Question Parsing Complete via {extraction_strategy}:")
+        print(f"  • Question Type  : {parsed_question.question_type}")
+        print(f"  • Relational Flag: {parsed_question.is_relational}")
+        print(f"  • Physical Anchor: {parsed_question.anchors}")
+        print(f"  • Target Element : '{parsed_question.target_element}'")
+        print(f"  • Active Targets : {parsed_question.active_objects}")
 
     if return_strategy:
-        return clean_targets, extraction_strategy
-    return clean_targets
+        return parsed_question, extraction_strategy
+    return parsed_question
 
 
 # Backward-compatible alias

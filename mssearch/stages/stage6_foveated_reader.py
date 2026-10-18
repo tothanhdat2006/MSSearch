@@ -213,6 +213,7 @@ def run_foveated_vlm_reading(
     zoom_model,
     config: MSSearchConfig,
     is_relational: Optional[bool] = None,
+    question_type: Optional[str] = None,
     **kwargs
 ) -> FinalSearchResult:
     """
@@ -362,7 +363,8 @@ def run_foveated_vlm_reading(
             "final_answer": final_ans,
             "is_evidence": is_ev,
             "source_branch": item.source_branch,
-            "is_dual_scale": is_relational
+            "is_dual_scale": is_relational,
+            "question_type": question_type
         })
 
         if is_ev:

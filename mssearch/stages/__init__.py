@@ -2,7 +2,13 @@
 Modular stages for the Dual-Path Multi-Source Visual Search Engine (MSSearch).
 """
 
-from .stage1_parser import parse_question_to_active_objects, parse_question_for_active_objects
+from .stage1_parser import (
+    parse_question_to_active_objects,
+    parse_question_for_active_objects,
+    ParsedQuestion,
+    detect_relational_intent,
+    reorder_anchor_first
+)
 from .stage2_fast_path import (
     run_direct_global_assessment,
     DirectAnswerResult,
@@ -27,6 +33,9 @@ __all__ = [
     "DirectAnswerResult",
     "parse_question_to_active_objects",
     "parse_question_for_active_objects",
+    "ParsedQuestion",
+    "detect_relational_intent",
+    "reorder_anchor_first",
     "run_tool_based_fast_path",
     "run_fast_path_check",
     "FastPathResult",
