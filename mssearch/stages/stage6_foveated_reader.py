@@ -210,7 +210,9 @@ def run_foveated_vlm_reading(
     candidate_images: List[Image.Image],
     question: str,
     zoom_model,
-    config: MSSearchConfig
+    config: MSSearchConfig,
+    is_relational: Optional[bool] = None,
+    **kwargs
 ) -> FinalSearchResult:
     """
     Executes Foveated VLM Reading with 1.25x padding and builds Answer Memory M.
@@ -222,6 +224,14 @@ def run_foveated_vlm_reading(
 
     if config.verbose:
         print(f"[Stage 6] Commencing exhaustive foveated reading across {len(unified_pool)} candidate crops (1.25x bbox expansion)...")
+
+    # Determine relational intent if not explicitly passed
+    if is_relational is None:
+        if getattr(config, "enable_query_adaptive_dual_scale", True):
+            from .stage1_parser import detect_relational_intent
+            is_relational = detect_relational_intent(question)
+        else:
+            is_relational = False
 
     for c_idx, item in enumerate(unified_pool):
         img_idx = item.img_idx
@@ -260,11 +270,6 @@ def run_foveated_vlm_reading(
 
         # Query-Adaptive Dual-Scale Context:
         # If question queries spatial relations or orientation, provide [Global with BBox, Local Zoomed Crop]
-        is_relational = False
-        if getattr(config, "enable_query_adaptive_dual_scale", True):
-            from .stage1_parser import detect_relational_intent
-            is_relational = detect_relational_intent(question)
-
         vlm_image_input: Union[Image.Image, List[Image.Image]] = vlm_input_crop
         if is_relational:
             # Annotate focus box on global image
