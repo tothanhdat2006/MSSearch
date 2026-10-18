@@ -400,3 +400,53 @@ def parse_question_to_active_objects(
 # Backward-compatible alias
 parse_question_for_active_objects = parse_question_to_active_objects
 
+
+def format_options(options_obj: Any, cycle_idx: int = 0) -> str:
+    """
+    Standardizes options from dictionary, cycle list, single list, or string format
+    into a clean newline-delimited options string block (e.g. A. option1\nB. option2).
+    """
+    if not options_obj:
+        return ""
+    if isinstance(options_obj, dict):
+        lines = [f"{k}. {v}" for k, v in sorted(options_obj.items())]
+        return "\n".join(lines)
+    elif isinstance(options_obj, list):
+        if len(options_obj) > 0 and isinstance(options_obj[0], str) and ('\n' in options_obj[0] or options_obj[0].strip().startswith("A.") or options_obj[0].strip().startswith("A:")):
+            idx = cycle_idx if (0 <= cycle_idx < len(options_obj)) else 0
+            return options_obj[idx].strip()
+        letters = ["A", "B", "C", "D", "E", "F"]
+        lines = []
+        for i, opt in enumerate(options_obj):
+            prefix = f"{letters[i]}. " if i < len(letters) else f"{i+1}. "
+            opt_clean = str(opt).strip()
+            if re.match(r"^[\(\[]?[A-Fa-f][\)\.:]\s*", opt_clean):
+                lines.append(opt_clean)
+            else:
+                lines.append(f"{prefix}{opt_clean}")
+        return "\n".join(lines)
+    elif isinstance(options_obj, str):
+        return options_obj.strip()
+    return ""
+
+
+def format_question_with_options(question: str, options: Any = None, cycle_idx: int = 0) -> str:
+    """
+    Formats question with candidate options for multiple-choice prompting,
+    matching CVSearch format_question_new / format_question standard.
+    If options is None or empty, returns original question unchanged.
+    """
+    if not options:
+        return question
+
+    opt_str = format_options(options, cycle_idx=cycle_idx)
+    if not opt_str:
+        return question
+
+    return (
+        f"{question}\n\n"
+        f"Options:\n{opt_str}\n\n"
+        f"Select the best answer to the above multiple-choice question based on the image. "
+        f"Respond with the option letter and concise answer text."
+    )
+

@@ -7,7 +7,9 @@ from .stage1_parser import (
     parse_question_for_active_objects,
     ParsedQuestion,
     detect_relational_intent,
-    reorder_anchor_first
+    reorder_anchor_first,
+    format_options,
+    format_question_with_options
 )
 from .stage2_fast_path import (
     run_direct_global_assessment,
@@ -36,6 +38,8 @@ __all__ = [
     "ParsedQuestion",
     "detect_relational_intent",
     "reorder_anchor_first",
+    "format_options",
+    "format_question_with_options",
     "run_tool_based_fast_path",
     "run_fast_path_check",
     "FastPathResult",

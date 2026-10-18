@@ -101,6 +101,12 @@ class MSSearchConfig:
     answer_dedup_similarity: float = 0.85        # Semantic deduplication threshold
 
     # -------------------------------------------------------------------------
+    # Multiple-Choice & Options Prompting Flag (e.g. HRBench)
+    # -------------------------------------------------------------------------
+    include_options_in_prompt: bool = False      # If True, appends candidate options block to reading prompt (like CVSearch option_single); if False, operates in open-ended free_form mode
+    answer_type: str = "free_form"               # "free_form" (default) or "option_single" / "multiple_choice"
+
+    # -------------------------------------------------------------------------
     # Diagnostic & Debug Logging
     # -------------------------------------------------------------------------
     verbose: bool = True                         # Print clear debug logs on fallback / non-fallback decisions

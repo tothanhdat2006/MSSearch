@@ -20,6 +20,7 @@ import numpy as np
 from .config import MSSearchConfig
 from .stages import (
     parse_question_to_active_objects,
+    format_question_with_options,
     run_direct_global_assessment,
     DirectAnswerResult,
     run_tool_based_fast_path,
@@ -55,16 +56,35 @@ class MultiSourceSearchEngine:
         self,
         candidate_images: List[Image.Image],
         question: str,
+        options: Optional[Any] = None,
+        cycle_idx: int = 0,
         ic_examples: Optional[dict] = None
     ) -> Dict[str, Any]:
         """
         Executes end-to-end multi-source visual search across N images.
         """
         t_start = time.perf_counter()
+
+        # Determine whether candidate options should be added to the VLM reading prompt
+        # (Controlled by config.include_options_in_prompt or config.answer_type != "free_form")
+        should_add_options = (
+            getattr(self.config, "include_options_in_prompt", False) or
+            getattr(self.config, "answer_type", "free_form") in ["option_single", "multiple_choice", "mc", "Multiple Choice"]
+        )
+        if should_add_options and options:
+            reading_question = format_question_with_options(question, options, cycle_idx=cycle_idx)
+            if self.config.verbose:
+                print(f"[MSSearch] Options Prompting ACTIVE ({getattr(self.config, 'answer_type', 'option_single')}): Candidate options appended to reading prompt.")
+        else:
+            reading_question = question
+            if self.config.verbose:
+                print(f"[MSSearch] Free-form mode ACTIVE: Prompt will NOT contain candidate options.")
+
         if self.config.verbose:
             print(f"\n[MSSearch] ====================================================================")
             print(f"[MSSearch] Starting Multi-Source Visual Search across {len(candidate_images)} candidate images.")
-            print(f"[MSSearch] Question: '{question}'")
+            print(f"[MSSearch] Base Question: '{question}'")
+            print(f"[MSSearch] Options Flag: include_options_in_prompt={should_add_options} (answer_type='{getattr(self.config, 'answer_type', 'free_form')}')")
             print(f"[MSSearch] Direct Answer Enabled: {getattr(self.config, 'enable_direct_answer', True)} (Threshold: {getattr(self.config, 'direct_answer_conf_threshold', 0.60)})")
             print(f"[MSSearch] Fast Path Enabled: {self.config.enable_fast_path} (Threshold: {self.config.fast_path_conf_threshold}) | Partition Mode: {self.config.partition_mode}")
             print(f"[MSSearch] ====================================================================")
@@ -72,7 +92,10 @@ class MultiSourceSearchEngine:
         telemetry: Dict[str, Any] = {
             "num_candidate_images": len(candidate_images),
             "stages_executed": [],
-            "timings_sec": {}
+            "timings_sec": {},
+            "include_options_in_prompt": should_add_options,
+            "answer_type": getattr(self.config, "answer_type", "free_form"),
+            "options_available": bool(options)
         }
 
         # ---------------------------------------------------------------------
@@ -82,7 +105,7 @@ class MultiSourceSearchEngine:
             t0 = time.perf_counter()
             direct_result: DirectAnswerResult = run_direct_global_assessment(
                 candidate_images=candidate_images,
-                question=question,
+                question=reading_question,
                 zoom_model=self.zoom_model,
                 config=self.config
             )
@@ -136,7 +159,7 @@ class MultiSourceSearchEngine:
         fast_path_result: FastPathResult = run_tool_based_fast_path(
             candidate_images=candidate_images,
             active_objects=active_objects,
-            question=question,
+            question=reading_question,
             sam_model=self.sam_model,
             zoom_model=self.zoom_model,
             config=self.config
@@ -234,7 +257,7 @@ class MultiSourceSearchEngine:
         final_result: FinalSearchResult = run_foveated_vlm_reading(
             unified_pool=unified_pool,
             candidate_images=candidate_images,
-            question=question,
+            question=reading_question,
             zoom_model=self.zoom_model,
             config=self.config,
             is_relational=is_relational,
@@ -309,8 +332,27 @@ def get_mssearch_response(
         config=config
     )
     question = annotation.get('question', '')
+    options = annotation.get('options', None)
+    cycle_idx = annotation.get('cycle_category', 0)
+    try:
+        cycle_idx = int(cycle_idx)
+    except Exception:
+        cycle_idx = 0
+
+    # Respect annotation['answer_type'] if specified (aligned with CVSearch perform_CVSearch.py)
+    if 'answer_type' in annotation and engine.config is not None:
+        anno_type = annotation['answer_type']
+        if anno_type in ["option_single", "multiple_choice", "mc", "Multiple Choice"]:
+            engine.config.include_options_in_prompt = True
+            engine.config.answer_type = anno_type
+        elif anno_type == "free_form":
+            engine.config.include_options_in_prompt = False
+            engine.config.answer_type = "free_form"
+
     return engine.search(
         candidate_images=candidate_images,
         question=question,
+        options=options,
+        cycle_idx=cycle_idx,
         ic_examples=ic_examples
     )

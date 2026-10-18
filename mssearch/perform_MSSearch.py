@@ -75,6 +75,11 @@ def main():
     parser.add_argument("--max-plateau-size", type=int, default=1536, help="Scale ceiling for saliency plateau stopping (GPU safety)")
     parser.add_argument("--saliency-plateau-gain-threshold", type=float, default=0.04, help="Minimum saliency gain required to descend deeper")
     parser.add_argument("--bbox-expansion-factor", type=float, default=1.25)
+    parser.add_argument("--answer-type", "--answer_type", dest="answer_type", type=str, default="free_form",
+                        choices=["free_form", "option_single", "multiple_choice", "mc"],
+                        help="Prompt answer format: 'free_form' (default open-ended prompt without options) or 'option_single' / 'multiple_choice' (appends candidate options)")
+    parser.add_argument("--include-options-in-prompt", "--add-options-to-prompt", dest="include_options_in_prompt", action="store_true",
+                        help="Explicit flag to include options in the reading prompt (equivalent to --answer-type option_single)")
     parser.add_argument("--verbose", action="store_true", default=True, help="Enable verbose debug logging on fallback/non-fallback decisions")
     parser.add_argument("--quiet", action="store_true", help="Silence verbose debug logging")
 
@@ -90,6 +95,9 @@ def main():
     print(f"[MSSearch] Destination file: {args.answers_file}")
 
     # Build typed configuration dataclass
+    opt_in_prompt = args.include_options_in_prompt or (args.answer_type in ["option_single", "multiple_choice", "mc"])
+    chosen_answer_type = "option_single" if args.include_options_in_prompt and args.answer_type == "free_form" else args.answer_type
+
     config = MSSearchConfig(
         enable_direct_answer=not args.disable_direct_answer,
         direct_answer_conf_threshold=args.direct_answer_threshold,
@@ -108,6 +116,8 @@ def main():
         max_plateau_size=args.max_plateau_size,
         saliency_plateau_gain_threshold=args.saliency_plateau_gain_threshold,
         bbox_expansion_factor=args.bbox_expansion_factor,
+        include_options_in_prompt=opt_in_prompt,
+        answer_type=chosen_answer_type,
         siglip_model_name=args.siglip_model_name,
         verbose=is_verbose
     )
@@ -176,6 +186,11 @@ def main():
             if not candidate_images:
                 print(f"[MSSearch] Warning: No candidate images found on disk for sample {anno.get('id', idx)}!")
                 continue
+
+            if chosen_answer_type != "free_form":
+                anno['answer_type'] = chosen_answer_type
+            elif 'answer_type' not in anno:
+                anno['answer_type'] = 'free_form'
 
             resp = get_mssearch_response(
                 sam_model=sam3,
