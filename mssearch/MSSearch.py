@@ -118,11 +118,14 @@ class MultiSourceSearchEngine:
                 telemetry["evidence_images"] = [direct_result.evidence_img_idx]
                 telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
                 img_w, img_h = candidate_images[direct_result.evidence_img_idx].size
+                stage6_patch_boxes = [[0, 0, int(img_w), int(img_h)]]
+                telemetry["stage6_patch_boxes"] = stage6_patch_boxes
                 return {
                     "answers": [direct_result.answer],
                     "primary_answer": direct_result.answer,
                     "raw_vlm_response": direct_result.raw_response,
                     "evidence_images": [direct_result.evidence_img_idx],
+                    "stage6_patch_boxes": stage6_patch_boxes,
                     "extractions": [
                         {
                             "img_idx": direct_result.evidence_img_idx,
@@ -175,11 +178,14 @@ class MultiSourceSearchEngine:
             telemetry["fast_path_confidence"] = fast_path_result.confidence
             telemetry["evidence_images"] = [fast_path_result.evidence_img_idx]
             telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
+            stage6_patch_boxes = [list(map(int, b)) for b in fast_path_result.detected_boxes] if fast_path_result.detected_boxes else []
+            telemetry["stage6_patch_boxes"] = stage6_patch_boxes
             return {
                 "answers": [fast_path_result.answer],
                 "primary_answer": fast_path_result.answer,
                 "raw_vlm_response": fast_path_result.raw_response or fast_path_result.answer,
                 "evidence_images": [fast_path_result.evidence_img_idx],
+                "stage6_patch_boxes": stage6_patch_boxes,
                 "extractions": [
                     {
                         "img_idx": fast_path_result.evidence_img_idx,
@@ -267,6 +273,8 @@ class MultiSourceSearchEngine:
         )
         telemetry["timings_sec"]["stage6_reading"] = round(time.perf_counter() - t0, 3)
         telemetry["evidence_images"] = final_result.evidence_image_indices
+        stage6_patch_boxes = [list(map(int, c.box)) for c in unified_pool]
+        telemetry["stage6_patch_boxes"] = stage6_patch_boxes
         telemetry["stage6_crops"] = getattr(final_result, "crop_records", [])
         telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
         telemetry["stages_executed"].append("stage6_foveated_reading")
@@ -298,6 +306,7 @@ class MultiSourceSearchEngine:
             "primary_answer": primary_answer,
             "raw_vlm_response": raw_vlm_resp,
             "evidence_images": final_result.evidence_image_indices,
+            "stage6_patch_boxes": stage6_patch_boxes,
             "extractions": [
                 {
                     "img_idx": e.img_idx,
