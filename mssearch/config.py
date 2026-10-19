@@ -85,13 +85,6 @@ class MSSearchConfig:
     max_retained_patches: int = 16               # Global upper bound on candidate patches pool
     retention_ranking_metric: str = "confidence_hybrid"  # "confidence_hybrid", "entropy", "detection_first"
 
-    def __post_init__(self):
-        # Synchronize max_latent_evals and max_latent_eval_groups if one was explicitly overridden
-        if self.max_latent_evals != 8 and self.max_latent_eval_groups == 8:
-            self.max_latent_eval_groups = self.max_latent_evals
-        elif self.max_latent_eval_groups != 8 and self.max_latent_evals == 8:
-            self.max_latent_evals = self.max_latent_eval_groups
-
     # -------------------------------------------------------------------------
     # Stage 5: Direct Unified Candidate Pool Aggregation
     # -------------------------------------------------------------------------
@@ -119,6 +112,24 @@ class MSSearchConfig:
     answer_type: str = "free_form"               # "free_form" (default) or "option_single" / "multiple_choice"
 
     # -------------------------------------------------------------------------
+    # Multi-Source / Multi-Answer Configuration (Annotation Charter Standard)
+    # -------------------------------------------------------------------------
+    multi_answer_mode: bool = False              # If True, enables multi-source open-set answering (K>=1, N>=1): disables Stage 6 early consensus exit and aggregates all unique answers into semicolon-separated text
+    scale_budgets_by_num_images: bool = True     # If True, scales Stage 4 SAM3 patch scans, latent evaluations, and retention caps linearly by N candidate images
+
+    def __post_init__(self):
+        # Synchronize max_latent_evals and max_latent_eval_groups if one was explicitly overridden
+        if self.max_latent_evals != 8 and self.max_latent_eval_groups == 8:
+            self.max_latent_eval_groups = self.max_latent_evals
+        elif self.max_latent_eval_groups != 8 and self.max_latent_evals == 8:
+            self.max_latent_evals = self.max_latent_eval_groups
+
+        # In multi-answer mode, disable early consensus exit to read all evidence crops across N images
+        if self.multi_answer_mode:
+            self.enable_early_consensus_exit = False
+
+    # -------------------------------------------------------------------------
     # Diagnostic & Debug Logging
     # -------------------------------------------------------------------------
     verbose: bool = True                         # Print clear debug logs on fallback / non-fallback decisions
+

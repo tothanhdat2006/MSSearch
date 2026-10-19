@@ -25,6 +25,8 @@ class DirectAnswerResult:
     raw_response: Optional[str] = None
     confidence: float = 0.0
     evidence_img_idx: Optional[int] = None
+    answers: List[str] = field(default_factory=list)
+    evidence_images: List[int] = field(default_factory=list)
 
 
 @dataclass
@@ -38,6 +40,8 @@ class FastPathResult:
     detected_boxes: List[Tuple[int, int, int, int]] = field(default_factory=list)
     # Caches dense SAM3 feature maps {img_idx: np.ndarray [C, H_f, W_f]} for zero-overhead reuse in Stage 3
     feature_cache: Dict[int, np.ndarray] = field(default_factory=dict)
+    answers: List[str] = field(default_factory=list)
+    evidence_images: List[int] = field(default_factory=list)
 
 
 def compute_composite_bbox(
@@ -160,6 +164,8 @@ def run_direct_global_assessment(
 
     from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer
 
+    collected_direct: List[Dict[str, Any]] = []
+
     for img_idx, img_pil in enumerate(candidate_images):
         # 1. Probe answering confidence c_q on the root view (clamped to 1024px for safety)
         conf = 0.0
@@ -210,6 +216,17 @@ def run_direct_global_assessment(
                     print(f"[Phase 1][Direct Answer Refusal] Global response was uninformative ('{raw_answer}'); bypassing Phase 1.")
                 continue
 
+            if getattr(config, "multi_answer_mode", False) and len(candidate_images) > 1:
+                if config.verbose:
+                    print(f"[Phase 1][Direct Answer Multi-Hit] Confirmed on image {img_idx} (conf={conf:.3f}): '{final_ans}'. Continuing scan for remaining candidate images...")
+                collected_direct.append({
+                    "answer": final_ans,
+                    "raw_response": raw_answer,
+                    "confidence": conf,
+                    "img_idx": img_idx
+                })
+                continue
+
             if config.verbose:
                 print(f"[Phase 1][Direct Answer Triggered] Confirmed on image {img_idx} (conf={conf:.3f}): '{final_ans}'. Bypassing all deep search stages!")
             return DirectAnswerResult(
@@ -217,8 +234,28 @@ def run_direct_global_assessment(
                 answer=final_ans,
                 raw_response=raw_answer,
                 confidence=conf,
-                evidence_img_idx=img_idx
+                evidence_img_idx=img_idx,
+                answers=[final_ans],
+                evidence_images=[img_idx]
             )
+
+    if getattr(config, "multi_answer_mode", False) and collected_direct:
+        ans_list = [r["answer"] for r in collected_direct]
+        ev_imgs = [r["img_idx"] for r in collected_direct]
+        raw_resps = [r["raw_response"] for r in collected_direct]
+        max_c = max(r["confidence"] for r in collected_direct)
+        combined_ans = "; ".join(ans_list)
+        if config.verbose:
+            print(f"[Phase 1][Direct Answer Multi-Complete] Found {len(ans_list)} direct answers across images {ev_imgs}: '{combined_ans}'.")
+        return DirectAnswerResult(
+            triggered=True,
+            answer=combined_ans,
+            raw_response="\n---\n".join(raw_resps),
+            confidence=max_c,
+            evidence_img_idx=ev_imgs[0],
+            answers=ans_list,
+            evidence_images=ev_imgs
+        )
 
     return DirectAnswerResult(triggered=False)
 
@@ -243,6 +280,8 @@ def run_tool_based_fast_path(
 
     if config.verbose:
         print(f"[Stage 2] Scanning {len(candidate_images)} candidate images for Active Objects {active_objects} (Fast Path Threshold: {config.fast_path_conf_threshold})...")
+
+    collected_fp: List[Dict[str, Any]] = []
 
     for img_idx, img_pil in enumerate(candidate_images):
         img_w, img_h = img_pil.size
@@ -372,6 +411,18 @@ def run_tool_based_fast_path(
                     print(f"[Stage 2][Negative Fast Path] Fast path answer was uninformative/refusal ('{answer_text}'); bypassing fast path.")
                 continue
 
+            if getattr(config, "multi_answer_mode", False) and len(candidate_images) > 1:
+                if config.verbose:
+                    print(f"[Stage 2][Fast Path Multi-Hit] Confirmed on image {img_idx} (conf={existence_conf:.3f}): '{final_ans}'. Continuing scan for remaining candidate images...")
+                collected_fp.append({
+                    "answer": final_ans,
+                    "raw_response": answer_text,
+                    "img_idx": img_idx,
+                    "confidence": float(existence_conf),
+                    "boxes": matched_boxes_by_obj
+                })
+                continue
+
             if config.verbose:
                 print(f"[Stage 2][Non-Fallback Early Exit] Instant answer confirmed on image {img_idx}: '{final_ans}'. Exiting in 1 step!")
             return FastPathResult(
@@ -381,11 +432,34 @@ def run_tool_based_fast_path(
                 evidence_img_idx=img_idx,
                 confidence=float(existence_conf),
                 detected_boxes=matched_boxes_by_obj,
-                feature_cache=feature_cache
+                feature_cache=feature_cache,
+                answers=[final_ans],
+                evidence_images=[img_idx]
             )
         else:
             if config.verbose:
                 print(f"[Stage 2][Fallback Trigger] Existence confidence {existence_conf:.3f} did not exceed {config.fast_path_conf_threshold:.2f}; falling back from instant exit.")
+
+    if getattr(config, "multi_answer_mode", False) and collected_fp:
+        ans_list = [r["answer"] for r in collected_fp]
+        ev_imgs = [r["img_idx"] for r in collected_fp]
+        raw_resps = [r["raw_response"] for r in collected_fp]
+        all_boxes = [b for r in collected_fp for b in r["boxes"]]
+        max_c = max(r["confidence"] for r in collected_fp)
+        combined_ans = "; ".join(ans_list)
+        if config.verbose:
+            print(f"[Stage 2][Fast Path Multi-Complete] Found {len(ans_list)} fast path answers across images {ev_imgs}: '{combined_ans}'.")
+        return FastPathResult(
+            triggered=True,
+            answer=combined_ans,
+            raw_response="\n---\n".join(raw_resps),
+            evidence_img_idx=ev_imgs[0],
+            confidence=max_c,
+            detected_boxes=all_boxes,
+            feature_cache=feature_cache,
+            answers=ans_list,
+            evidence_images=ev_imgs
+        )
 
     if config.verbose:
         print(f"[Stage 2][Fallback to Stage 3] Fast Path did not trigger across all candidate images. Switching to Visual Search Branch. (Cached {len(feature_cache)} feature maps).")

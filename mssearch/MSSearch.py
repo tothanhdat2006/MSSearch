@@ -87,7 +87,26 @@ class MultiSourceSearchEngine:
             print(f"[MSSearch] Options Flag: include_options_in_prompt={should_add_options} (answer_type='{getattr(self.config, 'answer_type', 'free_form')}')")
             print(f"[MSSearch] Direct Answer Enabled: {getattr(self.config, 'enable_direct_answer', True)} (Threshold: {getattr(self.config, 'direct_answer_conf_threshold', 0.60)})")
             print(f"[MSSearch] Fast Path Enabled: {self.config.enable_fast_path} (Threshold: {self.config.fast_path_conf_threshold}) | Partition Mode: {self.config.partition_mode}")
+            print(f"[MSSearch] Multi-Answer Mode: {getattr(self.config, 'multi_answer_mode', False)}")
             print(f"[MSSearch] ====================================================================")
+
+        # ---------------------------------------------------------------------
+        # Multi-Source Budget Scaling & Early Exit Configuration
+        # ---------------------------------------------------------------------
+        n_candidates = len(candidate_images)
+        if getattr(self.config, "scale_budgets_by_num_images", True) and n_candidates > 1:
+            base_sam3 = getattr(self.config, "max_sam3_eval_patches", 16)
+            base_latent = getattr(self.config, "max_latent_evals", 8)
+            base_retained = getattr(self.config, "max_retained_patches", 16)
+            self.config.max_sam3_eval_patches = base_sam3 * n_candidates
+            self.config.max_latent_evals = base_latent * n_candidates
+            self.config.max_latent_eval_groups = self.config.max_latent_evals
+            self.config.max_retained_patches = base_retained * n_candidates
+            if self.config.verbose:
+                print(f"[MSSearch] Scaled budgets by N={n_candidates}: max_sam3={self.config.max_sam3_eval_patches}, max_latent={self.config.max_latent_evals}, max_retained={self.config.max_retained_patches}")
+
+        if getattr(self.config, "multi_answer_mode", False):
+            self.config.enable_early_consensus_exit = False
 
         telemetry: Dict[str, Any] = {
             "num_candidate_images": len(candidate_images),
@@ -95,7 +114,8 @@ class MultiSourceSearchEngine:
             "timings_sec": {},
             "include_options_in_prompt": should_add_options,
             "answer_type": getattr(self.config, "answer_type", "free_form"),
-            "options_available": bool(options)
+            "options_available": bool(options),
+            "multi_answer_mode": getattr(self.config, "multi_answer_mode", False)
         }
 
         # ---------------------------------------------------------------------
@@ -115,26 +135,31 @@ class MultiSourceSearchEngine:
             if direct_result.triggered:
                 telemetry["route"] = "direct_global_answer"
                 telemetry["direct_answer_confidence"] = direct_result.confidence
-                telemetry["evidence_images"] = [direct_result.evidence_img_idx]
+                ev_imgs = direct_result.evidence_images if direct_result.evidence_images else [direct_result.evidence_img_idx]
+                telemetry["evidence_images"] = ev_imgs
                 telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
-                img_w, img_h = candidate_images[direct_result.evidence_img_idx].size
-                stage6_patch_boxes = [[0, 0, int(img_w), int(img_h)]]
+                stage6_patch_boxes = [
+                    [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])]
+                    for idx in ev_imgs
+                ]
                 telemetry["stage6_patch_boxes"] = stage6_patch_boxes
+                ans_list = direct_result.answers if direct_result.answers else [direct_result.answer]
                 return {
-                    "answers": [direct_result.answer],
+                    "answers": ans_list,
                     "primary_answer": direct_result.answer,
                     "raw_vlm_response": direct_result.raw_response,
-                    "evidence_images": [direct_result.evidence_img_idx],
+                    "evidence_images": ev_imgs,
                     "stage6_patch_boxes": stage6_patch_boxes,
                     "extractions": [
                         {
-                            "img_idx": direct_result.evidence_img_idx,
-                            "box": [0, 0, img_w, img_h],
-                            "expanded_box": [0, 0, img_w, img_h],
+                            "img_idx": idx,
+                            "box": [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])],
+                            "expanded_box": [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])],
                             "raw_answer": direct_result.raw_response,
                             "final_answer": direct_result.answer,
                             "source_branch": "Direct Global Answer"
                         }
+                        for idx in ev_imgs
                     ],
                     "telemetry": telemetry
                 }
@@ -176,19 +201,21 @@ class MultiSourceSearchEngine:
             # Early exit: answer confirmed in 1 step!
             telemetry["route"] = "tool_based_fast_path"
             telemetry["fast_path_confidence"] = fast_path_result.confidence
-            telemetry["evidence_images"] = [fast_path_result.evidence_img_idx]
+            ev_imgs = fast_path_result.evidence_images if fast_path_result.evidence_images else [fast_path_result.evidence_img_idx]
+            telemetry["evidence_images"] = ev_imgs
             telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
             stage6_patch_boxes = [list(map(int, b)) for b in fast_path_result.detected_boxes] if fast_path_result.detected_boxes else []
             telemetry["stage6_patch_boxes"] = stage6_patch_boxes
+            ans_list = fast_path_result.answers if fast_path_result.answers else [fast_path_result.answer]
             return {
-                "answers": [fast_path_result.answer],
+                "answers": ans_list,
                 "primary_answer": fast_path_result.answer,
                 "raw_vlm_response": fast_path_result.raw_response or fast_path_result.answer,
-                "evidence_images": [fast_path_result.evidence_img_idx],
+                "evidence_images": ev_imgs,
                 "stage6_patch_boxes": stage6_patch_boxes,
                 "extractions": [
                     {
-                        "img_idx": fast_path_result.evidence_img_idx,
+                        "img_idx": ev_imgs[0] if ev_imgs else 0,
                         "box": list(fast_path_result.detected_boxes[0]) if fast_path_result.detected_boxes else [0, 0, 100, 100],
                         "expanded_box": list(fast_path_result.detected_boxes[0]) if fast_path_result.detected_boxes else [0, 0, 100, 100],
                         "raw_answer": fast_path_result.raw_response or fast_path_result.answer,
@@ -284,25 +311,29 @@ class MultiSourceSearchEngine:
         informative_answers = [
             a for a in final_result.answers if not is_negative_or_unanswerable(a)
         ]
+        is_multi = getattr(self.config, "multi_answer_mode", False)
         if informative_answers:
-            primary_answer = informative_answers[0]
+            primary_answer = "; ".join(informative_answers) if is_multi else informative_answers[0]
+            answers_out = informative_answers
         elif final_result.answers:
-            primary_answer = final_result.answers[0]
+            primary_answer = "; ".join(final_result.answers) if is_multi else final_result.answers[0]
+            answers_out = final_result.answers
         else:
             primary_answer = "No answer found"
+            answers_out = []
 
         # Find the raw VLM response corresponding to the primary answer
         raw_vlm_resp = None
         for e in final_result.extractions:
             cand_clean = e.final_answer if e.final_answer else e.raw_answer
-            if cand_clean == primary_answer:
+            if cand_clean in informative_answers or cand_clean == primary_answer:
                 raw_vlm_resp = e.raw_answer
                 break
         if raw_vlm_resp is None and final_result.extractions:
             raw_vlm_resp = final_result.extractions[0].raw_answer
 
         return {
-            "answers": final_result.answers,
+            "answers": answers_out,
             "primary_answer": primary_answer,
             "raw_vlm_response": raw_vlm_resp,
             "evidence_images": final_result.evidence_image_indices,
