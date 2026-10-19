@@ -201,11 +201,16 @@ def run_direct_global_assessment(
             if getattr(config, "prompt_directed_final_answer", True):
                 prompt = (
                     f"{question}\n\n"
-                    "Answer the question concisely. Conclude your response with:\n"
+                    "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
+                    "Final Answer: None\n\n"
+                    "Otherwise, answer the question concisely. Conclude your response with:\n"
                     "Final Answer: <concise answer>"
                 )
             else:
-                prompt = question
+                prompt = (
+                    f"{question}\n\n"
+                    "If the target object or requested text/information is NOT clearly visible in this crop, output: Final Answer: None"
+                )
 
             raw_answer = _query_vlm_response(zoom_model, img_pil, prompt, max_new_tokens=getattr(config, "max_vlm_tokens", 128))
             final_ans = extract_final_answer(raw_answer) if getattr(config, "prompt_directed_final_answer", True) else raw_answer
@@ -400,11 +405,16 @@ def run_tool_based_fast_path(
             if getattr(config, "prompt_directed_final_answer", True):
                 answer_prompt = (
                     f"{question}{text_coords_hint}\n\n"
-                    "Answer the question concisely. Conclude your response with:\n"
+                    "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
+                    "Final Answer: None\n\n"
+                    "Otherwise, answer the question concisely. Conclude your response with:\n"
                     "Final Answer: <concise answer>"
                 )
             else:
-                answer_prompt = f"{question}{text_coords_hint}"
+                answer_prompt = (
+                    f"{question}{text_coords_hint}\n\n"
+                    "If the target object or requested text/information is NOT clearly visible in this crop, output: Final Answer: None"
+                )
             answer_text = _query_vlm_response(zoom_model, vlm_crop, answer_prompt, max_new_tokens=config.max_vlm_tokens)
 
             from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer

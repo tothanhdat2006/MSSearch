@@ -302,23 +302,26 @@ def run_foveated_vlm_reading(
         if getattr(config, "prompt_directed_final_answer", True):
             if is_relational:
                 prompt = (
-                    f"{question}{text_coords_hint}\n"
+                    f"{question}{text_coords_hint}\n\n"
                     "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
-                    "If the target object or requested text/information is NOT clearly visible in this focal region, output:\n"
+                    "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
                     "Final Answer: None\n\n"
                     "Otherwise, answer concisely based strictly on what is visible in the focal region, concluding with:\n"
                     "Final Answer: <concise answer>"
                 )
             else:
                 prompt = (
-                    f"{question}{text_coords_hint}\n"
+                    f"{question}{text_coords_hint}\n\n"
                     "Carefully inspect this crop. If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
                     "Final Answer: None\n\n"
                     "Otherwise, answer concisely based strictly on what is visible in this crop, concluding with:\n"
                     "Final Answer: <concise answer>"
                 )
         else:
-            prompt = f"{question}{text_coords_hint}"
+            prompt = (
+                f"{question}{text_coords_hint}\n\n"
+                "If the target object or requested text/information is NOT clearly visible in this crop, output: Final Answer: None"
+            )
 
         raw_answer = ""
         max_tokens = getattr(config, "max_vlm_tokens", 128)
