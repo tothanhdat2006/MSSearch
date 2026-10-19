@@ -186,3 +186,8 @@ class SigLIPScorer:
         """Helper to score a single crop."""
         scores = self.score_crops([crop], text_queries)
         return scores[0] if scores else 0.0
+
+
+# Canonical Alias for Stage Engines
+SiglipInference = SigLIPScorer
+

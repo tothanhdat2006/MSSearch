@@ -2,13 +2,14 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 import torch
 from torch.nn import CrossEntropyLoss
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
-from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 from .tree import Node, NodeA
 from .utils import *
 BOX_COLOR = "red"
 
 class ModelQwenVL:
-    def __init__(self, model_path: str, device: str = "cuda:0", torch_dtype=torch.float16, **kwargs) -> None:
+    def __init__(self, model_path: str = "Qwen/Qwen2.5-VL-7B-Instruct", device: str = "cuda:0", torch_dtype=torch.float16, **kwargs) -> None:
+        if "model_name" in kwargs and (model_path is None or model_path == "Qwen/Qwen2.5-VL-7B-Instruct"):
+            model_path = kwargs.pop("model_name")
         self.dtype = torch_dtype if torch_dtype is not None else torch.float16
         num_gpus = torch.cuda.device_count()
 
@@ -519,4 +520,8 @@ class ModelQwenVL:
 
         option_chosen = torch.stack(loss_list).argmin()
         return option_chosen.cpu().item()
+
+
+# Canonical Alias for Stage Engines
+QwenVLInference = ModelQwenVL
 

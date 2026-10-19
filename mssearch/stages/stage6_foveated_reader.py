@@ -332,22 +332,10 @@ def run_foveated_vlm_reading(
                     print(f"[Stage 6][Error Fallback] Crop {c_idx} (Image {img_idx}) VLM generation failed ({e}); skipping crop.")
                 continue
         else:
-            # High-fidelity Simulation Stub for debug / dry-run execution
-            nx1, ny1, nx2, ny2 = exp_box[0] / max(1, img_w), exp_box[1] / max(1, img_h), exp_box[2] / max(1, img_w), exp_box[3] / max(1, img_h)
-            # Check overlap with target mailbox / number region [0.42, 0.10, 0.50, 0.16]
-            target_hit = (nx1 <= 0.51 and nx2 >= 0.42 and ny1 <= 0.16 and ny2 >= 0.10)
-
-            if item.source_branch == "fast_path" or target_hit:
-                raw_answer = "The house number visible on the mailbox / entrance is 27B.\nFinal Answer: 27B"
-            else:
-                if ny2 < 0.35:
-                    raw_answer = "This crop shows upper building facade and sky; no mailbox or house number is visible.\nFinal Answer: None"
-                elif nx1 > 0.60:
-                    raw_answer = "No mailbox or number visible in this right-hand architectural section.\nFinal Answer: None"
-                elif ny1 > 0.60:
-                    raw_answer = "Ground-level pathway and pavement; no house number found.\nFinal Answer: None"
-                else:
-                    raw_answer = "There is no mailbox or house number visible in this region.\nFinal Answer: None"
+            # Fallback warning when VLM model is not loaded in environment
+            if config.verbose or c_idx == 0:
+                print(f"[Stage 6][WARNING] zoom_model (Qwen2.5-VL) is None! Operating in dry-run mode without VLM weights.")
+            raw_answer = f"[DRY-RUN / NO VLM LOADED] Crop {c_idx}: Cannot inspect visual content without VLM weights (zoom_model is None).\nFinal Answer: None"
 
         final_ans = extract_final_answer(raw_answer)
         is_ev = not is_negative_or_unanswerable(final_ans if final_ans else raw_answer)
