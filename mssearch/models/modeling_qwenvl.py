@@ -521,7 +521,3 @@ class ModelQwenVL:
         option_chosen = torch.stack(loss_list).argmin()
         return option_chosen.cpu().item()
 
-
-# Canonical Alias for Stage Engines
-QwenVLInference = ModelQwenVL
-

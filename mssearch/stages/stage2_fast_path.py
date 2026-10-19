@@ -273,10 +273,13 @@ def run_tool_based_fast_path(
     """
     feature_cache: Dict[int, np.ndarray] = {}
 
-    if not config.enable_fast_path or sam_model is None or zoom_model is None:
-        if config.verbose:
-            print("[Stage 2][Fallback] Tool-Based Fast Path disabled or models missing; routing directly to Stage 3 Visual Search Branch.")
+    if not config.enable_fast_path:
         return FastPathResult(triggered=False, feature_cache=feature_cache)
+
+    if sam_model is None:
+        raise RuntimeError("[Stage 2 Error] sam_model (SAM3) is None. Tool Fast Path requires a loaded SAM3 model; fallback execution is strictly disabled.")
+    if zoom_model is None:
+        raise RuntimeError("[Stage 2 Error] zoom_model (Qwen2.5-VL) is None. Tool Fast Path requires a loaded VLM model; fallback execution is strictly disabled.")
 
     if config.verbose:
         print(f"[Stage 2] Scanning {len(candidate_images)} candidate images for Active Objects {active_objects} (Fast Path Threshold: {config.fast_path_conf_threshold})...")

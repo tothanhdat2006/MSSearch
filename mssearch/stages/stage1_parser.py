@@ -130,7 +130,10 @@ def parse_question_to_active_objects(
     if zoom_model is None and vlm_model is not None:
         zoom_model = vlm_model
 
-    raw_targets = []
+    if zoom_model is None:
+        raise RuntimeError(
+            "[Stage 1 Error] zoom_model (Qwen2.5-VL) is None. Question Parsing requires a loaded VLM model for Strategy 1/2 semantic question parsing; fallback execution is strictly disabled."
+        )
     parsed_anchors = []
     parsed_target_element = ""
     parsed_question_type = "general"

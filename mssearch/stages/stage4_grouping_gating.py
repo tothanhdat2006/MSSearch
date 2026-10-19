@@ -265,10 +265,19 @@ def run_feature_grouping_and_gating(
     if not bounded_patches:
         return ([], []) if return_debug else []
 
-    # If grouping is ablated, keep all bounded patches directly (ranked by confidence/entropy)
-    if not config.enable_feature_grouping or sam_model is None:
+    if sam_model is None:
+        raise RuntimeError(
+            "[Stage 4 Error] sam_model (SAM3) is None. Stage 4 Feature Grouping & Gating requires a loaded SAM3 model; fallback execution is strictly disabled."
+        )
+    if zoom_model is None:
+        raise RuntimeError(
+            "[Stage 4 Error] zoom_model (Qwen2.5-VL) is None. Stage 4 Feature Grouping & Gating requires a loaded VLM model; fallback execution is strictly disabled."
+        )
+
+    # If grouping is ablated by config, keep all bounded patches directly (ranked by confidence/entropy)
+    if not config.enable_feature_grouping:
         if config.verbose:
-            print(f"[Stage 4][Fallback] Feature grouping disabled by config or SAM3 absent; retaining all {len(bounded_patches)} bounded patches directly without semantic pruning.")
+            print(f"[Stage 4] Feature grouping disabled by config; retaining all {len(bounded_patches)} bounded patches directly without semantic pruning.")
         sorted_bp = sorted(
             bounded_patches,
             key=lambda p: ((p.confidence_score or 0.0), (p.siglip_score if p.siglip_score is not None else 0.0), p.entropy),

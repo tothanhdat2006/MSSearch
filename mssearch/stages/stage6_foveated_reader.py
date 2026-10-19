@@ -220,6 +220,11 @@ def run_foveated_vlm_reading(
     Executes Foveated VLM Reading with 1.25x padding and builds Answer Memory M.
     Exhaustively searches all candidate crops (zero early stopping) to support hidden K.
     """
+    if zoom_model is None:
+        raise RuntimeError(
+            "[Stage 6 Error] zoom_model (Qwen2.5-VL) is None. Stage 6 Foveated Reading requires a loaded VLM model; fallback and dry-run execution are strictly disabled."
+        )
+
     extractions: List[EvidenceExtraction] = []
     evidence_indices: set = set()
     crop_records: List[Dict[str, Any]] = []
@@ -317,25 +322,19 @@ def run_foveated_vlm_reading(
 
         raw_answer = ""
         max_tokens = getattr(config, "max_vlm_tokens", 128)
-        if zoom_model is not None:
-            try:
-                if hasattr(zoom_model, "generate_response"):
-                    raw_answer = zoom_model.generate_response(image_pil=vlm_image_input, question=prompt, max_new_tokens=max_tokens)
-                elif hasattr(zoom_model, "free_form_using_nodes"):
-                    raw_answer = zoom_model.free_form_using_nodes(image_pil=vlm_image_input, question=prompt, searched_nodes=[], max_new_tokens=max_tokens)
-                elif hasattr(zoom_model, "generate"):
-                    raw_answer = zoom_model.generate(image_pil=vlm_image_input, question=prompt, max_new_tokens=max_tokens)
-                else:
-                    raw_answer = str(zoom_model(image_pil=vlm_image_input, question=prompt))
-            except Exception as e:
-                if config.verbose:
-                    print(f"[Stage 6][Error Fallback] Crop {c_idx} (Image {img_idx}) VLM generation failed ({e}); skipping crop.")
-                continue
-        else:
-            # Fallback warning when VLM model is not loaded in environment
-            if config.verbose or c_idx == 0:
-                print(f"[Stage 6][WARNING] zoom_model (Qwen2.5-VL) is None! Operating in dry-run mode without VLM weights.")
-            raw_answer = f"[DRY-RUN / NO VLM LOADED] Crop {c_idx}: Cannot inspect visual content without VLM weights (zoom_model is None).\nFinal Answer: None"
+        try:
+            if hasattr(zoom_model, "generate_response"):
+                raw_answer = zoom_model.generate_response(image_pil=vlm_image_input, question=prompt, max_new_tokens=max_tokens)
+            elif hasattr(zoom_model, "free_form_using_nodes"):
+                raw_answer = zoom_model.free_form_using_nodes(image_pil=vlm_image_input, question=prompt, searched_nodes=[], max_new_tokens=max_tokens)
+            elif hasattr(zoom_model, "generate"):
+                raw_answer = zoom_model.generate(image_pil=vlm_image_input, question=prompt, max_new_tokens=max_tokens)
+            else:
+                raw_answer = str(zoom_model(image_pil=vlm_image_input, question=prompt))
+        except Exception as e:
+            if config.verbose:
+                print(f"[Stage 6][Error Fallback] Crop {c_idx} (Image {img_idx}) VLM generation failed ({e}); skipping crop.")
+            continue
 
         final_ans = extract_final_answer(raw_answer)
         is_ev = not is_negative_or_unanswerable(final_ans if final_ans else raw_answer)
