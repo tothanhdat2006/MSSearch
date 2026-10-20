@@ -108,6 +108,12 @@ class MultiSourceSearchEngine:
         if getattr(self.config, "multi_answer_mode", False):
             self.config.enable_early_consensus_exit = False
 
+        # Structured Query Parsing (target_attribute_type, condition_val, target_object)
+        from .stages.stage1_parser import parse_visual_query_structure
+        target_attr_type, cond_val, target_obj = parse_visual_query_structure(
+            question, getattr(self.config, "query_meta", None)
+        )
+
         telemetry: Dict[str, Any] = {
             "num_candidate_images": len(candidate_images),
             "stages_executed": [],
@@ -115,7 +121,10 @@ class MultiSourceSearchEngine:
             "include_options_in_prompt": should_add_options,
             "answer_type": getattr(self.config, "answer_type", "free_form"),
             "options_available": bool(options),
-            "multi_answer_mode": getattr(self.config, "multi_answer_mode", False)
+            "multi_answer_mode": getattr(self.config, "multi_answer_mode", False),
+            "target_attribute_type": target_attr_type,
+            "condition_val": cond_val,
+            "target_object": target_obj
         }
 
         # ---------------------------------------------------------------------
@@ -147,7 +156,12 @@ class MultiSourceSearchEngine:
                 from .stages.stage6_foveated_reader import split_attribute_answer
                 pred_list = []
                 for a in ans_list:
-                    tokens = split_attribute_answer(a)
+                    tokens = split_attribute_answer(
+                        a,
+                        target_attribute_type=target_attr_type,
+                        condition_val=cond_val,
+                        target_object=target_obj
+                    )
                     for t in tokens:
                         if t.lower() not in [x.lower() for x in pred_list]:
                             pred_list.append(t)
@@ -220,7 +234,12 @@ class MultiSourceSearchEngine:
             from .stages.stage6_foveated_reader import split_attribute_answer
             pred_list = []
             for a in ans_list:
-                tokens = split_attribute_answer(a)
+                tokens = split_attribute_answer(
+                    a,
+                    target_attribute_type=target_attr_type,
+                    condition_val=cond_val,
+                    target_object=target_obj
+                )
                 for t in tokens:
                     if t.lower() not in [x.lower() for x in pred_list]:
                         pred_list.append(t)
@@ -343,7 +362,12 @@ class MultiSourceSearchEngine:
 
         pred_list = []
         for a in answers_out:
-            tokens = split_attribute_answer(a)
+            tokens = split_attribute_answer(
+                a,
+                target_attribute_type=target_attr_type,
+                condition_val=cond_val,
+                target_object=target_obj
+            )
             for t in tokens:
                 if t.lower() not in [x.lower() for x in pred_list]:
                     pred_list.append(t)
@@ -426,6 +450,9 @@ def get_mssearch_response(
         elif anno_type == "free_form":
             engine.config.include_options_in_prompt = False
             engine.config.answer_type = "free_form"
+
+    if 'query' in annotation and engine.config is not None:
+        engine.config.query_meta = annotation['query']
 
     return engine.search(
         candidate_images=candidate_images,

@@ -116,6 +116,7 @@ class MSSearchConfig:
     # -------------------------------------------------------------------------
     multi_answer_mode: bool = False              # If True, enables multi-source open-set answering (K>=1, N>=1): disables Stage 6 early consensus exit and aggregates all unique answers into semicolon-separated text
     scale_budgets_by_num_images: bool = True     # If True, scales Stage 4 SAM3 patch scans, latent evaluations, and retention caps linearly by N candidate images
+    query_meta: Optional[dict] = None            # Optional structured query metadata: {'target_attribute_type': ..., 'condition_attribute': ..., 'target_object': ...}
 
     def __post_init__(self):
         # Synchronize max_latent_evals and max_latent_eval_groups if one was explicitly overridden

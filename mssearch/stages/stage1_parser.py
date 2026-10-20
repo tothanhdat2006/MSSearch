@@ -24,8 +24,49 @@ ABSTRACT_ATTRIBUTE_HEADS = {
     "text", "number", "digit", "word", "letter", "symbol", "logo", "sign",
     "color", "colour", "shape", "appearance", "writing", "label", "written",
     "reading", "font", "character", "displayed", "shown", "printed", "marked",
-    "engraved", "carved", "painted", "visible"
+    "engraved", "carved", "painted", "visible",
+    # Standalone geometric shapes / modifier adjectives that should NOT be queried as bare targets in SAM3
+    "round", "cylindrical", "rectangular", "square", "oval", "spherical", "triangular",
+    "circular", "flat", "curved",
+    # Standalone colors
+    "red", "blue", "green", "yellow", "black", "white", "brown", "orange", "purple",
+    "pink", "gray", "grey", "silver", "gold"
 }
+
+
+def parse_visual_query_structure(question: str, query_meta: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str]:
+    """
+    Extracts the structured visual query semantics: (target_attribute_type, condition_val, target_object).
+    E.g. 'What patterns are brown chairs?' -> ('pattern', 'brown', 'chair')
+         'What materials are red cars?'   -> ('material', 'red', 'car')
+         'What colors are round helmets?' -> ('color', 'round', 'helmet')
+    """
+    if query_meta:
+        target_attr = query_meta.get("target_attribute_type", "")
+        cond = query_meta.get("condition_attribute", {})
+        cond_val = cond.get("value", "") if isinstance(cond, dict) else str(cond)
+        target_obj = query_meta.get("target_object", "")
+        if target_attr and target_obj:
+            return target_attr.lower().strip(), cond_val.lower().strip(), target_obj.lower().strip()
+
+    # Deterministic regex parser on question
+    q_clean = question.strip()
+    m = re.search(
+        r"what\s+(patterns?|materials?|colors?|colours?|shapes?)\s+(?:are|is)\s+(?:the\s+)?(?:([\w\-]+)\s+)?([\w\-\s]+)\??",
+        q_clean,
+        re.IGNORECASE
+    )
+    if m:
+        attr_raw = m.group(1).lower().rstrip("s")
+        if attr_raw == "colour":
+            attr_raw = "color"
+        cond_raw = (m.group(2) or "").lower().strip()
+        obj_raw = (m.group(3) or "").lower().strip()
+        # Singularize common plural objects
+        obj_clean = re.sub(r"s$", "", obj_raw) if len(obj_raw) > 3 and not obj_raw.endswith("ss") else obj_raw
+        return attr_raw, cond_raw, obj_clean
+
+    return "", "", ""
 
 
 @dataclass
@@ -88,7 +129,9 @@ def detect_relational_intent(question_or_parsed: Union[str, ParsedQuestion, Any]
 def reorder_anchor_first(targets: List[str]) -> List[str]:
     """
     Prioritizes physical host entities and landmarks ahead of abstract attributes/sub-elements.
-    Example: ['text written', 'jacket s sleeve', 'logo'] -> ['jacket s sleeve', 'text written', 'logo']
+    Prunes bare single modifier adjectives (e.g. 'round', 'red', 'brown') when concrete host anchors exist.
+    Example: ['round', 'helmet'] -> ['helmet']
+             ['text written', 'jacket s sleeve', 'logo'] -> ['jacket s sleeve', 'text written', 'logo']
     """
     delimiters = {'the', 'a', 'an', 'on', 'in', 'of', 'at', 'above', 'below', 'is', 'are', 'to', 'where'}
     anchors = []
@@ -97,11 +140,15 @@ def reorder_anchor_first(targets: List[str]) -> List[str]:
         words = [w for w in t.lower().split() if w not in delimiters]
         concrete = [w for w in words if w not in ABSTRACT_ATTRIBUTE_HEADS]
         if not concrete:
-            # All substantive words are abstract attributes (e.g. 'text', 'text written', 'number displayed')
+            # All substantive words are abstract attributes (e.g. 'text', 'text written', 'round', 'red')
             attributes.append(t)
         else:
             anchors.append(t)
-    return anchors + attributes if anchors else targets
+    if anchors:
+        # Prune bare modifier attributes when concrete host entities exist
+        filtered_attrs = [a for a in attributes if not (len(a.split()) == 1 and a in ABSTRACT_ATTRIBUTE_HEADS)]
+        return anchors + filtered_attrs
+    return attributes if attributes else targets
 
 
 def parse_question_to_active_objects(
@@ -420,12 +467,12 @@ def parse_question_to_active_objects(
         if norm_t and norm_t not in clean_targets:
             clean_targets.append(norm_t)
 
-    # Strategy 4: Ultimate Fallback if no targets extracted
-    if not clean_targets:
-        clean_targets = ["object"]
-        extraction_strategy = "Strategy 4: Default Fallback ['object']"
-        if verbose:
-            print("[Stage 1][Ultimate Fallback] No targets extracted from question; defaulting to ['object'].")
+    # Fallback to query structure parser if clean_targets is empty or default
+    if not clean_targets or clean_targets == ["object"]:
+        _, _, str_obj = parse_visual_query_structure(question)
+        if str_obj:
+            clean_targets = [str_obj]
+            extraction_strategy = "Strategy 1c: Question Structure Syntax Parser"
 
     if enable_anchor_first:
         clean_targets = reorder_anchor_first(clean_targets)

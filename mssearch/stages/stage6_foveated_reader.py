@@ -168,11 +168,38 @@ def is_negative_or_unanswerable(text: str) -> bool:
     return False
 
 
-def split_attribute_answer(ans_str: str) -> List[str]:
+COLOR_VOCAB = {
+    'red', 'blue', 'green', 'yellow', 'black', 'white', 'brown', 'orange',
+    'purple', 'pink', 'gray', 'grey', 'silver', 'gold', 'beige', 'tan',
+    'maroon', 'navy', 'crimson', 'teal', 'turquoise', 'olive', 'bronze'
+}
+MATERIAL_VOCAB = {
+    'wood', 'wooden', 'metal', 'metallic', 'plastic', 'glass', 'leather',
+    'wicker', 'fabric', 'cotton', 'wool', 'silk', 'ceramic', 'paper',
+    'rubber', 'stone', 'concrete', 'brick', 'woven', 'porcelain', 'steel',
+    'aluminum', 'cloth', 'nylon', 'polyester', 'canvas', 'denim'
+}
+PATTERN_VOCAB = {
+    'solid', 'patterned', 'plaid', 'striped', 'checkered', 'floral', 'dotted',
+    'polka dot', 'printed', 'camo', 'camouflage', 'chevron', 'herringbone',
+    'geometric', 'abstract', 'tartan', 'embossed', 'paisley', 'textured',
+    'lace', 'tweed', 'tie-dye', 'gingham', 'stripes'
+}
+
+
+def split_attribute_answer(
+    ans_str: str,
+    target_attribute_type: Optional[str] = None,
+    condition_val: Optional[str] = None,
+    target_object: Optional[str] = None
+) -> List[str]:
     """
     Splits compound attribute strings into a deduplicated list of concise attribute tokens.
     Handles delimiters: semicolons, commas, ' and ', ' & ', ' or ', and slashes.
-    Strips boilerplate phrases ('The red flags are...', 'It is...').
+    Strips boilerplate preambles and filters out:
+    - Condition values from the question (e.g. 'brown' when querying 'brown chairs', 'red' for 'red cars')
+    - Target object category names (e.g. 'chair', 'car', 'bottle')
+    - Disjoint attribute types (e.g. suppresses colors and materials when target is pattern)
     """
     if not ans_str or not ans_str.strip():
         return []
@@ -192,11 +219,34 @@ def split_attribute_answer(ans_str: str) -> List[str]:
     for p in parts:
         tok = p.strip().strip(".").strip("\"'").strip()
         tok_clean = re.sub(r"^(?:a|an|the)\s+", "", tok, flags=re.IGNORECASE).strip()
-        if tok_clean and len(tok_clean) >= 2 and not is_negative_or_unanswerable(tok_clean):
-            key = tok_clean.lower()
-            if key not in seen:
-                seen.add(key)
-                tokens.append(tok_clean)
+        if not tok_clean or len(tok_clean) < 2 or is_negative_or_unanswerable(tok_clean):
+            continue
+        key = tok_clean.lower()
+
+        # Filter out condition attribute value if present (e.g. 'brown' in 'What patterns are brown chairs?')
+        if condition_val and (key == condition_val.lower() or key in condition_val.lower().split()):
+            continue
+
+        # Filter out target object noun (e.g. 'chair', 'chairs')
+        if target_object:
+            to_lower = target_object.lower()
+            if key == to_lower or key == (to_lower + "s") or key in to_lower.split():
+                continue
+
+        # Disjoint attribute type filtering
+        if target_attribute_type == "pattern":
+            if key in COLOR_VOCAB or key in MATERIAL_VOCAB:
+                continue
+        elif target_attribute_type == "material":
+            if key in COLOR_VOCAB:
+                continue
+        elif target_attribute_type == "color":
+            if key in MATERIAL_VOCAB:
+                continue
+
+        if key not in seen:
+            seen.add(key)
+            tokens.append(tok_clean)
     return tokens
 
 
@@ -269,6 +319,12 @@ def run_foveated_vlm_reading(
         else:
             is_relational = False
 
+    # Extract structured query semantics (target_attribute_type, condition_val, target_object)
+    from .stage1_parser import parse_visual_query_structure
+    target_attr_type, cond_val, target_obj = parse_visual_query_structure(
+        question, getattr(config, "query_meta", None)
+    )
+
     for c_idx, item in enumerate(unified_pool):
         img_idx = item.img_idx
         img_pil = candidate_images[img_idx]
@@ -335,31 +391,46 @@ def run_foveated_vlm_reading(
         )
         if getattr(config, "prompt_directed_final_answer", True):
             if answer_mode == "attribute_list":
-                if is_relational:
-                    prompt = (
-                        f"{question}{text_coords_hint}\n\n"
-                        "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
-                        f"{bbox_note}"
-                        "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                        "<answer>None</answer>\n\n"
-                        "Otherwise, extract only the visual attribute values (e.g., specific colors, materials, patterns) "
-                        "as a concise, comma-separated list inside <answer>...</answer> tags:\n"
-                        "<answer>attribute1, attribute2</answer>"
-                    )
-                else:
-                    prompt = (
-                        f"{question}{text_coords_hint}\n\n"
-                        "Carefully inspect this crop.\n"
-                        f"{bbox_note}"
-                        "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                        "<answer>None</answer>\n\n"
-                        "Otherwise, extract only the visual attribute values (e.g., specific colors, materials, patterns) "
-                        "as a concise, comma-separated list inside <answer>...</answer> tags:\n"
-                        "<answer>attribute1, attribute2</answer>"
-                    )
+                domain_hints = {
+                    "pattern": "e.g., solid, patterned, plaid, striped, checkered, floral",
+                    "material": "e.g., metal, plastic, wood, glass, leather, wicker, fabric",
+                    "color": "e.g., black, red, blue, green, white, silver, brown, yellow",
+                    "shape": "e.g., round, cylindrical, rectangular, square, oval"
+                }
+                ex_hint = domain_hints.get(target_attr_type, "e.g., specific visual attribute values")
+                distractor_hints = {
+                    "helmet": "a ball, spherical lamp, ceiling light, plate, or sphere",
+                    "chair": "a table, desk, wall, floor, or background",
+                    "car": "a truck, bus, road, tree, building, or sign",
+                    "bottle": "a glass, cup, vase, counter, or shelf",
+                    "flag": "a poster, banner without flags, clothing, or building",
+                    "table": "a chair, floor, counter, or wall",
+                    "hat": "hair, a person, clothing, or bag"
+                }
+                obj_name = target_obj if target_obj else "target object"
+                distr_desc = distractor_hints.get(obj_name.lower(), "other objects or background")
+                cond_note = f" with condition '{cond_val}'" if cond_val else ""
+                cond_rule = f"Do NOT output the condition value '{cond_val}' as the answer.\n" if cond_val else ""
+                prefix = (
+                    "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
+                    if is_relational else "Carefully inspect this crop.\n"
+                )
+                prompt = (
+                    f"Question: \"{question}\"{text_coords_hint}\n\n"
+                    f"{prefix}"
+                    f"{bbox_note}"
+                    f"1. Target Verification: Does this crop clearly show a {obj_name}{cond_note}?\n"
+                    f"Note: {distr_desc} is NOT a {obj_name}. If this crop does NOT show a {obj_name}{cond_note}, output:\n"
+                    f"<answer>None</answer>\n\n"
+                    f"2. Attribute Extraction: Extract ONLY the {target_attr_type or 'visual attribute'} ({ex_hint}) of the {obj_name}.\n"
+                    f"Do NOT output the object name ('{obj_name}').\n"
+                    f"{cond_rule}"
+                    f"Output strictly inside <answer>...</answer> tags:\n"
+                    f"<answer>attribute1, attribute2</answer>"
+                )
             elif is_relational:
                 prompt = (
-                    f"{question}{text_coords_hint}\n\n"
+                    f"Question: \"{question}\"{text_coords_hint}\n\n"
                     "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
                     f"{bbox_note}"
                     "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
@@ -369,7 +440,7 @@ def run_foveated_vlm_reading(
                 )
             else:
                 prompt = (
-                    f"{question}{text_coords_hint}\n\n"
+                    f"Question: \"{question}\"{text_coords_hint}\n\n"
                     "Carefully inspect this crop.\n"
                     f"{bbox_note}"
                     "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
@@ -401,6 +472,17 @@ def run_foveated_vlm_reading(
             continue
 
         final_ans = extract_final_answer(raw_answer)
+        if answer_mode == "attribute_list" and final_ans:
+            extracted_tokens = split_attribute_answer(
+                final_ans,
+                target_attribute_type=target_attr_type,
+                condition_val=cond_val,
+                target_object=target_obj
+            )
+            if extracted_tokens:
+                final_ans = ", ".join(extracted_tokens)
+            else:
+                final_ans = "None"
         is_ev = bool(final_ans) and not is_negative_or_unanswerable(final_ans)
 
         # Collect detailed debug crop record for notebook visualization
