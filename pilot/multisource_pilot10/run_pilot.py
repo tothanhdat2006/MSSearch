@@ -5,93 +5,53 @@ import json
 import time
 import copy
 import argparse
-import urllib.request
 import re
 from typing import List, Dict, Any, Optional
 from PIL import Image
 import torch
 
-USER_AGENT_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-}
-OPENIMAGES_SPLITS = ['train', 'validation', 'test']
-
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run MSSearch on local pilot dataset")
-    parser.add_argument("--dataset_path", type=str, default="./datasets/pilot_10_samples.json")
-    parser.add_argument("--image_dir", type=str, default="./datasets/pilot_1000_images")
-    parser.add_argument("--output_dir", type=str, default="./pilot/multisource_pilot10/results")
-    parser.add_argument("--sam3_path", type=str, default="/kaggle/input/datasets/thnhtt/vs-sam3/sam3/sam3/sam3.pt")
-    parser.add_argument("--qwen_path", type=str, default="Qwen/Qwen2.5-VL-7B-Instruct")
-    parser.add_argument("--siglip_name", type=str, default="google/siglip-base-patch16-384")
-    parser.add_argument("--nlp_model", type=str, default="en_core_web_sm")
-    parser.add_argument("--pool_mode", type=str, choices=["N_5", "ALL"], default="N_5")
+    parser.add_argument("--dataset_path", type=str, default=os.environ.get("DATASET_PATH", "./datasets/pilot_10_samples.json"))
+    parser.add_argument("--image_dir", type=str, default=os.environ.get("IMAGE_DIR", "./datasets/pilot_1000_images"))
+    parser.add_argument("--output_dir", type=str, default=os.environ.get("OUTPUT_DIR", "./pilot/multisource_pilot10/results"))
+    parser.add_argument("--sam3_path", type=str, default=os.environ.get("SAM3_PATH", "/home/ubuntu/workspace/hr/models/sam3/sam3/sam3.pt"))
+    parser.add_argument("--qwen_path", type=str, default=os.environ.get("QWEN_PATH", "/home/ubuntu/workspace/hr/models/Qwen2.5-VL-7B-Instruct"))
+    parser.add_argument("--siglip_name", type=str, default=os.environ.get("SIGLIP_NAME", "google/siglip-base-patch16-384"))
+    parser.add_argument("--nlp_model", type=str, default=os.environ.get("NLP_MODEL", "/home/ubuntu/workspace/hr/models/spacy/en_core_web_sm-3.8.0"))
+    parser.add_argument("--pool_mode", type=str, choices=["N_5", "ALL"], default=os.environ.get("POOL_MODE", "N_5"))
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
 
 
-def resolve_or_download_image(image_id: str, image_dir: str, url: Optional[str] = None, rel_path: Optional[str] = None) -> Image.Image:
-    target_filename = f"{image_id}.jpg"
+def resolve_image(image_id: str, image_dir: str, rel_path: Optional[str] = None, **kwargs) -> Image.Image:
+    target_filename = f"{image_id}.jpg" if not str(image_id).lower().endswith((".jpg", ".jpeg", ".png", ".webp")) else str(image_id)
     candidates = [
         os.path.join(image_dir, target_filename),
-        os.path.join(image_dir, image_id),
+        os.path.join(image_dir, str(image_id)),
     ]
     if rel_path:
         candidates.insert(0, rel_path)
+        candidates.append(os.path.join(image_dir, os.path.basename(rel_path)))
+        candidates.append(os.path.join(os.path.dirname(image_dir), rel_path))
 
     for sp in candidates:
-        if os.path.exists(sp):
-            try:
-                return Image.open(sp).convert("RGB")
-            except Exception:
-                pass
-
-    cache_path = os.path.join(image_dir, target_filename)
-    os.makedirs(image_dir, exist_ok=True)
-    if os.path.exists(cache_path):
-        try:
-            return Image.open(cache_path).convert("RGB")
-        except Exception:
-            pass
-
-    for split in OPENIMAGES_SPLITS:
-        s3_url = f"https://open-images-dataset.s3.amazonaws.com/{split}/{image_id}.jpg"
-        try:
-            req = urllib.request.Request(s3_url, headers=USER_AGENT_HEADERS)
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                if resp.status == 200:
-                    data = resp.read()
-                    with open(cache_path, "wb") as f_img:
-                        f_img.write(data)
-                    return Image.open(cache_path).convert("RGB")
-        except Exception:
-            pass
-
-    if url:
-        for attempt in range(3):
-            try:
-                req = urllib.request.Request(url, headers=USER_AGENT_HEADERS)
-                with urllib.request.urlopen(req, timeout=12) as resp:
-                    if resp.status == 200:
-                        data = resp.read()
-                        with open(cache_path, "wb") as f_img:
-                            f_img.write(data)
-                        return Image.open(cache_path).convert("RGB")
-            except Exception:
-                time.sleep(1.0 * (attempt + 1))
+        if os.path.isfile(sp):
+            return Image.open(sp).convert("RGB")
 
     raise FileNotFoundError(
-        f"Unable to load or retrieve image '{image_id}'. Searched local directory '{image_dir}', "
-        f"OpenImages S3 splits {OPENIMAGES_SPLITS}, and original URL '{url}'."
+        f"Image '{image_id}' not found in local candidate paths: {candidates}"
     )
+
+
+resolve_or_download_image = resolve_image
 
 
 def evaluate_freeform_prediction(pred_text: str, gt_list: List[str]) -> Dict[str, Any]:
     pred_clean = str(pred_text).lower().replace("\n", " ").strip()
-    gt_set = set(item.lower().strip() for item in gt_list)
+    gt_set = set(item.lower().strip() for item in gt_list if item and str(item).strip())
 
     matched_gt = set()
     for gt_item in gt_set:
@@ -120,7 +80,6 @@ def main():
     mssearch_root = os.path.abspath(os.path.join(script_dir, "..", ".."))
     if mssearch_root not in sys.path:
         sys.path.insert(0, mssearch_root)
-    # Also support running when MSSearch is itself the parent directory
     parent_dir = os.path.abspath(os.path.join(script_dir, ".."))
     if parent_dir not in sys.path:
         sys.path.insert(0, parent_dir)
@@ -175,27 +134,37 @@ def main():
         partition_mode="hybrid",
         partition_stopping_mode="saliency_plateau",
         max_patch_size=512,
-        min_plateau_size=256,
+        min_plateau_size=512,
         max_plateau_size=1536,
         saliency_plateau_gain_threshold=0.04,
         saliency_target_threshold=0.35,
         max_patches_per_image=100,
+        stage3_budget_mode="siglip_similarity",
+        reuse_stage2_features=True,
+        enable_feature_grouping=True,
         grouping_sim_threshold=0.80,
-        max_sam3_eval_patches=16,
+        reuse_stage3_features=True,
+        sam3_group_det_threshold=0.35,
         enable_latent_gating=True,
         latent_confidence_threshold=0.0,
         latent_prompt_mode="question_aware",
-        max_latent_evals=8,
+        max_latent_evals=16,
         enable_existence_gating=True,
         existence_confidence_threshold=0.0,
+        bypass_vlm_for_confirmed_groups=True,
+        enable_prioritized_sam3_scanning=True,
+        max_sam3_eval_patches=16,
+        enable_group_retention_caps=True,
+        enable_retention_hard_cap=True,
         max_retained_patches=16,
+        retention_ranking_metric="confidence_hybrid",
         bbox_expansion_factor=1.25,
         enable_visual_prompt_bbox=True,
         max_vlm_tokens=128,
         enable_early_consensus_exit=False,
         prompt_directed_final_answer=True,
         include_options_in_prompt=False,
-        answer_type="attribute_list",
+        answer_type="free_form",
         verbose=False
     )
 
@@ -257,10 +226,9 @@ def main():
                 iid = p_img.get("image_id")
                 role = p_img.get("role", "unknown")
                 gt_meta = gt_lookup.get(iid, {})
-                url = gt_meta.get("original_url")
                 local_p = gt_meta.get("local_path")
 
-                img_pil = resolve_or_download_image(image_id=iid, image_dir=args.image_dir, url=url, rel_path=local_p)
+                img_pil = resolve_image(image_id=iid, image_dir=args.image_dir, rel_path=local_p)
                 candidate_images.append(img_pil)
                 candidate_meta.append({"image_id": iid, "role": role, "size": list(img_pil.size)})
 
@@ -275,7 +243,12 @@ def main():
                     zoom_model=qwen_engine,
                     siglip_model=siglip_engine,
                     nlp_model=nlp_parser,
-                    annotation={"question": question, "sample_id": sample_id, "answer_type": "attribute_list"},
+                    annotation={
+                        "question": question,
+                        "sample_id": sample_id,
+                        "answer_type": "free_form",
+                        "query": query_info
+                    },
                     candidate_images=candidate_images,
                     config=task_config
                 )
@@ -289,9 +262,10 @@ def main():
 
             latency = round(time.perf_counter() - t0, 3)
             pred_answer = response.get("primary_answer", "")
-            pred_list = response.get("prediction_list", response.get("answers", []))
             telemetry = response.get("telemetry", {})
             route = telemetry.get("route", "unknown")
+            routes_executed = telemetry.get("routes_executed", [route])
+            stages_executed = telemetry.get("stages_executed", [])
             discovered_evidence = response.get("evidence_images", [])
 
             record = {
@@ -306,19 +280,27 @@ def main():
                 "ground_truth_freeform": gt_freeform,
                 "candidate_images": candidate_meta,
                 "mssearch_prediction": pred_answer,
-                "mssearch_prediction_list": pred_list,
                 "raw_vlm_response": response.get("raw_vlm_response", ""),
                 "extracted_answers": response.get("answers", []),
+                "prediction_list": response.get("prediction_list", []),
                 "discovered_evidence_images": discovered_evidence,
                 "evidence_images": discovered_evidence,
                 "route": route,
+                "routes_executed": routes_executed,
+                "stages_executed": stages_executed,
+                "stage6_patch_boxes": response.get("stage6_patch_boxes", []),
+                "extractions": response.get("extractions", []),
                 "latency_sec": latency,
                 "timings_sec": telemetry.get("timings_sec", {}),
                 "mssearch_output": {
                     "primary_answer": pred_answer,
+                    "answers": response.get("answers", []),
+                    "prediction_list": response.get("prediction_list", []),
                     "route": route,
+                    "routes_executed": routes_executed,
                     "telemetry": {
                         "timings_sec": telemetry.get("timings_sec", {}),
+                        "stages_executed": stages_executed,
                         "total_latency_sec": latency
                     }
                 }
@@ -330,7 +312,8 @@ def main():
             completed_keys.add(task_key)
 
             metrics = evaluate_freeform_prediction(pred_answer, gt_list)
-            print(f"  -> Pred: '{pred_answer}' | GT: {metrics['gt_items']} | Recall: {metrics['recall'] * 100:.1f}% | Route: {route} | Latency: {latency:.2f}s")
+            routes_str = "+".join(routes_executed) if routes_executed else route
+            print(f"  -> Pred: '{pred_answer}' | GT: {metrics['gt_items']} | Recall: {metrics['recall'] * 100:.1f}% | Route: {routes_str} | Latency: {latency:.2f}s")
 
             gc.collect()
             if torch.cuda.is_available():
@@ -341,6 +324,7 @@ def main():
     print("=" * 75)
     recalls = []
     exact_matches = []
+    route_counts = {}
     with open(predictions_jsonl, "r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
@@ -349,6 +333,8 @@ def main():
             m = evaluate_freeform_prediction(rec.get("mssearch_prediction", ""), rec.get("ground_truth_list", []))
             recalls.append(m["recall"])
             exact_matches.append(1.0 if m["exact_match"] else 0.0)
+            r = rec.get("route", "unknown")
+            route_counts[r] = route_counts.get(r, 0) + 1
 
     if recalls:
         mean_recall = sum(recalls) / len(recalls) * 100.0
@@ -356,6 +342,9 @@ def main():
         print(f"Tasks Evaluated : {len(recalls)}")
         print(f"Mean Set Recall : {mean_recall:.2f}%")
         print(f"Exact Match Acc : {exact_acc:.2f}%")
+        print("Route Breakdown :")
+        for r_name, r_count in sorted(route_counts.items()):
+            print(f"  - {r_name:25s}: {r_count} tasks ({r_count / len(recalls) * 100:.1f}%)")
         print(f"Saved to        : {predictions_jsonl}")
     print("=" * 75)
 
