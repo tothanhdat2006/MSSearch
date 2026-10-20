@@ -169,14 +169,15 @@ class MultiSourceSearchEngine:
                     "raw_vlm_response": direct_result.raw_response,
                     "evidence_images": ev_imgs,
                     "stage6_patch_boxes": stage6_patch_boxes,
-                    "extractions": [
+                    "extractions": direct_result.crop_records if direct_result.crop_records else [
                         {
                             "img_idx": idx,
                             "box": [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])],
                             "expanded_box": [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])],
                             "raw_answer": direct_result.raw_response,
                             "final_answer": direct_result.answer,
-                            "source_branch": "Direct Global Answer"
+                            "source_branch": "Direct Global Answer",
+                            "is_evidence": True
                         }
                         for idx in ev_imgs
                     ],
