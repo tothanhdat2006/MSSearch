@@ -330,8 +330,7 @@ def run_foveated_vlm_reading(
         # 3. Query VLM with prompt-directed <answer> XML directive & negative escape grounding
         answer_mode = getattr(config, "answer_type", "free_form")
         bbox_note = (
-            "Focus specifically on the region inside the red bounding box. "
-            "Note that the red bounding box is an artificial indicator outline marking the area of interest, NOT part of the physical scene or object.\n"
+            "Focus inside the red box (the box is a marker, not an object).\n"
             if config.enable_visual_prompt_bbox else ""
         )
         if getattr(config, "prompt_directed_final_answer", True):
