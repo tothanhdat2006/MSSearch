@@ -58,6 +58,41 @@ class ParsedQuestion(list):
         )
 
 
+def parse_visual_query_structure(question: str, query_meta: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str]:
+    """
+    Extracts the structured visual query semantics: (target_attribute_type, condition_val, target_object).
+    E.g. 'What patterns are brown chairs?' -> ('pattern', 'brown', 'chair')
+         'What materials are red cars?'   -> ('material', 'red', 'car')
+         'What colors are round helmets?' -> ('color', 'round', 'helmet')
+    """
+    if query_meta:
+        target_attr = query_meta.get("target_attribute_type", "")
+        cond = query_meta.get("condition_attribute", {})
+        cond_val = cond.get("value", "") if isinstance(cond, dict) else str(cond)
+        target_obj = query_meta.get("target_object", "")
+        if target_attr and target_obj:
+            return target_attr.lower().strip(), cond_val.lower().strip(), target_obj.lower().strip()
+
+    # Deterministic regex parser on question
+    q_clean = question.strip()
+    m = re.search(
+        r"what\s+(patterns?|materials?|colors?|colours?|shapes?)\s+(?:are|is)\s+(?:the\s+)?(?:([\w\-]+)\s+)?([\w\-\s]+)\??",
+        q_clean,
+        re.IGNORECASE
+    )
+    if m:
+        attr_raw = m.group(1).lower().rstrip("s")
+        if attr_raw == "colour":
+            attr_raw = "color"
+        cond_raw = (m.group(2) or "").lower().strip()
+        obj_raw = (m.group(3) or "").lower().strip()
+        # Singularize common plural objects
+        obj_clean = re.sub(r"s$", "", obj_raw) if len(obj_raw) > 3 and not obj_raw.endswith("ss") else obj_raw
+        return attr_raw, cond_raw, obj_clean
+
+    return "", "", ""
+
+
 def detect_relational_intent(question_or_parsed: Union[str, ParsedQuestion, Any]) -> bool:
     """
     Detects whether a visual question queries spatial relationships or orientation.
