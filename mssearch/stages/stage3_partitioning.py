@@ -404,16 +404,20 @@ def partition_candidate_images(
     stage2_feature_cache: Dict[int, np.ndarray],
     config: MSSearchConfig,
     active_objects: Optional[List[str]] = None,
-    siglip_model: Optional[Any] = None
+    siglip_model: Optional[Any] = None,
+    target_img_indices: Optional[List[int]] = None
 ) -> List[BoundedPatch]:
     """
-    Executes Entropy-Gated Recursive Patch Partitioning across all candidate images.
+    Executes Entropy-Gated Recursive Patch Partitioning across candidate images.
+    If target_img_indices is provided, only partitions those specified image indices.
     Guarantees that all output patches satisfy longer side max(W, H) <= config.max_patch_size.
     Reuses cached Stage 2 feature maps and returns pooled embeddings for Stage 4 grouping.
     """
     bounded_patches: List[BoundedPatch] = []
 
     for img_idx, img_pil in enumerate(candidate_images):
+        if target_img_indices is not None and img_idx not in target_img_indices:
+            continue
         img_w, img_h = img_pil.size
         # Queue of patches to evaluate: [((x1, y1, x2, y2), depth)]
         work_queue: List[Tuple[Tuple[int, int, int, int], int]] = [((0, 0, img_w, img_h), 0)]

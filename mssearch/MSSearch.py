@@ -127,6 +127,17 @@ class MultiSourceSearchEngine:
             "target_object": target_obj
         }
 
+        # Tracking containers for the waterfall cascade
+        harvested_answers: List[str] = []
+        harvested_evidence_images: List[int] = []
+        harvested_extractions: List[Dict[str, Any]] = []
+        harvested_patch_boxes: List[List[int]] = []
+        routes_executed: List[str] = []
+
+        total_images = len(candidate_images)
+        unresolved_images: List[int] = list(range(total_images))
+        is_multi = getattr(self.config, "multi_answer_mode", False)
+
         # ---------------------------------------------------------------------
         # Phase 1: Direct Global Answer Gate (Logit Sufficiency Probing)
         # ---------------------------------------------------------------------
@@ -142,59 +153,70 @@ class MultiSourceSearchEngine:
             telemetry["stages_executed"].append("phase1_direct_answer")
 
             if direct_result.triggered:
-                telemetry["route"] = "direct_global_answer"
+                routes_executed.append("direct_global_answer")
                 telemetry["direct_answer_confidence"] = direct_result.confidence
-                ev_imgs = direct_result.evidence_images if direct_result.evidence_images else [direct_result.evidence_img_idx]
-                telemetry["evidence_images"] = ev_imgs
-                telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
-                stage6_patch_boxes = [
-                    [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])]
-                    for idx in ev_imgs
-                ]
-                telemetry["stage6_patch_boxes"] = stage6_patch_boxes
-                ans_list = direct_result.answers if direct_result.answers else [direct_result.answer]
-                from .stages.stage6_foveated_reader import split_attribute_answer
-                pred_list = []
+                ev_imgs = direct_result.evidence_images if direct_result.evidence_images else ([direct_result.evidence_img_idx] if direct_result.evidence_img_idx is not None else [])
+                ans_list = direct_result.answers if direct_result.answers else ([direct_result.answer] if direct_result.answer else [])
+
                 for a in ans_list:
-                    tokens = split_attribute_answer(a)
-                    for t in tokens:
-                        if t.lower() not in [x.lower() for x in pred_list]:
-                            pred_list.append(t)
-                is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
-                primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else direct_result.answer
-                return {
-                    "answers": ans_list,
-                    "prediction_list": pred_list if pred_list else ans_list,
-                    "primary_answer": primary_ans,
-                    "raw_vlm_response": direct_result.raw_response,
-                    "evidence_images": ev_imgs,
-                    "stage6_patch_boxes": stage6_patch_boxes,
-                    "extractions": direct_result.crop_records if direct_result.crop_records else [
-                        {
-                            "img_idx": idx,
-                            "box": [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])],
-                            "expanded_box": [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])],
-                            "raw_answer": direct_result.raw_response,
-                            "final_answer": direct_result.answer,
-                            "source_branch": "Direct Global Answer",
-                            "is_evidence": True
-                        }
-                        for idx in ev_imgs
-                    ],
-                    "telemetry": telemetry
-                }
+                    if a and a not in harvested_answers:
+                        harvested_answers.append(a)
+                for idx in ev_imgs:
+                    if idx not in harvested_evidence_images:
+                        harvested_evidence_images.append(idx)
+                    harvested_patch_boxes.append([0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])])
+                    harvested_extractions.append({
+                        "img_idx": idx,
+                        "box": [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])],
+                        "expanded_box": [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])],
+                        "raw_answer": direct_result.raw_response,
+                        "final_answer": direct_result.answer,
+                        "source_branch": "Direct Global Answer"
+                    })
+
+                unresolved_images = [i for i in unresolved_images if i not in ev_imgs]
+
+                # Early return if single image or if all candidate images resolved
+                if (total_images == 1 and not is_multi) or len(unresolved_images) == 0:
+                    telemetry["route"] = "direct_global_answer"
+                    telemetry["routes_executed"] = routes_executed
+                    telemetry["evidence_images"] = harvested_evidence_images
+                    telemetry["stage6_patch_boxes"] = harvested_patch_boxes
+                    telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
+
+                    from .stages.stage6_foveated_reader import split_attribute_answer
+                    pred_list = []
+                    for a in harvested_answers:
+                        for t in split_attribute_answer(a):
+                            if t.lower() not in [x.lower() for x in pred_list]:
+                                pred_list.append(t)
+                    is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
+                    primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else direct_result.answer
+                    return {
+                        "answers": harvested_answers,
+                        "prediction_list": pred_list if pred_list else harvested_answers,
+                        "primary_answer": primary_ans,
+                        "raw_vlm_response": direct_result.raw_response,
+                        "evidence_images": harvested_evidence_images,
+                        "stage6_patch_boxes": harvested_patch_boxes,
+                        "extractions": harvested_extractions,
+                        "telemetry": telemetry
+                    }
+                elif self.config.verbose:
+                    print(f"[Phase 1][Waterfall Cascade] Direct answer confirmed on images {ev_imgs}. Unresolved images {unresolved_images} cascading to Fast Path...")
 
         # ---------------------------------------------------------------------
         # Stage 1: Question Parsing & Active Object Set (A_q)
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
+        first_img = candidate_images[unresolved_images[0]] if (candidate_images and unresolved_images) else (candidate_images[0] if candidate_images else None)
         active_objects = parse_question_to_active_objects(
             question=question,
             zoom_model=self.zoom_model,
             nlp_model=self.nlp_model,
             ic_examples=ic_examples,
             verbose=self.config.verbose,
-            image_pil=candidate_images[0] if candidate_images else None,
+            image_pil=first_img,
             config=self.config
         )
         telemetry["timings_sec"]["stage1_parser"] = round(time.perf_counter() - t0, 3)
@@ -212,54 +234,77 @@ class MultiSourceSearchEngine:
             question=reading_question,
             sam_model=self.sam_model,
             zoom_model=self.zoom_model,
-            config=self.config
+            config=self.config,
+            active_img_indices=unresolved_images if is_multi else None
         )
         telemetry["timings_sec"]["stage2_fast_path"] = round(time.perf_counter() - t0, 3)
         telemetry["stages_executed"].append("stage2_fast_path")
 
         if fast_path_result.triggered:
-            # Early exit: answer confirmed in 1 step!
-            telemetry["route"] = "tool_based_fast_path"
+            routes_executed.append("tool_based_fast_path")
             telemetry["fast_path_confidence"] = fast_path_result.confidence
-            ev_imgs = fast_path_result.evidence_images if fast_path_result.evidence_images else [fast_path_result.evidence_img_idx]
-            telemetry["evidence_images"] = ev_imgs
-            telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
-            stage6_patch_boxes = [list(map(int, b)) for b in fast_path_result.detected_boxes] if fast_path_result.detected_boxes else []
-            telemetry["stage6_patch_boxes"] = stage6_patch_boxes
-            ans_list = fast_path_result.answers if fast_path_result.answers else [fast_path_result.answer]
-            from .stages.stage6_foveated_reader import split_attribute_answer
-            pred_list = []
+            ev_imgs = fast_path_result.evidence_images if fast_path_result.evidence_images else ([fast_path_result.evidence_img_idx] if fast_path_result.evidence_img_idx is not None else [])
+            ans_list = fast_path_result.answers if fast_path_result.answers else ([fast_path_result.answer] if fast_path_result.answer else [])
+
             for a in ans_list:
-                tokens = split_attribute_answer(a)
-                for t in tokens:
-                    if t.lower() not in [x.lower() for x in pred_list]:
-                        pred_list.append(t)
-            is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
-            primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else fast_path_result.answer
-            return {
-                "answers": ans_list,
-                "prediction_list": pred_list if pred_list else ans_list,
-                "primary_answer": primary_ans,
-                "raw_vlm_response": fast_path_result.raw_response or fast_path_result.answer,
-                "evidence_images": ev_imgs,
-                "stage6_patch_boxes": stage6_patch_boxes,
-                "extractions": [
-                    {
-                        "img_idx": ev_imgs[0] if ev_imgs else 0,
-                        "box": list(fast_path_result.detected_boxes[0]) if fast_path_result.detected_boxes else [0, 0, 100, 100],
-                        "expanded_box": list(fast_path_result.detected_boxes[0]) if fast_path_result.detected_boxes else [0, 0, 100, 100],
-                        "raw_answer": fast_path_result.raw_response or fast_path_result.answer,
-                        "final_answer": fast_path_result.answer,
-                        "source_branch": "Fast Path"
-                    }
-                ],
-                "telemetry": telemetry
-            }
+                if a and a not in harvested_answers:
+                    harvested_answers.append(a)
+            for idx in ev_imgs:
+                if idx not in harvested_evidence_images:
+                    harvested_evidence_images.append(idx)
+
+            if fast_path_result.detected_boxes:
+                for b in fast_path_result.detected_boxes:
+                    harvested_patch_boxes.append(list(map(int, b)))
+
+            for idx in ev_imgs:
+                b = list(fast_path_result.detected_boxes[0]) if fast_path_result.detected_boxes else [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])]
+                harvested_extractions.append({
+                    "img_idx": idx,
+                    "box": b,
+                    "expanded_box": b,
+                    "raw_answer": fast_path_result.raw_response or fast_path_result.answer,
+                    "final_answer": fast_path_result.answer,
+                    "source_branch": "Fast Path"
+                })
+
+            unresolved_images = [i for i in unresolved_images if i not in ev_imgs]
+
+            # Early return if single image or if all candidate images resolved
+            if (total_images == 1 and not is_multi) or len(unresolved_images) == 0:
+                telemetry["route"] = "tool_based_fast_path" if routes_executed == ["tool_based_fast_path"] else "hybrid_direct_and_fast_path"
+                telemetry["routes_executed"] = routes_executed
+                telemetry["evidence_images"] = harvested_evidence_images
+                telemetry["stage6_patch_boxes"] = harvested_patch_boxes
+                telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
+
+                from .stages.stage6_foveated_reader import split_attribute_answer
+                pred_list = []
+                for a in harvested_answers:
+                    for t in split_attribute_answer(a):
+                        if t.lower() not in [x.lower() for x in pred_list]:
+                            pred_list.append(t)
+                is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
+                primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else (harvested_answers[0] if harvested_answers else "No answer found")
+                return {
+                    "answers": harvested_answers,
+                    "prediction_list": pred_list if pred_list else harvested_answers,
+                    "primary_answer": primary_ans,
+                    "raw_vlm_response": fast_path_result.raw_response or fast_path_result.answer,
+                    "evidence_images": harvested_evidence_images,
+                    "stage6_patch_boxes": harvested_patch_boxes,
+                    "extractions": harvested_extractions,
+                    "telemetry": telemetry
+                }
+            elif self.config.verbose:
+                print(f"[Stage 2][Waterfall Cascade] Fast path confirmed on images {ev_imgs}. Unresolved images {unresolved_images} cascading to Visual Search branch...")
 
         # ---------------------------------------------------------------------
         # Stage 3: Entropy-Gated Recursive Patch Partitioning & SAM3-SGAP
         # ---------------------------------------------------------------------
-        telemetry["route"] = "visual_search_branch"
+        routes_executed.append("visual_search_branch")
+        telemetry["route"] = "visual_search_branch" if len(routes_executed) == 1 else "waterfall_cascade"
+        telemetry["routes_executed"] = routes_executed
         t0 = time.perf_counter()
         # Reuses feature map extracted during Stage 2 canvas check
         feature_cache = fast_path_result.feature_cache if self.config.reuse_stage2_features else {}
@@ -268,7 +313,8 @@ class MultiSourceSearchEngine:
             stage2_feature_cache=feature_cache,
             config=self.config,
             active_objects=active_objects,
-            siglip_model=self.siglip_model
+            siglip_model=self.siglip_model,
+            target_img_indices=unresolved_images if is_multi else None
         )
         telemetry["timings_sec"]["stage3_partitioning"] = round(time.perf_counter() - t0, 3)
         telemetry["num_bounded_patches"] = len(bounded_patches)
@@ -329,72 +375,78 @@ class MultiSourceSearchEngine:
             question_type=question_type
         )
         telemetry["timings_sec"]["stage6_reading"] = round(time.perf_counter() - t0, 3)
-        telemetry["evidence_images"] = final_result.evidence_image_indices
-        stage6_patch_boxes = [list(map(int, c.box)) for c in unified_pool]
-        telemetry["stage6_patch_boxes"] = stage6_patch_boxes
         telemetry["stage6_crops"] = getattr(final_result, "crop_records", [])
         telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
         telemetry["stages_executed"].append("stage6_foveated_reading")
 
-        # Prioritize informative answers over refusal / negative answers
         from .stages.stage6_foveated_reader import is_negative_or_unanswerable, split_attribute_answer
-        informative_answers = [
-            a for a in final_result.answers if not is_negative_or_unanswerable(a)
-        ]
-        is_multi = getattr(self.config, "multi_answer_mode", False)
-        is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
 
-        if informative_answers:
-            answers_out = informative_answers
-        elif final_result.answers:
-            answers_out = final_result.answers
-        else:
-            answers_out = []
+        # Harvest Stage 6 informative answers
+        s6_informative = [a for a in final_result.answers if not is_negative_or_unanswerable(a)]
+        s6_answers = s6_informative if s6_informative else final_result.answers
+
+        for a in s6_answers:
+            if a and a not in harvested_answers:
+                harvested_answers.append(a)
+
+        for idx in final_result.evidence_image_indices:
+            if idx not in harvested_evidence_images:
+                harvested_evidence_images.append(idx)
+
+        for c in unified_pool:
+            harvested_patch_boxes.append(list(map(int, c.box)))
+
+        for e in final_result.extractions:
+            harvested_extractions.append({
+                "img_idx": e.img_idx,
+                "box": list(e.box),
+                "expanded_box": list(e.expanded_box),
+                "raw_answer": e.raw_answer,
+                "final_answer": e.final_answer,
+                "source_branch": e.source_branch
+            })
+
+        # Final answers consolidation
+        informative_answers = [a for a in harvested_answers if not is_negative_or_unanswerable(a)]
+        final_answers_out = informative_answers if informative_answers else harvested_answers
 
         pred_list = []
-        for a in answers_out:
+        for a in final_answers_out:
             tokens = split_attribute_answer(a)
             for t in tokens:
                 if t.lower() not in [x.lower() for x in pred_list]:
                     pred_list.append(t)
 
+        is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
         if is_attr_mode and pred_list:
             primary_answer = ", ".join(pred_list)
         elif informative_answers:
             primary_answer = "; ".join(informative_answers) if is_multi else informative_answers[0]
-        elif final_result.answers:
-            primary_answer = "; ".join(final_result.answers) if is_multi else final_result.answers[0]
+        elif harvested_answers:
+            primary_answer = "; ".join(harvested_answers) if is_multi else harvested_answers[0]
         else:
             primary_answer = "No answer found"
 
-        # Find the raw VLM response corresponding to the primary answer
+        telemetry["evidence_images"] = harvested_evidence_images
+        telemetry["stage6_patch_boxes"] = harvested_patch_boxes
+
         raw_vlm_resp = None
-        for e in final_result.extractions:
-            cand_clean = e.final_answer if e.final_answer else e.raw_answer
+        for e in harvested_extractions:
+            cand_clean = e.get("final_answer") or e.get("raw_answer")
             if cand_clean in informative_answers or cand_clean == primary_answer:
-                raw_vlm_resp = e.raw_answer
+                raw_vlm_resp = e.get("raw_answer")
                 break
-        if raw_vlm_resp is None and final_result.extractions:
-            raw_vlm_resp = final_result.extractions[0].raw_answer
+        if raw_vlm_resp is None and harvested_extractions:
+            raw_vlm_resp = harvested_extractions[0].get("raw_answer")
 
         return {
-            "answers": answers_out,
-            "prediction_list": pred_list if pred_list else answers_out,
+            "answers": final_answers_out,
+            "prediction_list": pred_list if pred_list else final_answers_out,
             "primary_answer": primary_answer,
             "raw_vlm_response": raw_vlm_resp,
-            "evidence_images": final_result.evidence_image_indices,
-            "stage6_patch_boxes": stage6_patch_boxes,
-            "extractions": [
-                {
-                    "img_idx": e.img_idx,
-                    "box": list(e.box),
-                    "expanded_box": list(e.expanded_box),
-                    "raw_answer": e.raw_answer,
-                    "final_answer": e.final_answer,
-                    "source_branch": e.source_branch
-                }
-                for e in final_result.extractions
-            ],
+            "evidence_images": harvested_evidence_images,
+            "stage6_patch_boxes": harvested_patch_boxes,
+            "extractions": harvested_extractions,
             "telemetry": telemetry
         }
 

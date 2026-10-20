@@ -27,7 +27,6 @@ class DirectAnswerResult:
     evidence_img_idx: Optional[int] = None
     answers: List[str] = field(default_factory=list)
     evidence_images: List[int] = field(default_factory=list)
-    crop_records: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -150,98 +149,124 @@ def run_direct_global_assessment(
     config: MSSearchConfig
 ) -> DirectAnswerResult:
     """
-    Phase 1: Direct Global Answer Assessment across all candidate images.
-    Directly evaluates each candidate image at root resolution using prompt-directed
-    negative escape grounding (<answer>None</answer>).
-    Collects affirmative evidence from all valid images without skipping candidates.
+    Phase 1: Probes whether the question can be confidently answered directly from
+    the root global image without tool invocation or multiscale decomposition.
+    Uses Yes/No answering confidence probing:
+      c_q = 2 * (Softmax(logits_Yes/No)[Yes] - 0.5) in [-1, 1].
+    If c_q > config.direct_answer_conf_threshold, generates concise answer directly.
     """
     if not getattr(config, "enable_direct_answer", True) or zoom_model is None:
         return DirectAnswerResult(triggered=False)
 
+    threshold = getattr(config, "direct_answer_conf_threshold", 0.60)
     if config.verbose:
-        print(f"[Phase 1][Direct Answer] Evaluating all {len(candidate_images)} candidate images directly...")
+        print(f"[Phase 1][Direct Answer] Probing {len(candidate_images)} images with answering confidence (Threshold = {threshold:.2f})...")
 
     from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer, deduplicate_answers
 
     collected_direct: List[Dict[str, Any]] = []
-    crop_records: List[Dict[str, Any]] = []
-
-    if getattr(config, "prompt_directed_final_answer", True):
-        prompt = (
-            f"{question}\n\n"
-            "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-            "<answer>None</answer>\n\n"
-            "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
-            "<answer>concise answer</answer>"
-        )
-    else:
-        prompt = (
-            f"{question}\n\n"
-            "If the target object or requested text/information is NOT clearly visible in this crop, output: <answer>None</answer>"
-        )
 
     for img_idx, img_pil in enumerate(candidate_images):
-        raw_answer = ""
-        final_ans = ""
-        is_ev = False
-        try:
+        # 1. Probe answering confidence c_q on the root view (clamped to 1024px for safety)
+        conf = 0.0
+        if hasattr(zoom_model, "get_confidence_value"):
+            try:
+                safe_img = img_pil
+                if max(img_pil.width, img_pil.height) > 1024:
+                    scale = 1024.0 / max(img_pil.width, img_pil.height)
+                    safe_img = img_pil.resize(
+                        (int(round(img_pil.width * scale)), int(round(img_pil.height * scale))),
+                        Image.Resampling.BILINEAR
+                    )
+                val = zoom_model.get_confidence_value(
+                    node=[],
+                    image_pil=safe_img,
+                    confidence_type="answering",
+                    input_ele=question,
+                    root_anyres=False
+                )
+                if isinstance(val, torch.Tensor):
+                    val = val.item()
+                conf = float(val)
+            except Exception as e:
+                if config.verbose:
+                    print(f"[Phase 1][Direct Answer Notice] Image {img_idx} confidence probing error ({e})")
+                conf = 0.0
+
+        if config.verbose:
+            print(f"[Phase 1][Direct Answer] Image {img_idx}: answering confidence = {conf:.3f} (Threshold = {threshold:.2f})")
+
+        # 2. Check threshold gate
+        if conf > threshold:
+            if getattr(config, "prompt_directed_final_answer", True):
+                prompt = (
+                    f"{question}\n\n"
+                    "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
+                    "<answer>None</answer>\n\n"
+                    "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
+                    "<answer>concise answer</answer>"
+                )
+            else:
+                prompt = (
+                    f"{question}\n\n"
+                    "If the target object or requested text/information is NOT clearly visible in this crop, output: <answer>None</answer>"
+                )
+
             raw_answer = _query_vlm_response(zoom_model, img_pil, prompt, max_new_tokens=getattr(config, "max_vlm_tokens", 128))
             final_ans = extract_final_answer(raw_answer) if getattr(config, "prompt_directed_final_answer", True) else raw_answer
-            is_ev = bool(final_ans) and not is_negative_or_unanswerable(final_ans)
-        except Exception as e:
-            if config.verbose:
-                print(f"[Phase 1][Direct Answer] Image {img_idx} VLM query failed ({e})")
-            raw_answer = f"[ERROR: {e}]"
-            final_ans = "None"
-            is_ev = False
 
-        crop_records.append({
-            "img_idx": img_idx,
-            "box": [0, 0, int(img_pil.width), int(img_pil.height)],
-            "expanded_box": [0, 0, int(img_pil.width), int(img_pil.height)],
-            "raw_answer": raw_answer,
-            "final_answer": final_ans if is_ev else "None",
-            "is_evidence": is_ev,
-            "source_branch": "Direct Global Answer"
-        })
+            # Safety check: bypass if answer is a refusal / unanswerable
+            if is_negative_or_unanswerable(raw_answer) or (final_ans and is_negative_or_unanswerable(final_ans)):
+                if config.verbose:
+                    print(f"[Phase 1][Direct Answer Refusal] Global response was uninformative ('{raw_answer}'); bypassing Phase 1.")
+                continue
 
-        if is_ev:
-            collected_direct.append({
-                "answer": final_ans,
-                "raw_response": raw_answer,
-                "confidence": 1.0,
-                "img_idx": img_idx
-            })
-            if config.verbose:
-                print(f"[Phase 1][Direct Answer Evidence] Image {img_idx}: '{final_ans}'")
-        else:
-            if config.verbose:
-                print(f"[Phase 1][Direct Answer Negative] Image {img_idx}: Refusal / unanswerable ('{raw_answer[:60]}...')")
+            if len(candidate_images) > 1:
+                if config.verbose:
+                    print(f"[Phase 1][Direct Answer Confirmed] Image {img_idx} (conf={conf:.3f}): '{final_ans}'. Continuing scan for remaining candidate images...")
+                collected_direct.append({
+                    "answer": final_ans,
+                    "raw_response": raw_answer,
+                    "confidence": conf,
+                    "img_idx": img_idx
+                })
+                continue
 
-    # If affirmative evidence was discovered across candidate images, return consolidated Direct Answer
+            if config.verbose:
+                print(f"[Phase 1][Direct Answer Triggered] Confirmed on image {img_idx} (conf={conf:.3f}): '{final_ans}'. Bypassing all deep search stages!")
+            return DirectAnswerResult(
+                triggered=True,
+                answer=final_ans,
+                raw_response=raw_answer,
+                confidence=conf,
+                evidence_img_idx=img_idx,
+                answers=[final_ans],
+                evidence_images=[img_idx]
+            )
+
     if collected_direct:
         raw_ans_list = [r["answer"] for r in collected_direct]
         ev_imgs = [r["img_idx"] for r in collected_direct]
         raw_resps = [r["raw_response"] for r in collected_direct]
+        max_c = max(r["confidence"] for r in collected_direct)
         sim_thresh = getattr(config, "answer_dedup_similarity", 0.85)
         ans_list = deduplicate_answers(raw_ans_list, similarity_threshold=sim_thresh, verbose=config.verbose)
         if not ans_list:
             ans_list = raw_ans_list
         combined_ans = "; ".join(ans_list)
         if config.verbose:
-            print(f"[Phase 1][Direct Answer Complete] Discovered {len(ans_list)} direct answers across images {ev_imgs}: '{combined_ans}'.")
+            print(f"[Phase 1][Direct Answer Complete] Found {len(ans_list)} direct answers across images {ev_imgs}: '{combined_ans}'.")
         return DirectAnswerResult(
             triggered=True,
             answer=combined_ans,
             raw_response="\n---\n".join(raw_resps),
-            confidence=1.0,
+            confidence=max_c,
             evidence_img_idx=ev_imgs[0],
             answers=ans_list,
-            evidence_images=ev_imgs,
-            crop_records=crop_records
+            evidence_images=ev_imgs
         )
 
-    return DirectAnswerResult(triggered=False, crop_records=crop_records)
+    return DirectAnswerResult(triggered=False)
 
 
 def run_tool_based_fast_path(
@@ -250,10 +275,12 @@ def run_tool_based_fast_path(
     question: str,
     sam_model,
     zoom_model,
-    config: MSSearchConfig
+    config: MSSearchConfig,
+    active_img_indices: Optional[List[int]] = None
 ) -> FastPathResult:
     """
     Executes the Tool-Based Fast Path across the pool of candidate images.
+    If active_img_indices is provided, only scans those image indices.
     """
     feature_cache: Dict[int, np.ndarray] = {}
 
@@ -265,12 +292,15 @@ def run_tool_based_fast_path(
     if zoom_model is None:
         raise RuntimeError("[Stage 2 Error] zoom_model (Qwen2.5-VL) is None. Tool Fast Path requires a loaded VLM model; fallback execution is strictly disabled.")
 
+    target_indices = active_img_indices if active_img_indices is not None else list(range(len(candidate_images)))
     if config.verbose:
-        print(f"[Stage 2] Scanning {len(candidate_images)} candidate images for Active Objects {active_objects} (Fast Path Threshold: {config.fast_path_conf_threshold})...")
+        print(f"[Stage 2] Scanning {len(target_indices)} candidate images (indices: {target_indices}) for Active Objects {active_objects} (Fast Path Threshold: {config.fast_path_conf_threshold})...")
 
     collected_fp: List[Dict[str, Any]] = []
 
     for img_idx, img_pil in enumerate(candidate_images):
+        if active_img_indices is not None and img_idx not in active_img_indices:
+            continue
         img_w, img_h = img_pil.size
 
         # 1. SAM3 Full-Canvas Batched Detection
@@ -403,9 +433,9 @@ def run_tool_based_fast_path(
                     print(f"[Stage 2][Negative Fast Path] Fast path answer was uninformative/refusal ('{answer_text}'); bypassing fast path.")
                 continue
 
-            if getattr(config, "multi_answer_mode", False) and len(candidate_images) > 1:
+            if len(candidate_images) > 1:
                 if config.verbose:
-                    print(f"[Stage 2][Fast Path Multi-Hit] Confirmed on image {img_idx} (conf={existence_conf:.3f}): '{final_ans}'. Continuing scan for remaining candidate images...")
+                    print(f"[Stage 2][Fast Path Confirmed] Image {img_idx} (conf={existence_conf:.3f}): '{final_ans}'. Continuing scan for remaining candidate images...")
                 collected_fp.append({
                     "answer": final_ans,
                     "raw_response": answer_text,
@@ -432,7 +462,7 @@ def run_tool_based_fast_path(
             if config.verbose:
                 print(f"[Stage 2][Fallback Trigger] Existence confidence {existence_conf:.3f} did not exceed {config.fast_path_conf_threshold:.2f}; falling back from instant exit.")
 
-    if getattr(config, "multi_answer_mode", False) and collected_fp:
+    if collected_fp:
         raw_ans_list = [r["answer"] for r in collected_fp]
         ev_imgs = [r["img_idx"] for r in collected_fp]
         raw_resps = [r["raw_response"] for r in collected_fp]
@@ -444,7 +474,7 @@ def run_tool_based_fast_path(
             ans_list = raw_ans_list
         combined_ans = "; ".join(ans_list)
         if config.verbose:
-            print(f"[Stage 2][Fast Path Multi-Complete] Found {len(ans_list)} fast path answers across images {ev_imgs}: '{combined_ans}'.")
+            print(f"[Stage 2][Fast Path Complete] Found {len(ans_list)} fast path answers across images {ev_imgs}: '{combined_ans}'.")
         return FastPathResult(
             triggered=True,
             answer=combined_ans,
