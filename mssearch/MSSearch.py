@@ -156,12 +156,7 @@ class MultiSourceSearchEngine:
                 from .stages.stage6_foveated_reader import split_attribute_answer
                 pred_list = []
                 for a in ans_list:
-                    tokens = split_attribute_answer(
-                        a,
-                        target_attribute_type=target_attr_type,
-                        condition_val=cond_val,
-                        target_object=target_obj
-                    )
+                    tokens = split_attribute_answer(a)
                     for t in tokens:
                         if t.lower() not in [x.lower() for x in pred_list]:
                             pred_list.append(t)
@@ -234,12 +229,7 @@ class MultiSourceSearchEngine:
             from .stages.stage6_foveated_reader import split_attribute_answer
             pred_list = []
             for a in ans_list:
-                tokens = split_attribute_answer(
-                    a,
-                    target_attribute_type=target_attr_type,
-                    condition_val=cond_val,
-                    target_object=target_obj
-                )
+                tokens = split_attribute_answer(a)
                 for t in tokens:
                     if t.lower() not in [x.lower() for x in pred_list]:
                         pred_list.append(t)
@@ -362,12 +352,7 @@ class MultiSourceSearchEngine:
 
         pred_list = []
         for a in answers_out:
-            tokens = split_attribute_answer(
-                a,
-                target_attribute_type=target_attr_type,
-                condition_val=cond_val,
-                target_object=target_obj
-            )
+            tokens = split_attribute_answer(a)
             for t in tokens:
                 if t.lower() not in [x.lower() for x in pred_list]:
                     pred_list.append(t)

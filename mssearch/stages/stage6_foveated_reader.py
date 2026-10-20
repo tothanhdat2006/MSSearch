@@ -168,7 +168,7 @@ def is_negative_or_unanswerable(text: str) -> bool:
     return False
 
 
-def split_attribute_answer(ans_str: str) -> List[str]:
+def split_attribute_answer(ans_str: str, *args, **kwargs) -> List[str]:
     """
     Splits compound attribute strings into a deduplicated list of concise attribute tokens.
     Handles delimiters: semicolons, commas, ' and ', ' & ', ' or ', and slashes.
