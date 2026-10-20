@@ -83,8 +83,10 @@ def resolve_or_download_image(image_id: str, image_dir: str, url: Optional[str] 
             except Exception:
                 time.sleep(1.0 * (attempt + 1))
 
-    print(f"  [WARNING] Could not load or fetch {image_id}; generating synthetic placeholder.")
-    return Image.new("RGB", (640, 480), color=(128, 128, 128))
+    raise FileNotFoundError(
+        f"Unable to load or retrieve image '{image_id}'. Searched local directory '{image_dir}', "
+        f"OpenImages S3 splits {OPENIMAGES_SPLITS}, and original URL '{url}'."
+    )
 
 
 def evaluate_freeform_prediction(pred_text: str, gt_list: List[str]) -> Dict[str, Any]:
