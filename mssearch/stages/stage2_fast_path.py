@@ -162,7 +162,7 @@ def run_direct_global_assessment(
     if config.verbose:
         print(f"[Phase 1][Direct Answer] Probing {len(candidate_images)} images with answering confidence (Threshold = {threshold:.2f})...")
 
-    from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer
+    from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer, deduplicate_answers
 
     collected_direct: List[Dict[str, Any]] = []
 
@@ -245,10 +245,14 @@ def run_direct_global_assessment(
             )
 
     if getattr(config, "multi_answer_mode", False) and collected_direct:
-        ans_list = [r["answer"] for r in collected_direct]
+        raw_ans_list = [r["answer"] for r in collected_direct]
         ev_imgs = [r["img_idx"] for r in collected_direct]
         raw_resps = [r["raw_response"] for r in collected_direct]
         max_c = max(r["confidence"] for r in collected_direct)
+        sim_thresh = getattr(config, "answer_dedup_similarity", 0.85)
+        ans_list = deduplicate_answers(raw_ans_list, similarity_threshold=sim_thresh, verbose=config.verbose)
+        if not ans_list:
+            ans_list = raw_ans_list
         combined_ans = "; ".join(ans_list)
         if config.verbose:
             print(f"[Phase 1][Direct Answer Multi-Complete] Found {len(ans_list)} direct answers across images {ev_imgs}: '{combined_ans}'.")
@@ -417,7 +421,7 @@ def run_tool_based_fast_path(
                 )
             answer_text = _query_vlm_response(zoom_model, vlm_crop, answer_prompt, max_new_tokens=config.max_vlm_tokens)
 
-            from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer
+            from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer, deduplicate_answers
             final_ans = extract_final_answer(answer_text) if getattr(config, "prompt_directed_final_answer", True) else answer_text
             if is_negative_or_unanswerable(answer_text) or (final_ans and is_negative_or_unanswerable(final_ans)):
                 if config.verbose:
@@ -454,11 +458,15 @@ def run_tool_based_fast_path(
                 print(f"[Stage 2][Fallback Trigger] Existence confidence {existence_conf:.3f} did not exceed {config.fast_path_conf_threshold:.2f}; falling back from instant exit.")
 
     if getattr(config, "multi_answer_mode", False) and collected_fp:
-        ans_list = [r["answer"] for r in collected_fp]
+        raw_ans_list = [r["answer"] for r in collected_fp]
         ev_imgs = [r["img_idx"] for r in collected_fp]
         raw_resps = [r["raw_response"] for r in collected_fp]
         all_boxes = [b for r in collected_fp for b in r["boxes"]]
         max_c = max(r["confidence"] for r in collected_fp)
+        sim_thresh = getattr(config, "answer_dedup_similarity", 0.85)
+        ans_list = deduplicate_answers(raw_ans_list, similarity_threshold=sim_thresh, verbose=config.verbose)
+        if not ans_list:
+            ans_list = raw_ans_list
         combined_ans = "; ".join(ans_list)
         if config.verbose:
             print(f"[Stage 2][Fast Path Multi-Complete] Found {len(ans_list)} fast path answers across images {ev_imgs}: '{combined_ans}'.")
