@@ -158,6 +158,7 @@ class MultiSourceSearchEngine:
                 for a in ans_list:
                     tokens = split_attribute_answer(
                         a,
+                        question=question,
                         target_attribute_type=target_attr_type,
                         condition_val=cond_val,
                         target_object=target_obj
@@ -236,6 +237,7 @@ class MultiSourceSearchEngine:
             for a in ans_list:
                 tokens = split_attribute_answer(
                     a,
+                    question=question,
                     target_attribute_type=target_attr_type,
                     condition_val=cond_val,
                     target_object=target_obj
@@ -364,6 +366,7 @@ class MultiSourceSearchEngine:
         for a in answers_out:
             tokens = split_attribute_answer(
                 a,
+                question=question,
                 target_attribute_type=target_attr_type,
                 condition_val=cond_val,
                 target_object=target_obj

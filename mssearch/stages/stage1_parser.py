@@ -13,33 +13,10 @@ from ..config import MSSearchConfig
 from ..models.utils import include_pronouns, normalize_target_text, extract_visual_objects
 
 
-RELATIONAL_KEYWORDS = {
-    "left", "right", "above", "below", "behind", "in front of",
-    "between", "next to", "facing", "direction", "relative to",
-    "orient", "orientation", "towards", "closer", "further",
-    "north", "south", "east", "west", "beside", "adjacent"
-}
-
-ABSTRACT_ATTRIBUTE_HEADS = {
-    "text", "number", "digit", "word", "letter", "symbol", "logo", "sign",
-    "color", "colour", "shape", "appearance", "writing", "label", "written",
-    "reading", "font", "character", "displayed", "shown", "printed", "marked",
-    "engraved", "carved", "painted", "visible",
-    # Standalone geometric shapes / modifier adjectives that should NOT be queried as bare targets in SAM3
-    "round", "cylindrical", "rectangular", "square", "oval", "spherical", "triangular",
-    "circular", "flat", "curved",
-    # Standalone colors
-    "red", "blue", "green", "yellow", "black", "white", "brown", "orange", "purple",
-    "pink", "gray", "grey", "silver", "gold"
-}
-
-
 def parse_visual_query_structure(question: str, query_meta: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str]:
     """
     Extracts the structured visual query semantics: (target_attribute_type, condition_val, target_object).
-    E.g. 'What patterns are brown chairs?' -> ('pattern', 'brown', 'chair')
-         'What materials are red cars?'   -> ('material', 'red', 'car')
-         'What colors are round helmets?' -> ('color', 'round', 'helmet')
+    Leverages metadata if present, or deterministic syntax parsing from natural language grammar.
     """
     if query_meta:
         target_attr = query_meta.get("target_attribute_type", "")
@@ -49,22 +26,25 @@ def parse_visual_query_structure(question: str, query_meta: Optional[Dict[str, A
         if target_attr and target_obj:
             return target_attr.lower().strip(), cond_val.lower().strip(), target_obj.lower().strip()
 
-    # Deterministic regex parser on question
-    q_clean = question.strip()
+    # Generalized grammatical syntax parsing: 'What [attribute] are/is [condition] [object]?'
+    q_clean = question.strip().rstrip("?.,! ")
     m = re.search(
-        r"what\s+(patterns?|materials?|colors?|colours?|shapes?)\s+(?:are|is)\s+(?:the\s+)?(?:([\w\-]+)\s+)?([\w\-\s]+)\??",
+        r"what\s+([\w\s]+?)\s+(?:are|is|were|was)\s+(?:the\s+)?([\w\-\s]+)",
         q_clean,
         re.IGNORECASE
     )
     if m:
-        attr_raw = m.group(1).lower().rstrip("s")
-        if attr_raw == "colour":
-            attr_raw = "color"
-        cond_raw = (m.group(2) or "").lower().strip()
-        obj_raw = (m.group(3) or "").lower().strip()
-        # Singularize common plural objects
+        attr_raw = m.group(1).lower().strip()
+        rest = m.group(2).lower().strip()
+        rest_tokens = rest.split()
+        if len(rest_tokens) >= 2:
+            cond_val = rest_tokens[0]
+            obj_raw = " ".join(rest_tokens[1:])
+        else:
+            cond_val = ""
+            obj_raw = rest
         obj_clean = re.sub(r"s$", "", obj_raw) if len(obj_raw) > 3 and not obj_raw.endswith("ss") else obj_raw
-        return attr_raw, cond_raw, obj_clean
+        return attr_raw, cond_val, obj_clean
 
     return "", "", ""
 
@@ -117,38 +97,26 @@ class ParsedQuestion(list):
 def detect_relational_intent(question_or_parsed: Union[str, ParsedQuestion, Any]) -> bool:
     """
     Detects whether a visual question queries spatial relationships or orientation.
-    If a ParsedQuestion (or object with .is_relational) is provided, uses its semantic flag.
-    Otherwise falls back to keyword regex matching over RELATIONAL_KEYWORDS.
+    Uses the model-driven semantic flag from Stage 1 parsing (ParsedQuestion.is_relational)
+    or inspects the question type without static keyword dictionaries.
     """
     if hasattr(question_or_parsed, "is_relational"):
         return bool(question_or_parsed.is_relational)
-    q_lower = str(question_or_parsed).lower()
-    return any(re.search(rf"\b{kw}\b", q_lower) for kw in RELATIONAL_KEYWORDS)
+    if hasattr(question_or_parsed, "question_type"):
+        return str(question_or_parsed.question_type) in {"relational_reading", "spatial_orientation"}
+    return False
 
 
 def reorder_anchor_first(targets: List[str]) -> List[str]:
     """
-    Prioritizes physical host entities and landmarks ahead of abstract attributes/sub-elements.
-    Prunes bare single modifier adjectives (e.g. 'round', 'red', 'brown') when concrete host anchors exist.
-    Example: ['round', 'helmet'] -> ['helmet']
-             ['text written', 'jacket s sleeve', 'logo'] -> ['jacket s sleeve', 'text written', 'logo']
+    Prioritizes multi-word host entity phrases ahead of single-word sub-elements.
+    Preserves candidate targets without static dictionary filtering.
     """
-    delimiters = {'the', 'a', 'an', 'on', 'in', 'of', 'at', 'above', 'below', 'is', 'are', 'to', 'where'}
-    anchors = []
-    attributes = []
-    for t in targets:
-        words = [w for w in t.lower().split() if w not in delimiters]
-        concrete = [w for w in words if w not in ABSTRACT_ATTRIBUTE_HEADS]
-        if not concrete:
-            # All substantive words are abstract attributes (e.g. 'text', 'text written', 'round', 'red')
-            attributes.append(t)
-        else:
-            anchors.append(t)
-    if anchors:
-        # Prune bare modifier attributes when concrete host entities exist
-        filtered_attrs = [a for a in attributes if not (len(a.split()) == 1 and a in ABSTRACT_ATTRIBUTE_HEADS)]
-        return anchors + filtered_attrs
-    return attributes if attributes else targets
+    if not targets:
+        return []
+    multi_word = [t for t in targets if len(t.split()) > 1]
+    single_word = [t for t in targets if len(t.split()) == 1]
+    return multi_word + single_word if multi_word else targets
 
 
 def parse_question_to_active_objects(
@@ -212,9 +180,9 @@ def parse_question_to_active_objects(
                         "type": "text",
                         "text": (
                             "You are an expert visual search parser. Given a question, extract search targets and return a JSON object with:\n"
-                            "- \"anchors\": physical host entities / spatial landmarks (outermost physical entities first)\n"
-                            "- \"target_element\": specific micro-attribute, text, or symbol to read\n"
-                            "- \"active_objects\": combined search entities prioritizing physical anchors first\n"
+                            "- \"anchors\": concrete physical host entities/objects to locate in the scene (nouns only, e.g. \"helmet\", \"chair\", \"building\")\n"
+                            "- \"target_element\": specific micro-attribute or text to read (e.g. \"color\", \"pattern\", \"text\")\n"
+                            "- \"active_objects\": combined physical search entities. Never extract bare modifier adjectives (e.g. \"round\", \"red\") as standalone objects; attach modifiers to the noun (e.g. \"round helmet\", \"red car\")\n"
                             "- \"question_type\": one of ['relational_reading', 'spatial_orientation', 'counting', 'fine_grained_attribute', 'general']\n"
                             "- \"is_relational\": boolean (true if question requires relative spatial positioning or dual-scale context)\n"
                             "Return ONLY valid JSON."
@@ -239,6 +207,14 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "user",
+                    "content": [{"type": "text", "text": "Question: \"What colors are round helmets?\""}]
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"anchors": ["helmet"], "target_element": "color", "active_objects": ["round helmet", "helmet"], "question_type": "fine_grained_attribute", "is_relational": false}'}]
+                },
+                {
+                    "role": "user",
                     "content": [{"type": "text", "text": f"Question: \"{question}\""}]
                 }
             ]
@@ -251,6 +227,9 @@ def parse_question_to_active_objects(
                 "Example 2:\n"
                 "Question: \"How many windows are on the brick building?\"\n"
                 "JSON: {\"anchors\": [\"brick building\"], \"target_element\": \"windows\", \"active_objects\": [\"brick building\", \"window\"], \"question_type\": \"counting\", \"is_relational\": false}\n\n"
+                "Example 3:\n"
+                "Question: \"What colors are round helmets?\"\n"
+                "JSON: {\"anchors\": [\"helmet\"], \"target_element\": \"color\", \"active_objects\": [\"round helmet\", \"helmet\"], \"question_type\": \"fine_grained_attribute\", \"is_relational\": false}\n\n"
                 f"Question: \"{question}\"\nJSON:"
             )
 
@@ -323,9 +302,9 @@ def parse_question_to_active_objects(
                 traceback.print_exc()
 
     # Strategy 1b: Image-Grounded Anchor Discovery (Hybrid Low-Res Vision Fallback)
-    # Triggered when text-only parsing yields no concrete physical host anchors (e.g. empty or abstract words like 'text'/'word')
+    # Triggered when text-only parsing yields no concrete physical host anchors (e.g. empty list)
     enable_vision_anchors = getattr(config, "enable_image_grounded_anchors", True) if config else True
-    has_concrete_anchor = bool(parsed_anchors and any(all(w not in ABSTRACT_ATTRIBUTE_HEADS for w in a.lower().split()) for a in parsed_anchors))
+    has_concrete_anchor = bool(parsed_anchors)
 
     if enable_vision_anchors and not has_concrete_anchor and image_pil is not None and zoom_model is not None and hasattr(zoom_model, "generate_response"):
         res = getattr(config, "image_grounded_anchor_resolution", 1024) if config else 1024
@@ -479,7 +458,7 @@ def parse_question_to_active_objects(
 
     # Derive anchors, question_type, and relational intent if not set by Strategy 1
     if not parsed_anchors:
-        parsed_anchors = [t for t in clean_targets if t not in ABSTRACT_ATTRIBUTE_HEADS]
+        parsed_anchors = list(clean_targets)
     if not parsed_target_element and len(clean_targets) > len(parsed_anchors):
         parsed_target_element = clean_targets[-1]
     if extraction_strategy != "Strategy 1: MLLM Unified Semantic Parser (Non-Fallback)":
