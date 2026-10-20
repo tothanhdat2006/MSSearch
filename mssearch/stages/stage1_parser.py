@@ -13,42 +13,6 @@ from ..config import MSSearchConfig
 from ..models.utils import include_pronouns, normalize_target_text, extract_visual_objects
 
 
-def parse_visual_query_structure(question: str, query_meta: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str]:
-    """
-    Extracts the structured visual query semantics: (target_attribute_type, condition_val, target_object).
-    Leverages metadata if present, or deterministic syntax parsing from natural language grammar.
-    """
-    if query_meta:
-        target_attr = query_meta.get("target_attribute_type", "")
-        cond = query_meta.get("condition_attribute", {})
-        cond_val = cond.get("value", "") if isinstance(cond, dict) else str(cond)
-        target_obj = query_meta.get("target_object", "")
-        if target_attr and target_obj:
-            return target_attr.lower().strip(), cond_val.lower().strip(), target_obj.lower().strip()
-
-    # Generalized grammatical syntax parsing: 'What [attribute] are/is [condition] [object]?'
-    q_clean = question.strip().rstrip("?.,! ")
-    m = re.search(
-        r"what\s+([\w\s]+?)\s+(?:are|is|were|was)\s+(?:the\s+)?([\w\-\s]+)",
-        q_clean,
-        re.IGNORECASE
-    )
-    if m:
-        attr_raw = m.group(1).lower().strip()
-        rest = m.group(2).lower().strip()
-        rest_tokens = rest.split()
-        if len(rest_tokens) >= 2:
-            cond_val = rest_tokens[0]
-            obj_raw = " ".join(rest_tokens[1:])
-        else:
-            cond_val = ""
-            obj_raw = rest
-        obj_clean = re.sub(r"s$", "", obj_raw) if len(obj_raw) > 3 and not obj_raw.endswith("ss") else obj_raw
-        return attr_raw, cond_val, obj_clean
-
-    return "", "", ""
-
-
 @dataclass
 class ParsedQuestion(list):
     """
@@ -97,26 +61,33 @@ class ParsedQuestion(list):
 def detect_relational_intent(question_or_parsed: Union[str, ParsedQuestion, Any]) -> bool:
     """
     Detects whether a visual question queries spatial relationships or orientation.
-    Uses the model-driven semantic flag from Stage 1 parsing (ParsedQuestion.is_relational)
-    or inspects the question type without static keyword dictionaries.
+    Leverages the semantic flag produced by Stage 1 MLLM reasoning.
     """
     if hasattr(question_or_parsed, "is_relational"):
         return bool(question_or_parsed.is_relational)
-    if hasattr(question_or_parsed, "question_type"):
-        return str(question_or_parsed.question_type) in {"relational_reading", "spatial_orientation"}
     return False
 
 
-def reorder_anchor_first(targets: List[str]) -> List[str]:
+def reorder_anchor_first(targets: List[str], nlp_model=None) -> List[str]:
     """
-    Prioritizes multi-word host entity phrases ahead of single-word sub-elements.
-    Preserves candidate targets without static dictionary filtering.
+    Prioritizes physical host entities and landmarks ahead of abstract attributes/sub-elements.
+    Uses grammatical POS tagging if an NLP model is loaded; otherwise preserves natural semantic order.
     """
-    if not targets:
-        return []
-    multi_word = [t for t in targets if len(t.split()) > 1]
-    single_word = [t for t in targets if len(t.split()) == 1]
-    return multi_word + single_word if multi_word else targets
+    if not targets or nlp_model is None:
+        return targets
+    try:
+        anchors = []
+        modifiers = []
+        for t in targets:
+            doc = nlp_model(t)
+            has_noun = any(tok.pos_ in {"NOUN", "PROPN"} for tok in doc)
+            if has_noun:
+                anchors.append(t)
+            else:
+                modifiers.append(t)
+        return anchors + modifiers if anchors else targets
+    except Exception:
+        return targets
 
 
 def parse_question_to_active_objects(
@@ -180,9 +151,9 @@ def parse_question_to_active_objects(
                         "type": "text",
                         "text": (
                             "You are an expert visual search parser. Given a question, extract search targets and return a JSON object with:\n"
-                            "- \"anchors\": concrete physical host entities/objects to locate in the scene (nouns only, e.g. \"helmet\", \"chair\", \"building\")\n"
-                            "- \"target_element\": specific micro-attribute or text to read (e.g. \"color\", \"pattern\", \"text\")\n"
-                            "- \"active_objects\": combined physical search entities. Never extract bare modifier adjectives (e.g. \"round\", \"red\") as standalone objects; attach modifiers to the noun (e.g. \"round helmet\", \"red car\")\n"
+                            "- \"anchors\": physical host entities / spatial landmarks (outermost physical entities first)\n"
+                            "- \"target_element\": specific micro-attribute, text, or symbol to read\n"
+                            "- \"active_objects\": combined search entities prioritizing physical anchors first\n"
                             "- \"question_type\": one of ['relational_reading', 'spatial_orientation', 'counting', 'fine_grained_attribute', 'general']\n"
                             "- \"is_relational\": boolean (true if question requires relative spatial positioning or dual-scale context)\n"
                             "Return ONLY valid JSON."
@@ -207,14 +178,6 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "Question: \"What colors are round helmets?\""}]
-                },
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": '{"anchors": ["helmet"], "target_element": "color", "active_objects": ["round helmet", "helmet"], "question_type": "fine_grained_attribute", "is_relational": false}'}]
-                },
-                {
-                    "role": "user",
                     "content": [{"type": "text", "text": f"Question: \"{question}\""}]
                 }
             ]
@@ -227,9 +190,6 @@ def parse_question_to_active_objects(
                 "Example 2:\n"
                 "Question: \"How many windows are on the brick building?\"\n"
                 "JSON: {\"anchors\": [\"brick building\"], \"target_element\": \"windows\", \"active_objects\": [\"brick building\", \"window\"], \"question_type\": \"counting\", \"is_relational\": false}\n\n"
-                "Example 3:\n"
-                "Question: \"What colors are round helmets?\"\n"
-                "JSON: {\"anchors\": [\"helmet\"], \"target_element\": \"color\", \"active_objects\": [\"round helmet\", \"helmet\"], \"question_type\": \"fine_grained_attribute\", \"is_relational\": false}\n\n"
                 f"Question: \"{question}\"\nJSON:"
             )
 

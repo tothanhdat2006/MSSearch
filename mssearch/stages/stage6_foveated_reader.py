@@ -6,7 +6,7 @@ and deduplicates extracted target answers via semantic similarity into Answer Me
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional, Any, Set
+from typing import List, Dict, Tuple, Optional, Any
 from difflib import SequenceMatcher
 from PIL import Image, ImageDraw
 
@@ -168,36 +168,11 @@ def is_negative_or_unanswerable(text: str) -> bool:
     return False
 
 
-def _expand_word_stems(word: str) -> Set[str]:
-    """Expands basic English noun/adjective inflectional variants (singular/plural)."""
-    stems = {word}
-    if word.endswith("ies") and len(word) > 4:
-        stems.add(word[:-3] + "y")
-    elif word.endswith("es") and len(word) > 3:
-        stems.add(word[:-2])
-        stems.add(word[:-1])
-    elif word.endswith("s") and len(word) > 2:
-        stems.add(word[:-1])
-    else:
-        stems.add(word + "s")
-        stems.add(word + "es")
-    return stems
-
-
-def split_attribute_answer(
-    ans_str: str,
-    question: Optional[str] = None,
-    target_attribute_type: Optional[str] = None,
-    condition_val: Optional[str] = None,
-    target_object: Optional[str] = None
-) -> List[str]:
+def split_attribute_answer(ans_str: str) -> List[str]:
     """
     Splits compound attribute strings into a deduplicated list of concise attribute tokens.
-    Handles delimiters: semicolons, commas, ' and ', ' & ', ' or ', slashes, and newlines.
-    Strips boilerplate preambles and applies Linguistic Premise Subtraction:
-    - Filters out condition attribute values explicitly stated in the question premise (e.g. 'brown' when asking 'brown chairs', 'red' for 'red cars').
-    - Filters out target object noun tokens (e.g. 'chair', 'car', 'helmet').
-    - Does NOT use any fixed or synthetic vocabularies (domain-agnostic and non-overfitting).
+    Handles delimiters: semicolons, commas, ' and ', ' & ', ' or ', and slashes.
+    Strips boilerplate conversational preambles.
     """
     if not ans_str or not ans_str.strip():
         return []
@@ -210,55 +185,18 @@ def split_attribute_answer(
         flags=re.IGNORECASE
     )
 
-    parts = re.split(r"[,;\n]|\s+(?:and|&|or)\s+|(?:\s*/\s*)", cleaned)
-
-    # Build premise words from question and metadata for Linguistic Premise Subtraction
-    premise_words = set()
-    if question:
-        q_clean = re.sub(r"[^\w\s]", " ", question.lower())
-        q_tokens = q_clean.split()
-        # Exclude interrogatives, auxiliary verbs, and question structure keywords
-        interrogative_stops = {
-            "what", "which", "where", "who", "whom", "whose", "when", "why", "how",
-            "is", "are", "were", "was", "be", "been", "being", "the", "a", "an",
-            "of", "in", "on", "at", "to", "for", "with", "do", "does", "did",
-            "can", "could", "would", "should", "have", "has", "had", "many", "much",
-            "color", "colors", "colour", "colours", "material", "materials",
-            "pattern", "patterns", "shape", "shapes", "type", "types", "kind", "kinds"
-        }
-        for w in q_tokens:
-            if w not in interrogative_stops and len(w) > 2:
-                premise_words.update(_expand_word_stems(w))
-
-    if condition_val:
-        for w in re.sub(r"[^\w\s]", " ", condition_val.lower()).split():
-            if len(w) > 2:
-                premise_words.update(_expand_word_stems(w))
-
-    if target_object:
-        for w in re.sub(r"[^\w\s]", " ", target_object.lower()).split():
-            if len(w) > 2:
-                premise_words.update(_expand_word_stems(w))
+    parts = re.split(r"[,;]|\s+(?:and|&|or)\s+|(?:\s*/\s*)", cleaned)
 
     tokens: List[str] = []
     seen = set()
     for p in parts:
         tok = p.strip().strip(".").strip("\"'").strip()
         tok_clean = re.sub(r"^(?:a|an|the)\s+", "", tok, flags=re.IGNORECASE).strip()
-        if not tok_clean or len(tok_clean) < 2 or is_negative_or_unanswerable(tok_clean):
-            continue
-        key = tok_clean.lower()
-
-        # Linguistic Premise Subtraction: reject tokens that echo question conditions or host entity nouns
-        if key in premise_words or any(stem in premise_words for stem in _expand_word_stems(key)):
-            continue
-        sub_words = key.split()
-        if sub_words and all(any(stem in premise_words for stem in _expand_word_stems(sw)) for sw in sub_words):
-            continue
-
-        if key not in seen:
-            seen.add(key)
-            tokens.append(tok_clean)
+        if tok_clean and len(tok_clean) >= 2 and not is_negative_or_unanswerable(tok_clean):
+            key = tok_clean.lower()
+            if key not in seen:
+                seen.add(key)
+                tokens.append(tok_clean)
     return tokens
 
 
@@ -331,11 +269,6 @@ def run_foveated_vlm_reading(
         else:
             is_relational = False
 
-    # Extract structured query semantics (target_attribute_type, condition_val, target_object)
-    from .stage1_parser import parse_visual_query_structure
-    target_attr_type, cond_val, target_obj = parse_visual_query_structure(
-        question, getattr(config, "query_meta", None)
-    )
 
     for c_idx, item in enumerate(unified_pool):
         img_idx = item.img_idx
@@ -402,31 +335,24 @@ def run_foveated_vlm_reading(
             if config.enable_visual_prompt_bbox else ""
         )
         if getattr(config, "prompt_directed_final_answer", True):
-            prefix = (
-                "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
-                if is_relational else "Carefully inspect this image patch.\n"
-            )
             if answer_mode == "attribute_list":
+                prefix = (
+                    "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
+                    if is_relational else "Carefully inspect this crop.\n"
+                )
                 prompt = (
-                    f"Question: \"{question}\"{text_coords_hint}\n\n"
+                    f"{question}{text_coords_hint}\n\n"
                     f"{prefix}"
                     f"{bbox_note}"
-                    "1. Target Verification:\n"
-                    "Verify if this focal region clearly shows the target object described in the question.\n"
-                    "If the focal region shows a different object, background, or distractor, or does not clearly contain the queried object, output:\n"
+                    "If the target object or requested information is NOT clearly visible in this crop, output:\n"
                     "<answer>None</answer>\n\n"
-                    "2. Attribute Extraction:\n"
-                    "If the queried object is present and satisfies any condition stated in the question, answer the question directly.\n"
-                    "Extract ONLY the specific visual attribute or property directly requested by the question.\n"
-                    "- Do NOT repeat the object name or condition words from the question premise (e.g. if asked 'What materials are red cars?', answer only the material such as 'metal', never repeat 'red' or 'car').\n"
-                    "- Do NOT output unrequested visual attributes.\n"
-                    "Output strictly inside <answer>...</answer> tags:\n"
-                    "<answer>concise attribute list</answer>"
+                    "Otherwise, answer the question directly and concisely inside <answer>...</answer> tags:\n"
+                    "<answer>concise answer</answer>"
                 )
             elif is_relational:
                 prompt = (
-                    f"Question: \"{question}\"{text_coords_hint}\n\n"
-                    f"{prefix}"
+                    f"{question}{text_coords_hint}\n\n"
+                    "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
                     f"{bbox_note}"
                     "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
                     "<answer>None</answer>\n\n"
@@ -435,8 +361,8 @@ def run_foveated_vlm_reading(
                 )
             else:
                 prompt = (
-                    f"Question: \"{question}\"{text_coords_hint}\n\n"
-                    f"{prefix}"
+                    f"{question}{text_coords_hint}\n\n"
+                    "Carefully inspect this crop.\n"
                     f"{bbox_note}"
                     "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
                     "<answer>None</answer>\n\n"
@@ -467,18 +393,6 @@ def run_foveated_vlm_reading(
             continue
 
         final_ans = extract_final_answer(raw_answer)
-        if answer_mode == "attribute_list" and final_ans:
-            extracted_tokens = split_attribute_answer(
-                final_ans,
-                question=question,
-                target_attribute_type=target_attr_type,
-                condition_val=cond_val,
-                target_object=target_obj
-            )
-            if extracted_tokens:
-                final_ans = ", ".join(extracted_tokens)
-            else:
-                final_ans = "None"
         is_ev = bool(final_ans) and not is_negative_or_unanswerable(final_ans)
 
         # Collect detailed debug crop record for notebook visualization

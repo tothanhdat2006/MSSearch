@@ -475,8 +475,8 @@ def run_feature_grouping_and_gating(
         max_siglip_score = max([bounded_patches[mem_i].siglip_score or 0.0 for mem_i in member_indices], default=0.0)
         if getattr(config, "bypass_vlm_for_confirmed_groups", True) and not has_active_match:
             if max_det_score >= config.sam3_group_det_threshold:
-                best_det = max(group_detected_objects, key=lambda d: d["score"])
                 has_active_match = True
+                best_det = max(group_detected_objects, key=lambda d: d["score"])
                 match_reason = f"sam3_high_confidence (score={best_det['score']:.2f} >= {config.sam3_group_det_threshold:.2f})"
                 vlm_tested_patch_idx = best_det["patch_idx"]
                 vlm_tested_role = "Detection Crop (SAM3 Confirmed)"
