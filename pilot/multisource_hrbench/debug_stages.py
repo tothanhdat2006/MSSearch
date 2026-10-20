@@ -337,7 +337,12 @@ def render_stage2_fast_path(
     if n_imgs == 1:
         axes = [axes]
 
-    detected_boxes = fast_path_res.detected_boxes or {}
+    ev_imgs = getattr(fast_path_res, "evidence_images", [])
+    if not ev_imgs and getattr(fast_path_res, "evidence_img_idx", None) is not None:
+        ev_imgs = [fast_path_res.evidence_img_idx]
+
+    detected_boxes = getattr(fast_path_res, "detected_boxes", [])
+    boxes_by_img = getattr(fast_path_res, "boxes_by_image", None)
 
     for img_idx, ax in enumerate(axes):
         vis_img = candidate_images[img_idx].copy()
@@ -346,11 +351,27 @@ def render_stage2_fast_path(
         tag = "TARGET" if is_t else "DISTRACTOR"
         color = "forestgreen" if is_t else "royalblue"
 
-        boxes = detected_boxes.get(img_idx, [])
+        # Safely resolve boxes whether detected_boxes is a dict, list, or boxes_by_image is provided
+        if isinstance(boxes_by_img, dict) and boxes_by_img:
+            boxes = boxes_by_img.get(img_idx, [])
+        elif isinstance(detected_boxes, dict):
+            boxes = detected_boxes.get(img_idx, [])
+        elif isinstance(detected_boxes, (list, tuple)):
+            if img_idx in ev_imgs or (not ev_imgs and img_idx == target_pool_idx and fast_path_res.triggered):
+                boxes = list(detected_boxes)
+            else:
+                boxes = []
+        else:
+            boxes = []
+
         for b_idx, box in enumerate(boxes):
-            x1, y1, x2, y2 = [int(round(float(c))) for c in box]
+            if not isinstance(box, (list, tuple)) or len(box) < 4:
+                continue
+            x1, y1, x2, y2 = [int(round(float(c))) for c in box[:4]]
+            bw = max(1, x2 - x1)
+            bh = max(1, y2 - y1)
             rect = mpatches.Rectangle(
-                (x1, y1), x2 - x1, y2 - y1, linewidth=3.0, edgecolor="#00e5ff", facecolor="none", linestyle="-"
+                (x1, y1), bw, bh, linewidth=3.0, edgecolor="#00e5ff", facecolor="none", linestyle="-"
             )
             ax.add_patch(rect)
             ax.text(
@@ -537,7 +558,7 @@ def render_stage5_screening(
         crop = (
             cand.crop_image
             if hasattr(cand, "crop_image") and cand.crop_image is not None
-            else candidate_images[cand.img_idx].crop(cand.box)
+            else candidate_images[cand.img_idx].crop(tuple(int(round(float(c))) for c in cand.box[:4]))
         )
         ax.imshow(crop)
 
@@ -602,14 +623,16 @@ def render_stage6_reading(
         ans = c_rec.get("raw_answer", "")
         is_t = (img_idx == target_pool_idx)
 
-        crop_pil = candidate_images[img_idx].crop(tuple(exp_box))
+        exp_box_clean = tuple(int(round(float(v))) for v in exp_box[:4])
+        crop_pil = candidate_images[img_idx].crop(exp_box_clean)
         ax.imshow(crop_pil)
 
-        if loc_box and len(loc_box) == 4:
+        if loc_box and len(loc_box) >= 4:
+            loc_clean = [int(round(float(v))) for v in loc_box[:4]]
             rect = mpatches.Rectangle(
-                (loc_box[0], loc_box[1]),
-                loc_box[2] - loc_box[0],
-                loc_box[3] - loc_box[1],
+                (loc_clean[0], loc_clean[1]),
+                max(1, loc_clean[2] - loc_clean[0]),
+                max(1, loc_clean[3] - loc_clean[1]),
                 linewidth=2.5,
                 edgecolor="red",
                 facecolor="none",

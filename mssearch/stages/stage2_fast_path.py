@@ -42,6 +42,7 @@ class FastPathResult:
     feature_cache: Dict[int, np.ndarray] = field(default_factory=dict)
     answers: List[str] = field(default_factory=list)
     evidence_images: List[int] = field(default_factory=list)
+    boxes_by_image: Dict[int, List[Tuple[int, int, int, int]]] = field(default_factory=dict)
 
 
 def compute_composite_bbox(
@@ -456,7 +457,8 @@ def run_tool_based_fast_path(
                 detected_boxes=matched_boxes_by_obj,
                 feature_cache=feature_cache,
                 answers=[final_ans],
-                evidence_images=[img_idx]
+                evidence_images=[img_idx],
+                boxes_by_image={img_idx: matched_boxes_by_obj}
             )
         else:
             if config.verbose:
@@ -484,7 +486,8 @@ def run_tool_based_fast_path(
             detected_boxes=all_boxes,
             feature_cache=feature_cache,
             answers=ans_list,
-            evidence_images=ev_imgs
+            evidence_images=ev_imgs,
+            boxes_by_image={r["img_idx"]: r["boxes"] for r in collected_fp}
         )
 
     if config.verbose:
