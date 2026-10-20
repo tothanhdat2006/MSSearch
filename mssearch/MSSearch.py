@@ -151,10 +151,12 @@ class MultiSourceSearchEngine:
                     for t in tokens:
                         if t.lower() not in [x.lower() for x in pred_list]:
                             pred_list.append(t)
+                is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
+                primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else direct_result.answer
                 return {
                     "answers": ans_list,
                     "prediction_list": pred_list if pred_list else ans_list,
-                    "primary_answer": direct_result.answer,
+                    "primary_answer": primary_ans,
                     "raw_vlm_response": direct_result.raw_response,
                     "evidence_images": ev_imgs,
                     "stage6_patch_boxes": stage6_patch_boxes,
@@ -222,10 +224,12 @@ class MultiSourceSearchEngine:
                 for t in tokens:
                     if t.lower() not in [x.lower() for x in pred_list]:
                         pred_list.append(t)
+            is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
+            primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else fast_path_result.answer
             return {
                 "answers": ans_list,
                 "prediction_list": pred_list if pred_list else ans_list,
-                "primary_answer": fast_path_result.answer,
+                "primary_answer": primary_ans,
                 "raw_vlm_response": fast_path_result.raw_response or fast_path_result.answer,
                 "evidence_images": ev_imgs,
                 "stage6_patch_boxes": stage6_patch_boxes,
@@ -323,20 +327,35 @@ class MultiSourceSearchEngine:
         telemetry["stages_executed"].append("stage6_foveated_reading")
 
         # Prioritize informative answers over refusal / negative answers
-        from .stages.stage6_foveated_reader import is_negative_or_unanswerable
+        from .stages.stage6_foveated_reader import is_negative_or_unanswerable, split_attribute_answer
         informative_answers = [
             a for a in final_result.answers if not is_negative_or_unanswerable(a)
         ]
         is_multi = getattr(self.config, "multi_answer_mode", False)
+        is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
+
         if informative_answers:
-            primary_answer = "; ".join(informative_answers) if is_multi else informative_answers[0]
             answers_out = informative_answers
         elif final_result.answers:
-            primary_answer = "; ".join(final_result.answers) if is_multi else final_result.answers[0]
             answers_out = final_result.answers
         else:
-            primary_answer = "No answer found"
             answers_out = []
+
+        pred_list = []
+        for a in answers_out:
+            tokens = split_attribute_answer(a)
+            for t in tokens:
+                if t.lower() not in [x.lower() for x in pred_list]:
+                    pred_list.append(t)
+
+        if is_attr_mode and pred_list:
+            primary_answer = ", ".join(pred_list)
+        elif informative_answers:
+            primary_answer = "; ".join(informative_answers) if is_multi else informative_answers[0]
+        elif final_result.answers:
+            primary_answer = "; ".join(final_result.answers) if is_multi else final_result.answers[0]
+        else:
+            primary_answer = "No answer found"
 
         # Find the raw VLM response corresponding to the primary answer
         raw_vlm_resp = None
@@ -347,14 +366,6 @@ class MultiSourceSearchEngine:
                 break
         if raw_vlm_resp is None and final_result.extractions:
             raw_vlm_resp = final_result.extractions[0].raw_answer
-
-        from .stages.stage6_foveated_reader import split_attribute_answer
-        pred_list = []
-        for a in answers_out:
-            tokens = split_attribute_answer(a)
-            for t in tokens:
-                if t.lower() not in [x.lower() for x in pred_list]:
-                    pred_list.append(t)
 
         return {
             "answers": answers_out,

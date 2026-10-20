@@ -202,14 +202,14 @@ def run_direct_global_assessment(
                 prompt = (
                     f"{question}\n\n"
                     "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                    "Final Answer: None\n\n"
-                    "Otherwise, answer the question concisely. Conclude your response with:\n"
-                    "Final Answer: <concise answer>"
+                    "<answer>None</answer>\n\n"
+                    "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
+                    "<answer>concise answer</answer>"
                 )
             else:
                 prompt = (
                     f"{question}\n\n"
-                    "If the target object or requested text/information is NOT clearly visible in this crop, output: Final Answer: None"
+                    "If the target object or requested text/information is NOT clearly visible in this crop, output: <answer>None</answer>"
                 )
 
             raw_answer = _query_vlm_response(zoom_model, img_pil, prompt, max_new_tokens=getattr(config, "max_vlm_tokens", 128))
@@ -410,14 +410,14 @@ def run_tool_based_fast_path(
                 answer_prompt = (
                     f"{question}{text_coords_hint}\n\n"
                     "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                    "Final Answer: None\n\n"
-                    "Otherwise, answer the question concisely. Conclude your response with:\n"
-                    "Final Answer: <concise answer>"
+                    "<answer>None</answer>\n\n"
+                    "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
+                    "<answer>concise answer</answer>"
                 )
             else:
                 answer_prompt = (
                     f"{question}{text_coords_hint}\n\n"
-                    "If the target object or requested text/information is NOT clearly visible in this crop, output: Final Answer: None"
+                    "If the target object or requested text/information is NOT clearly visible in this crop, output: <answer>None</answer>"
                 )
             answer_text = _query_vlm_response(zoom_model, vlm_crop, answer_prompt, max_new_tokens=config.max_vlm_tokens)
 

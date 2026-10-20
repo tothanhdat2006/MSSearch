@@ -30,24 +30,17 @@ import re
 
 def extract_final_answer(text: str) -> str:
     """
-    Extracts the clean, concise final answer from a model response concluding with:
-    'Final Answer: <concise answer>' or inside '<answer>...</answer>' tags.
-    Falls back gracefully to the raw response if no structured demarcation is found.
+    Extracts the clean, concise final answer strictly from '<answer>...</answer>' tags.
+    Returns empty string if no <answer> tag is found (strictly zero fallback, no 'Final Answer:').
     """
     if not text:
         return ""
-    # Match 'Final Answer:', '**Final Answer:**', or 'Final Answer is:'
-    m = re.search(r'(?:\*\*|__)?Final Answer(?:\*\*|__)?\s*(?:is|:)?\s*([^\n\r]+)', text, flags=re.IGNORECASE)
+    m = re.search(r'<answer>([\s\S]*?)</answer>', text, flags=re.IGNORECASE)
     if m:
         val = m.group(1).strip()
         val = re.sub(r'^[\*\[\"\'\s]+|[\*\]\"\'\.\s]+$', '', val).strip()
-        if val:
-            return val
-    # Fallback to <answer> tags if present
-    m = re.search(r'<answer>([\s\S]*?)</answer>', text, flags=re.IGNORECASE)
-    if m:
-        return m.group(1).strip()
-    return text.strip()
+        return val
+    return ""
 
 @dataclass
 class FinalSearchResult:
@@ -334,50 +327,62 @@ def run_foveated_vlm_reading(
             if config.verbose and c_idx == 0:
                 print(f"[Stage 6][Dual-Scale] Spatial/relational query detected; using Dual-Scale [Global with BBox, Local Crop] mode.")
 
-        # 3. Query VLM with prompt-directed Final Answer directive & negative escape grounding
+        # 3. Query VLM with prompt-directed <answer> XML directive & negative escape grounding
         answer_mode = getattr(config, "answer_type", "free_form")
+        bbox_note = (
+            "Focus specifically on the region inside the red bounding box. "
+            "Note that the red bounding box is an artificial indicator outline marking the area of interest, NOT part of the physical scene or object.\n"
+            if config.enable_visual_prompt_bbox else ""
+        )
         if getattr(config, "prompt_directed_final_answer", True):
             if answer_mode == "attribute_list":
                 if is_relational:
                     prompt = (
                         f"{question}{text_coords_hint}\n\n"
                         "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
+                        f"{bbox_note}"
                         "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                        "Final Answer: None\n\n"
+                        "<answer>None</answer>\n\n"
                         "Otherwise, extract only the visual attribute values (e.g., specific colors, materials, patterns) "
-                        "as a concise, comma-separated list without conversational filler. Conclude with:\n"
-                        "Final Answer: <attribute1, attribute2>"
+                        "as a concise, comma-separated list inside <answer>...</answer> tags:\n"
+                        "<answer>attribute1, attribute2</answer>"
                     )
                 else:
                     prompt = (
                         f"{question}{text_coords_hint}\n\n"
-                        "Carefully inspect this crop. If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                        "Final Answer: None\n\n"
+                        "Carefully inspect this crop.\n"
+                        f"{bbox_note}"
+                        "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
+                        "<answer>None</answer>\n\n"
                         "Otherwise, extract only the visual attribute values (e.g., specific colors, materials, patterns) "
-                        "as a concise, comma-separated list without conversational filler. Conclude with:\n"
-                        "Final Answer: <attribute1, attribute2>"
+                        "as a concise, comma-separated list inside <answer>...</answer> tags:\n"
+                        "<answer>attribute1, attribute2</answer>"
                     )
             elif is_relational:
                 prompt = (
                     f"{question}{text_coords_hint}\n\n"
                     "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
+                    f"{bbox_note}"
                     "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                    "Final Answer: None\n\n"
-                    "Otherwise, answer concisely based strictly on what is visible in the focal region, concluding with:\n"
-                    "Final Answer: <concise answer>"
+                    "<answer>None</answer>\n\n"
+                    "Otherwise, answer concisely based strictly on what is visible in the focal region inside <answer>...</answer> tags:\n"
+                    "<answer>concise answer</answer>"
                 )
             else:
                 prompt = (
                     f"{question}{text_coords_hint}\n\n"
-                    "Carefully inspect this crop. If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                    "Final Answer: None\n\n"
-                    "Otherwise, answer concisely based strictly on what is visible in this crop, concluding with:\n"
-                    "Final Answer: <concise answer>"
+                    "Carefully inspect this crop.\n"
+                    f"{bbox_note}"
+                    "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
+                    "<answer>None</answer>\n\n"
+                    "Otherwise, answer concisely based strictly on what is visible in this crop inside <answer>...</answer> tags:\n"
+                    "<answer>concise answer</answer>"
                 )
         else:
             prompt = (
                 f"{question}{text_coords_hint}\n\n"
-                "If the target object or requested text/information is NOT clearly visible in this crop, output: Final Answer: None"
+                f"{bbox_note}"
+                "If the target object or requested text/information is NOT clearly visible in this crop, output: <answer>None</answer>"
             )
 
         raw_answer = ""
@@ -397,7 +402,7 @@ def run_foveated_vlm_reading(
             continue
 
         final_ans = extract_final_answer(raw_answer)
-        is_ev = not is_negative_or_unanswerable(final_ans if final_ans else raw_answer)
+        is_ev = bool(final_ans) and not is_negative_or_unanswerable(final_ans)
 
         # Collect detailed debug crop record for notebook visualization
         crop_records.append({
@@ -427,7 +432,7 @@ def run_foveated_vlm_reading(
             )
             evidence_indices.add(img_idx)
             if config.verbose:
-                print(f"[Stage 6][Evidence Found] Crop {c_idx} (Image {img_idx}, {item.source_branch}): Final Answer: '{final_ans}' (Raw: '{raw_answer[:60]}...')")
+                print(f"[Stage 6][Evidence Found] Crop {c_idx} (Image {img_idx}, {item.source_branch}): <answer>: '{final_ans}' (Raw: '{raw_answer[:60]}...')")
 
             # Fix B: Collision-Free Early Stopping comparing extracted core answers (no preamble collision)
             if getattr(config, "enable_early_consensus_exit", True) and len(extractions) >= 2:
@@ -452,7 +457,7 @@ def run_foveated_vlm_reading(
             print(f"[Stage 6][Negative Filtered] Crop {c_idx} (Image {img_idx}) returned unanswerable response: '{raw_answer}'")
 
     # 4. Semantic Deduplication of Answer Memory using clean final answers
-    clean_ans_list = [e.final_answer if e.final_answer else e.raw_answer for e in extractions]
+    clean_ans_list = [e.final_answer for e in extractions if e.final_answer]
     final_dedup_answers = deduplicate_answers(
         clean_ans_list,
         similarity_threshold=config.answer_dedup_similarity,
@@ -462,7 +467,7 @@ def run_foveated_vlm_reading(
     # 5. Strict Evidence Pruning: Retain only image indices that yielded affirmative, non-negative answers
     valid_evidence_indices: set = set()
     for e in extractions:
-        cand = e.final_answer if e.final_answer else e.raw_answer
+        cand = e.final_answer
         if cand and not is_negative_or_unanswerable(cand):
             valid_evidence_indices.add(e.img_idx)
 
