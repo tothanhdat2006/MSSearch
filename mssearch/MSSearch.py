@@ -144,8 +144,16 @@ class MultiSourceSearchEngine:
                 ]
                 telemetry["stage6_patch_boxes"] = stage6_patch_boxes
                 ans_list = direct_result.answers if direct_result.answers else [direct_result.answer]
+                from .stages.stage6_foveated_reader import split_attribute_answer
+                pred_list = []
+                for a in ans_list:
+                    tokens = split_attribute_answer(a)
+                    for t in tokens:
+                        if t.lower() not in [x.lower() for x in pred_list]:
+                            pred_list.append(t)
                 return {
                     "answers": ans_list,
+                    "prediction_list": pred_list if pred_list else ans_list,
                     "primary_answer": direct_result.answer,
                     "raw_vlm_response": direct_result.raw_response,
                     "evidence_images": ev_imgs,
@@ -207,8 +215,16 @@ class MultiSourceSearchEngine:
             stage6_patch_boxes = [list(map(int, b)) for b in fast_path_result.detected_boxes] if fast_path_result.detected_boxes else []
             telemetry["stage6_patch_boxes"] = stage6_patch_boxes
             ans_list = fast_path_result.answers if fast_path_result.answers else [fast_path_result.answer]
+            from .stages.stage6_foveated_reader import split_attribute_answer
+            pred_list = []
+            for a in ans_list:
+                tokens = split_attribute_answer(a)
+                for t in tokens:
+                    if t.lower() not in [x.lower() for x in pred_list]:
+                        pred_list.append(t)
             return {
                 "answers": ans_list,
+                "prediction_list": pred_list if pred_list else ans_list,
                 "primary_answer": fast_path_result.answer,
                 "raw_vlm_response": fast_path_result.raw_response or fast_path_result.answer,
                 "evidence_images": ev_imgs,
@@ -332,8 +348,17 @@ class MultiSourceSearchEngine:
         if raw_vlm_resp is None and final_result.extractions:
             raw_vlm_resp = final_result.extractions[0].raw_answer
 
+        from .stages.stage6_foveated_reader import split_attribute_answer
+        pred_list = []
+        for a in answers_out:
+            tokens = split_attribute_answer(a)
+            for t in tokens:
+                if t.lower() not in [x.lower() for x in pred_list]:
+                    pred_list.append(t)
+
         return {
             "answers": answers_out,
+            "prediction_list": pred_list if pred_list else answers_out,
             "primary_answer": primary_answer,
             "raw_vlm_response": raw_vlm_resp,
             "evidence_images": final_result.evidence_image_indices,

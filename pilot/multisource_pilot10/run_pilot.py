@@ -193,7 +193,7 @@ def main():
         enable_early_consensus_exit=False,
         prompt_directed_final_answer=True,
         include_options_in_prompt=False,
-        answer_type="free_form",
+        answer_type="attribute_list",
         verbose=False
     )
 
@@ -273,7 +273,7 @@ def main():
                     zoom_model=qwen_engine,
                     siglip_model=siglip_engine,
                     nlp_model=nlp_parser,
-                    annotation={"question": question, "sample_id": sample_id, "answer_type": "free_form"},
+                    annotation={"question": question, "sample_id": sample_id, "answer_type": "attribute_list"},
                     candidate_images=candidate_images,
                     config=task_config
                 )
@@ -287,6 +287,7 @@ def main():
 
             latency = round(time.perf_counter() - t0, 3)
             pred_answer = response.get("primary_answer", "")
+            pred_list = response.get("prediction_list", response.get("answers", []))
             telemetry = response.get("telemetry", {})
             route = telemetry.get("route", "unknown")
             discovered_evidence = response.get("evidence_images", [])
@@ -303,6 +304,7 @@ def main():
                 "ground_truth_freeform": gt_freeform,
                 "candidate_images": candidate_meta,
                 "mssearch_prediction": pred_answer,
+                "mssearch_prediction_list": pred_list,
                 "raw_vlm_response": response.get("raw_vlm_response", ""),
                 "extracted_answers": response.get("answers", []),
                 "discovered_evidence_images": discovered_evidence,

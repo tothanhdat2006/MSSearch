@@ -162,6 +162,10 @@ def is_negative_or_unanswerable(text: str) -> bool:
         r"\bnot found\b",
         r"no (?:\w+\s+){0,5}(?:found|detected|seen|present)\b",
         r"no (?:\w+\s+){0,5}(?:or \w+\s+){0,3}present\b",
+        r"\bare the borders around\b",
+        r"\bare the lines at the\b",
+        r"\bare lines at the\b",
+        r"\bindicate areas of concern\b",
     ]
 
     for pat in negative_patterns:
@@ -169,6 +173,38 @@ def is_negative_or_unanswerable(text: str) -> bool:
             return True
 
     return False
+
+
+def split_attribute_answer(ans_str: str) -> List[str]:
+    """
+    Splits compound attribute strings into a deduplicated list of concise attribute tokens.
+    Handles delimiters: semicolons, commas, ' and ', ' & ', ' or ', and slashes.
+    Strips boilerplate phrases ('The red flags are...', 'It is...').
+    """
+    if not ans_str or not ans_str.strip():
+        return []
+
+    # Strip conversational preambles
+    cleaned = re.sub(
+        r"^(?:the\s+[\w\s]+\s+(?:is|are|appear to be|have|has)\s+|it\s+is\s+|they\s+are\s+)",
+        "",
+        ans_str.strip(),
+        flags=re.IGNORECASE
+    )
+
+    parts = re.split(r"[,;]|\s+(?:and|&|or)\s+|(?:\s*/\s*)", cleaned)
+
+    tokens: List[str] = []
+    seen = set()
+    for p in parts:
+        tok = p.strip().strip(".").strip("\"'").strip()
+        tok_clean = re.sub(r"^(?:a|an|the)\s+", "", tok, flags=re.IGNORECASE).strip()
+        if tok_clean and len(tok_clean) >= 2 and not is_negative_or_unanswerable(tok_clean):
+            key = tok_clean.lower()
+            if key not in seen:
+                seen.add(key)
+                tokens.append(tok_clean)
+    return tokens
 
 
 def deduplicate_answers(answers: List[str], similarity_threshold: float = 0.85, verbose: bool = False) -> List[str]:
@@ -299,8 +335,29 @@ def run_foveated_vlm_reading(
                 print(f"[Stage 6][Dual-Scale] Spatial/relational query detected; using Dual-Scale [Global with BBox, Local Crop] mode.")
 
         # 3. Query VLM with prompt-directed Final Answer directive & negative escape grounding
+        answer_mode = getattr(config, "answer_type", "free_form")
         if getattr(config, "prompt_directed_final_answer", True):
-            if is_relational:
+            if answer_mode == "attribute_list":
+                if is_relational:
+                    prompt = (
+                        f"{question}{text_coords_hint}\n\n"
+                        "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
+                        "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
+                        "Final Answer: None\n\n"
+                        "Otherwise, extract only the visual attribute values (e.g., specific colors, materials, patterns) "
+                        "as a concise, comma-separated list without conversational filler. Conclude with:\n"
+                        "Final Answer: <attribute1, attribute2>"
+                    )
+                else:
+                    prompt = (
+                        f"{question}{text_coords_hint}\n\n"
+                        "Carefully inspect this crop. If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
+                        "Final Answer: None\n\n"
+                        "Otherwise, extract only the visual attribute values (e.g., specific colors, materials, patterns) "
+                        "as a concise, comma-separated list without conversational filler. Conclude with:\n"
+                        "Final Answer: <attribute1, attribute2>"
+                    )
+            elif is_relational:
                 prompt = (
                     f"{question}{text_coords_hint}\n\n"
                     "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
@@ -402,12 +459,19 @@ def run_foveated_vlm_reading(
         verbose=config.verbose
     )
 
+    # 5. Strict Evidence Pruning: Retain only image indices that yielded affirmative, non-negative answers
+    valid_evidence_indices: set = set()
+    for e in extractions:
+        cand = e.final_answer if e.final_answer else e.raw_answer
+        if cand and not is_negative_or_unanswerable(cand):
+            valid_evidence_indices.add(e.img_idx)
+
     if config.verbose:
-        print(f"[Stage 6] Reading complete: Extracted {len(extractions)} evidence items, deduplicated to {len(final_dedup_answers)} unique answers: {final_dedup_answers} (Evidence images: {sorted(list(evidence_indices))}).")
+        print(f"[Stage 6] Reading complete: Extracted {len(extractions)} evidence items, deduplicated to {len(final_dedup_answers)} unique answers: {final_dedup_answers} (Evidence images: {sorted(list(valid_evidence_indices))}).")
 
     return FinalSearchResult(
         answers=final_dedup_answers,
-        evidence_image_indices=sorted(list(evidence_indices)),
+        evidence_image_indices=sorted(list(valid_evidence_indices)),
         extractions=extractions,
         crop_records=crop_records
     )
