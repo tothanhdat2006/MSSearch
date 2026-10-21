@@ -1,7 +1,7 @@
 """
 Stage 5: Unified Candidate Pool Aggregation & Spatial Optimization.
-1. Multi-Entity Relational Proximity Box Merging: When is_relational=True, merges proximate
-   boxes on the same candidate image to mitigate relational fragmentation.
+1. Universal Spatial Compressed Canvas: Synthesizes continuous-coordinate compressed canvases
+   excising empty rows and columns with 28px neutral visual gutters.
 2. Spatial IoU NMS Deduplication: Suppresses duplicate/overlapping candidate crops (IoU >= threshold)
    on the same image to prevent redundant Stage 6 VLM evaluations.
 3. Converts surviving candidate patches directly into CandidateCrop objects for Stage 6.
@@ -292,8 +292,7 @@ def run_resolution_screening(
     candidate_images: List[Image.Image],
     active_objects: Optional[List[str]] = None,
     siglip_model = None,
-    config: Optional[MSSearchConfig] = None,
-    is_relational: Optional[bool] = None  # Deprecated: spatial compressed layout replaces relational mode
+    config: Optional[MSSearchConfig] = None
 ) -> List[CandidateCrop]:
     """
     Aggregates surviving candidate patches into the Unified Candidate Pool P:

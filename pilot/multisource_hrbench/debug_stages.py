@@ -55,9 +55,7 @@ from mssearch.models.modeling_sam3 import sam3_inference
 from mssearch.models.modeling_siglip import SigLIPScorer
 from mssearch.models.modeling_qwenvl import ModelQwenVL
 from mssearch.stages.stage1_parser import (
-    parse_question_for_active_objects,
-    detect_relational_intent,
-    reorder_anchor_first,
+    parse_question_to_active_objects,
     ParsedQuestion,
 )
 from mssearch.stages.stage2_fast_path import (
@@ -798,11 +796,11 @@ def execute_single_sample_stages(
     )
 
     # --------------------------------------------------------------------------
-    # STAGE 1: QUESTION PARSING, RELATIONAL INTENT & ANCHOR REORDERING
+    # STAGE 1: QUESTION PARSING
     # --------------------------------------------------------------------------
     print("\n--- STAGE 1: QUESTION PARSING ---")
     t0_s1 = time.perf_counter()
-    raw_active_objects, parser_strategy = parse_question_for_active_objects(
+    raw_active_objects, parser_strategy = parse_question_to_active_objects(
         question=real_question,
         zoom_model=qwen_engine,
         nlp_model=nlp_parser,
@@ -812,19 +810,14 @@ def execute_single_sample_stages(
         config=config,
     )
 
-    is_relational = detect_relational_intent(raw_active_objects)
+    is_relational = False
     question_type = getattr(raw_active_objects, "question_type", "unknown")
     anchors = getattr(raw_active_objects, "anchors", [])
     target_element = getattr(raw_active_objects, "target_element", "")
-
-    if config.enable_anchor_first_ordering:
-        active_objects = reorder_anchor_first(raw_active_objects)
-    else:
-        active_objects = list(raw_active_objects)
+    active_objects = list(raw_active_objects.active_objects)
 
     t_s1 = time.perf_counter() - t0_s1
-    print(f"[Stage 1 Parse] Type: '{question_type}' | Relational: {is_relational} | Strategy: {parser_strategy}")
-    print(f"[Stage 1 Parse] Anchors: {anchors} | Target Element: '{target_element}'")
+    print(f"[Stage 1 Parse] Type: '{question_type}' | Strategy: {parser_strategy}")
     print(f"[Stage 1 Parse] Final Active Objects A_q: {active_objects} (Latency: {t_s1:.3f}s)")
 
     if save_vis:
@@ -985,7 +978,6 @@ def execute_single_sample_stages(
         question=real_question,
         zoom_model=qwen_engine,
         config=config,
-        is_relational=is_relational,
         question_type=None,
     )
     t_s6 = time.perf_counter() - t0_s6

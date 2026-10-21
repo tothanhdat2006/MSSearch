@@ -62,8 +62,6 @@ def main():
     parser.add_argument("--direct-answer-threshold", type=float, default=0.60, help="Confidence threshold for Phase 1 Direct Answer")
     parser.add_argument("--disable-fast-path", action="store_true", help="Disable Stage 2 Tool-Based Fast Path")
     parser.add_argument("--fast-path-threshold", type=float, default=0.70, help="Confidence threshold for Stage 2 Fast Path")
-    parser.add_argument("--disable-anchor-first", action="store_true", help="Disable anchor-first spatial reordering in Stage 1")
-    parser.add_argument("--disable-dual-scale", action="store_true", help="Disable Query-Adaptive Dual-Scale visual prompting in Stage 6")
     parser.add_argument("--early-consensus-threshold", type=float, default=0.75, help="Similarity threshold for Stage 6 early consensus exit")
     parser.add_argument("--disable-visual-prompt-bbox", action="store_true")
     parser.add_argument("--enable-textual-prompt-coords", action="store_true")
@@ -71,7 +69,7 @@ def main():
     parser.add_argument("--partition-mode", type=str, default="hybrid", choices=["hybrid", "quadrant_only", "sgap_only"])
     parser.add_argument("--partition-stopping-mode", type=str, default="saliency_plateau", choices=["saliency_plateau", "fixed_size"], help="Stopping mode for Stage 3 partitioning: dynamic saliency plateau vs legacy fixed max_patch_size")
     parser.add_argument("--max-patch-size", type=int, default=512, help="Patch size constraint when partition-stopping-mode is fixed_size")
-    parser.add_argument("--min-plateau-size", type=int, default=256, help="Scale floor for saliency plateau stopping")
+    parser.add_argument("--min-plateau-size", type=int, default=512, help="Scale floor for saliency plateau stopping")
     parser.add_argument("--max-plateau-size", type=int, default=1536, help="Scale ceiling for saliency plateau stopping (GPU safety)")
     parser.add_argument("--saliency-plateau-gain-threshold", type=float, default=0.04, help="Minimum saliency gain required to descend deeper")
     parser.add_argument("--bbox-expansion-factor", type=float, default=1.25)
@@ -103,8 +101,7 @@ def main():
         direct_answer_conf_threshold=args.direct_answer_threshold,
         enable_fast_path=not args.disable_fast_path,
         fast_path_conf_threshold=args.fast_path_threshold,
-        enable_anchor_first_ordering=not args.disable_anchor_first,
-        enable_query_adaptive_dual_scale=not args.disable_dual_scale,
+        use_mllm_object_parser=True,
         early_consensus_threshold=args.early_consensus_threshold,
         enable_visual_prompt_bbox=not args.disable_visual_prompt_bbox,
         enable_textual_prompt_coords=args.enable_textual_prompt_coords,

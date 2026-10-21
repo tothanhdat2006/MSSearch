@@ -260,7 +260,6 @@ def run_foveated_vlm_reading(
     question: str,
     zoom_model,
     config: MSSearchConfig,
-    is_relational: Optional[bool] = None,
     question_type: Optional[str] = None,
     **kwargs
 ) -> FinalSearchResult:
@@ -279,14 +278,6 @@ def run_foveated_vlm_reading(
 
     if config.verbose:
         print(f"[Stage 6] Commencing foveated reading across {len(unified_pool)} candidate crops (1.25x bbox expansion, batch_size={getattr(config, 'vlm_batch_size', 4)})...")
-
-    # Determine relational intent if not explicitly passed
-    if is_relational is None:
-        if getattr(config, "enable_query_adaptive_dual_scale", True):
-            from .stage1_parser import detect_relational_intent
-            is_relational = detect_relational_intent(question)
-        else:
-            is_relational = False
 
     # 1. Prepare and pre-filter all crop inputs
     prepared_crops: List[Dict[str, Any]] = []

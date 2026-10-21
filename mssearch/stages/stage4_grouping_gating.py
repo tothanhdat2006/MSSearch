@@ -539,7 +539,7 @@ def run_feature_grouping_and_gating(
                 # Check VLM latent confidence on the representative centroid patch
                 # -------------------------------------------------------------
                 if config.enable_latent_gating and zoom_model is not None and active_objects:
-                    max_latent_evals = getattr(config, "max_latent_evals", getattr(config, "max_latent_eval_groups", 8))
+                    max_latent_evals = getattr(config, "max_latent_evals", 8)
                     if latent_vlm_queries_count >= max_latent_evals:
                         match_reason = f"budget_capped (max {max_latent_evals} reached)"
                         if config.verbose:

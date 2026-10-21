@@ -90,24 +90,6 @@ def parse_visual_query_structure(question: str, query_meta: Optional[Dict[str, A
     return "", "", ""
 
 
-def detect_relational_intent(question_or_parsed: Union[str, ParsedQuestion, Any]) -> bool:
-    """
-    Detects whether a visual question queries spatial relationships or orientation.
-    Leverages the semantic flag produced by Stage 1 MLLM reasoning.
-    """
-    if hasattr(question_or_parsed, "is_relational"):
-        return bool(question_or_parsed.is_relational)
-    return False
-
-
-def reorder_anchor_first(targets: List[str], nlp_model=None) -> List[str]:
-    """
-    Deprecated: Preserves the natural semantic order of targets without reordering.
-    Kept as a no-op for backward compatibility.
-    """
-    return targets
-
-
 def parse_question_to_active_objects(
     question: str,
     zoom_model=None,
@@ -116,7 +98,6 @@ def parse_question_to_active_objects(
     verbose: bool = False,
     return_strategy: bool = False,
     vlm_model=None,
-    enable_anchor_first: bool = False,
     image_pil: Optional[Union[Image.Image, List[Image.Image]]] = None,
     config: Optional[MSSearchConfig] = None
 ) -> Union[ParsedQuestion, Tuple[ParsedQuestion, str]]:
@@ -381,10 +362,6 @@ def parse_question_to_active_objects(
     if return_strategy:
         return parsed_question, extraction_strategy
     return parsed_question
-
-
-# Backward-compatible alias
-parse_question_for_active_objects = parse_question_to_active_objects
 
 
 def format_options(options_obj: Any, cycle_idx: int = 0) -> str:

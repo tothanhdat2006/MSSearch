@@ -103,10 +103,9 @@ class MultiSourceSearchEngine:
         if getattr(self.config, "scale_budgets_by_num_images", True) and n_candidates > 1:
             base_sam3 = getattr(self.config, "max_sam3_eval_patches", 16)
             base_latent = getattr(self.config, "max_latent_evals", 8)
-            base_retained = getattr(self.config, "max_retained_patches", 16)
+            base_retained = getattr(self.config, "max_retained_patches", 32)
             self.config.max_sam3_eval_patches = base_sam3 * n_candidates
             self.config.max_latent_evals = base_latent * n_candidates
-            self.config.max_latent_eval_groups = self.config.max_latent_evals
             self.config.max_retained_patches = base_retained * n_candidates
             if self.config.verbose:
                 print(f"[MSSearch] Scaled budgets by N={n_candidates}: max_sam3={self.config.max_sam3_eval_patches}, max_latent={self.config.max_latent_evals}, max_retained={self.config.max_retained_patches}")
@@ -349,18 +348,16 @@ class MultiSourceSearchEngine:
         telemetry["stages_executed"].append("stage4_grouping_gating")
 
         # ---------------------------------------------------------------------
-        # Stage 5: Resolution-Aware Screening (Branch A vs Branch B)
+        # Stage 5: Resolution-Aware Screening & Spatial Optimization
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
-        is_relational = getattr(active_objects, "is_relational", None)
         question_type = getattr(active_objects, "question_type", None)
         unified_pool = run_resolution_screening(
             remaining_patches=remaining_patches,
             candidate_images=candidate_images,
             active_objects=active_objects,
             siglip_model=self.siglip_model,
-            config=self.config,
-            is_relational=is_relational
+            config=self.config
         )
         telemetry["timings_sec"]["stage5_screening"] = round(time.perf_counter() - t0, 3)
         telemetry["num_unified_crops"] = len(unified_pool)
@@ -378,7 +375,6 @@ class MultiSourceSearchEngine:
             question=reading_question,
             zoom_model=self.zoom_model,
             config=self.config,
-            is_relational=is_relational,
             question_type=question_type
         )
         telemetry["timings_sec"]["stage6_reading"] = round(time.perf_counter() - t0, 3)

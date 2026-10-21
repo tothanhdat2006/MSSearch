@@ -27,7 +27,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from mssearch.config import MSSearchConfig
-from mssearch.stages.stage1_parser import parse_question_for_active_objects
+from mssearch.stages.stage1_parser import parse_question_to_active_objects
 from mssearch.stages.stage2_fast_path import run_tool_based_fast_path, FastPathResult
 from mssearch.stages.stage3_partitioning import partition_candidate_images
 from mssearch.stages.stage4_grouping_gating import run_feature_grouping_and_gating
@@ -82,7 +82,7 @@ def benchmark_sample(
     # Stage 1: Active Object Parser
     # -------------------------------------------------------------------------
     t0 = time.perf_counter()
-    active_objects, parser_strat = parse_question_for_active_objects(
+    active_objects, parser_strat = parse_question_to_active_objects(
         question=question,
         vlm_model=vlm_engine,
         nlp_model=nlp_engine,
@@ -361,7 +361,8 @@ def main():
         max_patch_size=1024,
         max_patches_per_image=64,
         grouping_sim_threshold=0.80,
-        branch_b_score_threshold=0.50,
+        max_retained_patches=32,
+        min_plateau_size=512,
         verbose=False
     )
 
