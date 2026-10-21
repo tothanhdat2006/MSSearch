@@ -425,6 +425,116 @@ class ModelQwenVL:
             max_new_tokens=max_new_tokens
         )
 
+    @torch.no_grad()
+    def batch_get_confidence_values(
+        self,
+        image_list: List[Image.Image],
+        confidence_type: str = 'existence',
+        input_ele: str = '',
+        batch_size: int = 4
+    ) -> List[float]:
+        """
+        Batch-evaluates VLM existence or latent logit probes across candidate images (batch size 4 or 8).
+        Calculates normalized confidence in [-1, 1] via softmax over [Yes, No] logits.
+        """
+        assert confidence_type in ['existence', 'latent', 'answering']
+        if not image_list:
+            return []
+
+        prompt_tag = "search"
+        qs = self.prompts[prompt_tag]["pre_information_image1"] + self.prompts[prompt_tag][f"{confidence_type}_prompt"].format(input_ele)
+        prompt = self.get_prompt_from_qs(qs)
+
+        results: List[float] = []
+        for i in range(0, len(image_list), max(1, batch_size)):
+            chunk = image_list[i : i + max(1, batch_size)]
+            if len(chunk) == 1 or batch_size <= 1:
+                for img in chunk:
+                    results.append(self.get_confidence_value(node=None, image_pil=img, confidence_type=confidence_type, input_ele=input_ele))
+                continue
+
+            try:
+                prompts = [prompt] * len(chunk)
+                model_inputs = self.processor(
+                    text=prompts,
+                    images=chunk,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="left"
+                ).to(self.device)
+
+                outputs = self.model(**model_inputs)
+                logits_yesno = outputs.logits[:, -1, [self.index_yes, self.index_no]]
+                probs = torch.softmax(logits_yesno, dim=-1)[:, 0]
+                confidences = (2 * (probs - 0.5)).tolist()
+                results.extend(confidences)
+            except Exception:
+                # Safe single-item fallback if batch forward pass fails
+                for img in chunk:
+                    results.append(self.get_confidence_value(node=None, image_pil=img, confidence_type=confidence_type, input_ele=input_ele))
+
+        return results
+
+    @torch.inference_mode()
+    def batch_generate_response(
+        self,
+        image_inputs: List[Union[Image.Image, List[Image.Image]]],
+        questions: List[str],
+        max_new_tokens: int = 128,
+        batch_size: int = 4,
+        **kwargs
+    ) -> List[str]:
+        """
+        Batched text generation across candidate image crops / dual-scale views.
+        Processes up to batch_size items concurrently with automatic single-item fallback.
+        """
+        if not image_inputs:
+            return []
+        if len(image_inputs) != len(questions):
+            raise ValueError(f"image_inputs length ({len(image_inputs)}) must match questions length ({len(questions)})")
+
+        results: List[str] = []
+        for i in range(0, len(image_inputs), max(1, batch_size)):
+            chunk_imgs = image_inputs[i : i + max(1, batch_size)]
+            chunk_qs = questions[i : i + max(1, batch_size)]
+
+            if len(chunk_imgs) == 1 or batch_size <= 1:
+                for img, q in zip(chunk_imgs, chunk_qs):
+                    results.append(self.generate_response(image_pil=img, question=q, max_new_tokens=max_new_tokens, **kwargs))
+                continue
+
+            try:
+                prompts = []
+                for img_inp, q in zip(chunk_imgs, chunk_qs):
+                    is_multi_img = isinstance(img_inp, (list, tuple)) and len(img_inp) > 1
+                    pre_info = "pre_information_image2" if is_multi_img else "pre_information_image1"
+                    qs_full = self.prompts["search"][pre_info] + q
+                    prompts.append(self.get_prompt_from_qs(qs_full))
+
+                model_inputs = self.processor(
+                    text=prompts,
+                    images=chunk_imgs,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="left"
+                ).to(self.device)
+
+                generated_ids = self.model.generate(
+                    **model_inputs,
+                    use_cache=True,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False
+                )
+                trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
+                decoded = self.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                results.extend([d.strip() for d in decoded])
+            except Exception:
+                # Safe fallback to single-item generation
+                for img, q in zip(chunk_imgs, chunk_qs):
+                    results.append(self.generate_response(image_pil=img, question=q, max_new_tokens=max_new_tokens, **kwargs))
+
+        return results
+
     @torch.inference_mode()
     def generate_text(self, prompt: Union[str, List[Dict[str, Any]]], max_new_tokens: int = 64) -> str:
         """

@@ -167,32 +167,64 @@ def run_direct_global_assessment(
 
     collected_direct: List[Dict[str, Any]] = []
 
-    for img_idx, img_pil in enumerate(candidate_images):
-        # 1. Probe answering confidence c_q on the root view (clamped to 1024px for safety)
-        conf = 0.0
-        if hasattr(zoom_model, "get_confidence_value"):
-            try:
-                safe_img = img_pil
-                if max(img_pil.width, img_pil.height) > 1024:
-                    scale = 1024.0 / max(img_pil.width, img_pil.height)
-                    safe_img = img_pil.resize(
+    # Batch probe answering confidence c_q across all candidate images if supported
+    vlm_batch_size = max(1, getattr(config, "vlm_batch_size", 4))
+    conf_scores: Optional[List[float]] = None
+    if hasattr(zoom_model, "batch_get_confidence_values") and vlm_batch_size > 1 and len(candidate_images) > 1:
+        safe_imgs = []
+        for img_pil in candidate_images:
+            if max(img_pil.width, img_pil.height) > 1024:
+                scale = 1024.0 / max(img_pil.width, img_pil.height)
+                safe_imgs.append(
+                    img_pil.resize(
                         (int(round(img_pil.width * scale)), int(round(img_pil.height * scale))),
                         Image.Resampling.BILINEAR
                     )
-                val = zoom_model.get_confidence_value(
-                    node=[],
-                    image_pil=safe_img,
-                    confidence_type="answering",
-                    input_ele=question,
-                    root_anyres=False
                 )
-                if isinstance(val, torch.Tensor):
-                    val = val.item()
-                conf = float(val)
-            except Exception as e:
-                if config.verbose:
-                    print(f"[Phase 1][Direct Answer Notice] Image {img_idx} confidence probing error ({e})")
-                conf = 0.0
+            else:
+                safe_imgs.append(img_pil)
+
+        try:
+            conf_scores = zoom_model.batch_get_confidence_values(
+                image_list=safe_imgs,
+                confidence_type="answering",
+                input_ele=question,
+                batch_size=vlm_batch_size
+            )
+        except Exception as e:
+            if config.verbose:
+                print(f"[Phase 1][Batched Probing Fallback] Batch answering probe failed ({e}); using sequential probe.")
+            conf_scores = None
+
+    for img_idx, img_pil in enumerate(candidate_images):
+        # 1. Probe answering confidence c_q on the root view (clamped to 1024px for safety)
+        if conf_scores is not None and img_idx < len(conf_scores):
+            conf = float(conf_scores[img_idx])
+        else:
+            conf = 0.0
+            if hasattr(zoom_model, "get_confidence_value"):
+                try:
+                    safe_img = img_pil
+                    if max(img_pil.width, img_pil.height) > 1024:
+                        scale = 1024.0 / max(img_pil.width, img_pil.height)
+                        safe_img = img_pil.resize(
+                            (int(round(img_pil.width * scale)), int(round(img_pil.height * scale))),
+                            Image.Resampling.BILINEAR
+                        )
+                    val = zoom_model.get_confidence_value(
+                        node=[],
+                        image_pil=safe_img,
+                        confidence_type="answering",
+                        input_ele=question,
+                        root_anyres=False
+                    )
+                    if isinstance(val, torch.Tensor):
+                        val = val.item()
+                    conf = float(val)
+                except Exception as e:
+                    if config.verbose:
+                        print(f"[Phase 1][Direct Answer Notice] Image {img_idx} confidence probing error ({e})")
+                    conf = 0.0
 
         if config.verbose:
             print(f"[Phase 1][Direct Answer] Image {img_idx}: answering confidence = {conf:.3f} (Threshold = {threshold:.2f})")

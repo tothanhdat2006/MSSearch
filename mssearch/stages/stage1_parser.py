@@ -23,27 +23,25 @@ class ParsedQuestion(list):
     def __init__(
         self,
         active_objects: List[str],
-        anchors: Optional[List[str]] = None,
-        target_element: str = "",
         question_type: str = "general",
         is_relational: bool = False,
         strategy: str = "",
-        raw_response: str = ""
+        raw_response: str = "",
+        anchors: Optional[List[str]] = None,
+        target_element: str = ""
     ):
         super().__init__(active_objects)
         self.active_objects = list(active_objects)
-        self.anchors = list(anchors) if anchors else []
-        self.target_element = str(target_element)
         self.question_type = str(question_type)
         self.is_relational = bool(is_relational)
         self.strategy = str(strategy)
         self.raw_response = str(raw_response)
+        self.anchors = list(anchors) if anchors else []
+        self.target_element = str(target_element)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "active_objects": self.active_objects,
-            "anchors": self.anchors,
-            "target_element": self.target_element,
             "question_type": self.question_type,
             "is_relational": self.is_relational,
             "strategy": self.strategy,
@@ -53,7 +51,6 @@ class ParsedQuestion(list):
     def __repr__(self) -> str:
         return (
             f"ParsedQuestion(active_objects={self.active_objects}, "
-            f"anchors={self.anchors}, target_element='{self.target_element}', "
             f"question_type='{self.question_type}', is_relational={self.is_relational})"
         )
 
@@ -105,24 +102,10 @@ def detect_relational_intent(question_or_parsed: Union[str, ParsedQuestion, Any]
 
 def reorder_anchor_first(targets: List[str], nlp_model=None) -> List[str]:
     """
-    Prioritizes physical host entities and landmarks ahead of abstract attributes/sub-elements.
-    Uses grammatical POS tagging if an NLP model is loaded; otherwise preserves natural semantic order.
+    Deprecated: Preserves the natural semantic order of targets without reordering.
+    Kept as a no-op for backward compatibility.
     """
-    if not targets or nlp_model is None:
-        return targets
-    try:
-        anchors = []
-        modifiers = []
-        for t in targets:
-            doc = nlp_model(t)
-            has_noun = any(tok.pos_ in {"NOUN", "PROPN"} for tok in doc)
-            if has_noun:
-                anchors.append(t)
-            else:
-                modifiers.append(t)
-        return anchors + modifiers if anchors else targets
-    except Exception:
-        return targets
+    return targets
 
 
 def parse_question_to_active_objects(
@@ -133,18 +116,16 @@ def parse_question_to_active_objects(
     verbose: bool = False,
     return_strategy: bool = False,
     vlm_model=None,
-    enable_anchor_first: bool = True,
+    enable_anchor_first: bool = False,
     image_pil: Optional[Union[Image.Image, List[Image.Image]]] = None,
     config: Optional[MSSearchConfig] = None
 ) -> Union[ParsedQuestion, Tuple[ParsedQuestion, str]]:
     """
     Parses a natural language question into a structured ParsedQuestion object.
     Leverages the LLM backbone of the VLM to perform unified semantic reasoning:
-    - Extracts physical host anchors and spatial landmarks
-    - Identifies target attributes / elements
+    - Extracts active search objects
     - Classifies question type ('relational_reading', 'spatial_orientation', 'counting', etc.)
     - Determines relational intent (is_relational: True/False)
-    - Enforces Anchor-First ordering: physical host entities precede abstract attributes.
 
     Returns ParsedQuestion (subclasses list, duck-typing List[str] for 100% backward compatibility).
     """
@@ -155,10 +136,9 @@ def parse_question_to_active_objects(
         raise RuntimeError(
             "[Stage 1 Error] zoom_model (Qwen2.5-VL) is None. Question Parsing requires a loaded VLM model for Strategy 1/2 semantic question parsing; fallback execution is strictly disabled."
         )
-    parsed_anchors = []
-    parsed_target_element = ""
     parsed_question_type = "general"
     parsed_is_relational = False
+    raw_targets = []
     raw_text = ""
     extraction_strategy = "Strategy 3: Syntactic Clause Extraction (Fallback)"
 
@@ -177,7 +157,7 @@ def parse_question_to_active_objects(
     # Strategy 1: Direct MLLM In-Context Semantic Parser (Preferred - uses LLM backbone)
     if zoom_model is not None and (hasattr(zoom_model, "generate_text") or hasattr(zoom_model, "generate_response")):
         if verbose:
-            print("[Stage 1][Strategy 1] Initiating MLLM in-context unified semantic parsing (Anchors, Question Type, Relational Intent)...")
+            print("[Stage 1][Strategy 1] Initiating MLLM in-context unified semantic parsing (Active Objects, Question Type, Relational Intent)...")
         try:
             mllm_messages = [
                 {
@@ -186,9 +166,7 @@ def parse_question_to_active_objects(
                         "type": "text",
                         "text": (
                             "You are an expert visual search parser. Given a question, extract search targets and return a JSON object with:\n"
-                            "- \"anchors\": physical host entities / spatial landmarks (outermost physical entities first)\n"
-                            "- \"target_element\": specific micro-attribute, text, or symbol to read\n"
-                            "- \"active_objects\": combined search entities prioritizing physical anchors first\n"
+                            "- \"active_objects\": list of key visual search entities or text needed to answer the question\n"
                             "- \"question_type\": one of ['relational_reading', 'spatial_orientation', 'counting', 'fine_grained_attribute', 'general']\n"
                             "- \"is_relational\": boolean (true if question requires relative spatial positioning or dual-scale context)\n"
                             "Return ONLY valid JSON."
@@ -201,7 +179,7 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"anchors": ["jacket", "sleeve"], "target_element": "text above logo", "active_objects": ["jacket", "sleeve", "logo", "text"], "question_type": "relational_reading", "is_relational": true}'}]
+                    "content": [{"type": "text", "text": '{"active_objects": ["jacket", "sleeve", "logo", "text"], "question_type": "relational_reading", "is_relational": true}'}]
                 },
                 {
                     "role": "user",
@@ -209,7 +187,7 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"anchors": ["brick building"], "target_element": "windows", "active_objects": ["brick building", "window"], "question_type": "counting", "is_relational": false}'}]
+                    "content": [{"type": "text", "text": '{"active_objects": ["brick building", "window"], "question_type": "counting", "is_relational": false}'}]
                 },
                 {
                     "role": "user",
@@ -218,13 +196,13 @@ def parse_question_to_active_objects(
             ]
 
             few_shot_prompt = (
-                "You are an expert visual search parser. Given a question, return a JSON object with 'anchors', 'target_element', 'active_objects', 'question_type', and 'is_relational'.\n\n"
+                "You are an expert visual search parser. Given a question, return a JSON object with 'active_objects', 'question_type', and 'is_relational'.\n\n"
                 "Example 1:\n"
                 "Question: \"What is the text written above the logo on the jacket's sleeve?\"\n"
-                "JSON: {\"anchors\": [\"jacket\", \"sleeve\"], \"target_element\": \"text above logo\", \"active_objects\": [\"jacket\", \"sleeve\", \"logo\", \"text\"], \"question_type\": \"relational_reading\", \"is_relational\": true}\n\n"
+                "JSON: {\"active_objects\": [\"jacket\", \"sleeve\", \"logo\", \"text\"], \"question_type\": \"relational_reading\", \"is_relational\": true}\n\n"
                 "Example 2:\n"
                 "Question: \"How many windows are on the brick building?\"\n"
-                "JSON: {\"anchors\": [\"brick building\"], \"target_element\": \"windows\", \"active_objects\": [\"brick building\", \"window\"], \"question_type\": \"counting\", \"is_relational\": false}\n\n"
+                "JSON: {\"active_objects\": [\"brick building\", \"window\"], \"question_type\": \"counting\", \"is_relational\": false}\n\n"
                 f"Question: \"{question}\"\nJSON:"
             )
 
@@ -252,15 +230,9 @@ def parse_question_to_active_objects(
                         data = None
 
                 if isinstance(data, dict):
-                    parsed_anchors = [str(a).strip().lower() for a in data.get("anchors", []) if str(a).strip()]
-                    parsed_target_element = str(data.get("target_element", "")).strip().lower()
                     objs = data.get("active_objects", [])
                     if isinstance(objs, list) and objs:
                         raw_targets = [str(o).strip().lower() for o in objs if str(o).strip()]
-                    elif parsed_anchors:
-                        raw_targets = list(parsed_anchors)
-                        if parsed_target_element and parsed_target_element not in raw_targets:
-                            raw_targets.append(parsed_target_element)
 
                     parsed_question_type = str(data.get("question_type", "general")).strip().lower()
                     parsed_is_relational = bool(data.get("is_relational", False))
@@ -295,72 +267,6 @@ def parse_question_to_active_objects(
                 import traceback
                 print(f"[Stage 1][Fallback Trigger] MLLM text extraction raised {type(e).__name__}: {e}")
                 traceback.print_exc()
-
-    # Strategy 1b: Image-Grounded Anchor Discovery (Hybrid Low-Res Vision Fallback)
-    # Triggered when text-only parsing yields no concrete physical host anchors (e.g. empty list)
-    enable_vision_anchors = getattr(config, "enable_image_grounded_anchors", True) if config else True
-    has_concrete_anchor = bool(parsed_anchors)
-
-    if enable_vision_anchors and not has_concrete_anchor and image_pil is not None and zoom_model is not None and hasattr(zoom_model, "generate_response"):
-        res = getattr(config, "image_grounded_anchor_resolution", 1024) if config else 1024
-        target_img = image_pil[0] if isinstance(image_pil, (list, tuple)) else image_pil
-        if target_img is not None:
-            if max(target_img.width, target_img.height) > res:
-                scale = res / float(max(target_img.width, target_img.height))
-                lowres_img = target_img.resize(
-                    (int(round(target_img.width * scale)), int(round(target_img.height * scale))),
-                    Image.Resampling.LANCZOS
-                )
-            else:
-                lowres_img = target_img
-
-            if verbose:
-                print(f"[Stage 1][Strategy 1b] No concrete physical anchor in text; invoking Image-Grounded Anchor Discovery ({lowres_img.width}x{lowres_img.height}px, max_res={res})...")
-
-            prompt_vision = (
-                f"Question: \"{question}\"\n"
-                "Carefully inspect the provided image. Identify the concrete physical object(s) or host entities visible in the scene "
-                "that contain, display, or are most relevant to answering the question (e.g. storefront sign, road sign, vehicle, building, clothing, counter, screen).\n"
-                "Return ONLY a JSON object with:\n"
-                "- \"anchors\": list of physical host entities visible in the scene (outermost physical entities first)\n"
-                "- \"target_element\": specific micro-attribute or text to inspect\n"
-                "- \"active_objects\": combined search entities prioritizing physical anchors first\n"
-                "- \"question_type\": one of ['relational_reading', 'spatial_orientation', 'counting', 'fine_grained_attribute', 'general']\n"
-                "- \"is_relational\": boolean (true if question requires relative spatial positioning or dual-scale context)\n"
-                "Return ONLY valid JSON."
-            )
-
-            try:
-                raw_vision_text = zoom_model.generate_response(image_pil=lowres_img, question=prompt_vision, max_new_tokens=96)
-                dict_match = re.search(r'\{[\s\S]*?\}', raw_vision_text)
-                if dict_match:
-                    try:
-                        v_data = json.loads(dict_match.group(0))
-                    except Exception:
-                        try:
-                            v_data = ast.literal_eval(dict_match.group(0))
-                        except Exception:
-                            v_data = None
-
-                    if isinstance(v_data, dict):
-                        v_anchors = [str(a).strip().lower() for a in v_data.get("anchors", []) if str(a).strip()]
-                        if v_anchors:
-                            parsed_anchors = v_anchors
-                            parsed_target_element = str(v_data.get("target_element", parsed_target_element)).strip().lower()
-                            v_objs = v_data.get("active_objects", [])
-                            if isinstance(v_objs, list) and v_objs:
-                                raw_targets = [str(o).strip().lower() for o in v_objs if str(o).strip()]
-                            else:
-                                raw_targets = list(parsed_anchors) + ([parsed_target_element] if parsed_target_element else [])
-                            parsed_question_type = str(v_data.get("question_type", parsed_question_type)).strip().lower()
-                            parsed_is_relational = bool(v_data.get("is_relational", parsed_is_relational))
-                            extraction_strategy = f"Strategy 1b: Image-Grounded Semantic Parser ({res}px Low-Res Vision Fallback)"
-                            raw_text = raw_vision_text
-                            if verbose:
-                                print(f"[Stage 1][Image Grounding] Vision-discovered physical anchors: {parsed_anchors} | active_objects: {raw_targets}")
-            except Exception as e:
-                if verbose:
-                    print(f"[Stage 1][Image Grounding Notice] Vision anchor discovery exception: {e}")
 
     # Strategy 2: Use VLM In-Context Cue Generator if available and targets not yet found
     if not raw_targets and zoom_model is not None and ic_examples is not None:
@@ -425,7 +331,7 @@ def parse_question_to_active_objects(
         if raw_targets:
             extraction_strategy = "Strategy 3: Syntactic Clause Extraction (Fallback)"
             if verbose:
-                print(f"[Stage 1][Fallback] Syntactic clause extraction found anchor objects: {raw_targets}")
+                print(f"[Stage 1][Fallback] Syntactic clause extraction found entities: {raw_targets}")
 
     # Post-process: Remove pronouns and normalize plurals
     clean_targets = []
@@ -448,14 +354,6 @@ def parse_question_to_active_objects(
             clean_targets = [str_obj]
             extraction_strategy = "Strategy 1c: Question Structure Syntax Parser"
 
-    if enable_anchor_first:
-        clean_targets = reorder_anchor_first(clean_targets)
-
-    # Derive anchors, question_type, and relational intent if not set by Strategy 1 / 1b
-    if not parsed_anchors:
-        parsed_anchors = list(clean_targets)
-    if not parsed_target_element and len(clean_targets) > len(parsed_anchors):
-        parsed_target_element = clean_targets[-1]
     if not extraction_strategy.startswith("Strategy 1"):
         parsed_is_relational = False
         q_lower = question.lower()
@@ -468,8 +366,6 @@ def parse_question_to_active_objects(
 
     parsed_question = ParsedQuestion(
         active_objects=clean_targets,
-        anchors=parsed_anchors,
-        target_element=parsed_target_element,
         question_type=parsed_question_type,
         is_relational=parsed_is_relational,
         strategy=extraction_strategy,
@@ -477,11 +373,9 @@ def parse_question_to_active_objects(
     )
 
     if verbose:
-        print(f"[Stage 1] Unified Question Parsing Complete via {extraction_strategy}:")
+        print(f"[Stage 1] Question Parsing Complete via {extraction_strategy}:")
         print(f"  • Question Type  : {parsed_question.question_type}")
         print(f"  • Relational Flag: {parsed_question.is_relational}")
-        print(f"  • Physical Anchor: {parsed_question.anchors}")
-        print(f"  • Target Element : '{parsed_question.target_element}'")
         print(f"  • Active Targets : {parsed_question.active_objects}")
 
     if return_strategy:

@@ -187,3 +187,15 @@ class SigLIPScorer:
         scores = self.score_crops([crop], text_queries)
         return scores[0] if scores else 0.0
 
+    def compute_similarity(self, image: Image.Image, text_query: Union[str, List[str]]) -> float:
+        """
+        Computes similarity score between a single image and text query or list of queries.
+        Provides a direct scalar interface for single image evaluation.
+        """
+        if isinstance(text_query, str):
+            text_queries = [text_query]
+        else:
+            text_queries = list(text_query)
+        return self.score_single(image, text_queries)
+
+

@@ -94,6 +94,12 @@ class MultiSourceSearchEngine:
         # Multi-Source Budget Scaling & Early Exit Configuration
         # ---------------------------------------------------------------------
         n_candidates = len(candidate_images)
+        if getattr(self.config, "enable_query_adaptive_halting", True) and n_candidates == 1:
+            self.config.multi_answer_mode = False
+            self.config.enable_early_consensus_exit = True
+            if self.config.verbose:
+                print(f"[MSSearch] Query-Adaptive Halting: Single candidate image (N=1) -> multi_answer_mode=False, early consensus exit enabled.")
+
         if getattr(self.config, "scale_budgets_by_num_images", True) and n_candidates > 1:
             base_sam3 = getattr(self.config, "max_sam3_eval_patches", 16)
             base_latent = getattr(self.config, "max_latent_evals", 8)
@@ -346,12 +352,15 @@ class MultiSourceSearchEngine:
         # Stage 5: Resolution-Aware Screening (Branch A vs Branch B)
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
+        is_relational = getattr(active_objects, "is_relational", None)
+        question_type = getattr(active_objects, "question_type", None)
         unified_pool = run_resolution_screening(
             remaining_patches=remaining_patches,
             candidate_images=candidate_images,
             active_objects=active_objects,
             siglip_model=self.siglip_model,
-            config=self.config
+            config=self.config,
+            is_relational=is_relational
         )
         telemetry["timings_sec"]["stage5_screening"] = round(time.perf_counter() - t0, 3)
         telemetry["num_unified_crops"] = len(unified_pool)
@@ -363,8 +372,6 @@ class MultiSourceSearchEngine:
         # Stage 6: Foveated VLM Reading with 1.25x Padding & Deduplication
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
-        is_relational = getattr(active_objects, "is_relational", None)
-        question_type = getattr(active_objects, "question_type", None)
         final_result: FinalSearchResult = run_foveated_vlm_reading(
             unified_pool=unified_pool,
             candidate_images=candidate_images,

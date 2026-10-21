@@ -15,9 +15,9 @@ class MSSearchConfig:
     # Stage 1: Question Parsing & Active Object Set
     # -------------------------------------------------------------------------
     use_mllm_object_parser: bool = True          # Use MLLM language model directly for zero-shot object extraction
-    enable_anchor_first_ordering: bool = True    # Prioritize physical host entities ahead of abstract attributes
-    enable_image_grounded_anchors: bool = True   # Pass low-res canvas to VLM when text-only parsing yields no concrete physical anchors
-    image_grounded_anchor_resolution: int = 1024 # Max dimension for Stage 1 vision-grounded anchor discovery (default 1024, or 672)
+    enable_anchor_first_ordering: bool = False   # Deprecated: No-op preserved for backward compatibility
+    enable_image_grounded_anchors: bool = False  # Deprecated: Strategy 1b removed
+    image_grounded_anchor_resolution: int = 1024 # Deprecated: Strategy 1b removed
     use_nlp_fallback: bool = False               # Deprecated in favor of MLLM zero-shot semantic parser
     nlp_model_name: str = "en_core_web_sm"
 
@@ -86,16 +86,21 @@ class MSSearchConfig:
     retention_ranking_metric: str = "confidence_hybrid"  # "confidence_hybrid", "entropy", "detection_first"
 
     # -------------------------------------------------------------------------
-    # Stage 5: Direct Unified Candidate Pool Aggregation
+    # Stage 5: Direct Unified Candidate Pool Aggregation & Spatial NMS
     # -------------------------------------------------------------------------
     # Branch B SigLIP screening purged; surviving Stage 4 patches pass directly into Unified Pool
     branch_b_score_threshold: Optional[float] = None  # Deprecated: Branch B SigLIP check purged in v3
     siglip_model_name: str = "google/siglip-base-patch16-384"
     siglip_device: str = "cuda:0"                # Shared on GPU 0 with Qwen2.5-VL layers 0-14
+    enable_stage5_spatial_nms: bool = True       # Suppress duplicate/overlapping candidate crops on same image
+    stage5_nms_iou_threshold: float = 0.60       # Spatial IoU threshold for candidate patch deduplication
+    enable_relational_box_merging: bool = True   # Mitigate relational fragmentation by merging proximate boxes
+    relational_merge_distance_px: float = 350.0  # Max edge-to-edge distance (px) to merge relational boxes
 
     # -------------------------------------------------------------------------
     # Stage 6: Foveated VLM Reading, Dual-Scale & Collision-Free Consensus
     # -------------------------------------------------------------------------
+    vlm_batch_size: int = 4                      # Batched VLM forward passes (4 or 8) across patches and logit probes
     bbox_expansion_factor: float = 1.25          # Independent 25% padding per patch
     max_vlm_tokens: int = 128                    # Response token budget (allows complete answers without truncation)
     enable_early_consensus_exit: bool = True     # Stop evaluating crops once 2 identical/near-identical answers are extracted
@@ -116,6 +121,7 @@ class MSSearchConfig:
     # -------------------------------------------------------------------------
     multi_answer_mode: bool = False              # If True, enables multi-source open-set answering (K>=1, N>=1): disables Stage 6 early consensus exit and aggregates all unique answers into semicolon-separated text
     scale_budgets_by_num_images: bool = True     # If True, scales Stage 4 SAM3 patch scans, latent evaluations, and retention caps linearly by N candidate images
+    enable_query_adaptive_halting: bool = True   # Query-adaptive dynamic halting in multi-answer mode (e.g. N=1 disables multi-answer mode)
     query_meta: Optional[dict] = None            # Optional structured query metadata: {'target_attribute_type': ..., 'condition_attribute': ..., 'target_object': ...}
 
     def __post_init__(self):
