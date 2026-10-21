@@ -451,17 +451,15 @@ def parse_question_to_active_objects(
     if enable_anchor_first:
         clean_targets = reorder_anchor_first(clean_targets)
 
-    # Derive anchors, question_type, and relational intent if not set by Strategy 1
+    # Derive anchors, question_type, and relational intent if not set by Strategy 1 / 1b
     if not parsed_anchors:
         parsed_anchors = list(clean_targets)
     if not parsed_target_element and len(clean_targets) > len(parsed_anchors):
         parsed_target_element = clean_targets[-1]
-    if extraction_strategy != "Strategy 1: MLLM Unified Semantic Parser (Non-Fallback)":
-        parsed_is_relational = detect_relational_intent(question)
+    if not extraction_strategy.startswith("Strategy 1"):
+        parsed_is_relational = False
         q_lower = question.lower()
-        if parsed_is_relational:
-            parsed_question_type = "relational_reading" if any(w in q_lower for w in ["text", "word", "letter", "symbol", "number", "sign"]) else "spatial_orientation"
-        elif any(w in q_lower for w in ["how many", "count", "number of"]):
+        if any(w in q_lower for w in ["how many", "count", "number of"]):
             parsed_question_type = "counting"
         elif any(w in q_lower for w in ["what color", "colour", "shape", "appearance"]):
             parsed_question_type = "fine_grained_attribute"

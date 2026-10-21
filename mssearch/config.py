@@ -18,7 +18,7 @@ class MSSearchConfig:
     enable_anchor_first_ordering: bool = True    # Prioritize physical host entities ahead of abstract attributes
     enable_image_grounded_anchors: bool = True   # Pass low-res canvas to VLM when text-only parsing yields no concrete physical anchors
     image_grounded_anchor_resolution: int = 1024 # Max dimension for Stage 1 vision-grounded anchor discovery (default 1024, or 672)
-    use_nlp_fallback: bool = False               # Deprecated in favor of MLLM + Grammar Regex
+    use_nlp_fallback: bool = False               # Deprecated in favor of MLLM zero-shot semantic parser
     nlp_model_name: str = "en_core_web_sm"
 
     # -------------------------------------------------------------------------
