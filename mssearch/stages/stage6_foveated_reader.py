@@ -292,7 +292,7 @@ def run_foveated_vlm_reading(
     prepared_crops: List[Dict[str, Any]] = []
     answer_mode = getattr(config, "answer_type", "free_form")
     bbox_note = (
-        "Focus inside the red box (the box is a marker, not an object).\n"
+        "Focus inside the red box(es) (the box is a marker, not an object).\n"
         if config.enable_visual_prompt_bbox else ""
     )
 
@@ -302,7 +302,7 @@ def run_foveated_vlm_reading(
         img_w, img_h = img_pil.size
 
         if getattr(item, "is_compressed_canvas", False):
-            # Spatial compressed canvas already has all retained patches arranged with empty rows/cols excised
+            # Spatial compressed canvas contains all retained patches with empty rows/cols excised
             foveated_crop = item.crop_image
             exp_box = item.box
             local_target_boxes = getattr(item, "remapped_boxes", []) or []
@@ -315,7 +315,6 @@ def run_foveated_vlm_reading(
                     width=config.visual_prompt_bbox_width
                 )
             text_coords_hint = ""
-            # Self-contained spatial context at native resolution; no downsampled global view required
             vlm_image_input: Union[Image.Image, List[Image.Image]] = vlm_input_crop
         else:
             # Expand bounding box independently by 1.25x
@@ -349,34 +348,13 @@ def run_foveated_vlm_reading(
                 text_coords_hint = f" Focal region: [{local_target_box[0]}, {local_target_box[1]}, {local_target_box[2]}, {local_target_box[3]}]."
 
             vlm_image_input = vlm_input_crop
-            if is_relational:
-                global_annotated = render_visual_prompt_bbox(
-                    img_pil,
-                    [item.box],
-                    color=config.visual_prompt_bbox_color,
-                    width=max(2, img_w // 200)
-                )
-                max_global_dim = 768
-                if img_w > max_global_dim or img_h > max_global_dim:
-                    scale = max_global_dim / max(img_w, img_h)
-                    global_annotated = global_annotated.resize(
-                        (int(round(img_w * scale)), int(round(img_h * scale))),
-                        Image.Resampling.BILINEAR
-                    )
-                vlm_image_input = [global_annotated, vlm_input_crop]
-                if config.verbose and c_idx == 0:
-                    print(f"[Stage 6][Dual-Scale] Spatial/relational query detected; using Dual-Scale [Global with BBox, Local Crop] mode.")
 
         # Concise Final VLM Answer Prompt
         if getattr(config, "prompt_directed_final_answer", True):
             if answer_mode == "attribute_list":
-                prefix = (
-                    "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
-                    if is_relational else "Carefully inspect this crop.\n"
-                )
                 prompt = (
                     f"{question}{text_coords_hint}\n\n"
-                    f"{prefix}"
+                    "Carefully inspect this crop.\n"
                     f"{bbox_note}"
                     "State ONLY the specific attribute values asked in the question (e.g. brand, color, type, text, name).\n"
                     "Do NOT write full sentences, conversational filler, or explanations.\n"
@@ -384,18 +362,6 @@ def run_foveated_vlm_reading(
                     "If the target object or requested information is NOT clearly visible or identifiable in this crop, output strictly:\n"
                     "<answer>None</answer>\n\n"
                     "Otherwise, output the exact attributes inside <answer>...</answer> tags:\n"
-                    "<answer>concise answer</answer>"
-                )
-            elif is_relational:
-                prompt = (
-                    f"{question}{text_coords_hint}\n\n"
-                    "Carefully inspect the zoomed crop and the red focus rectangle on the main image.\n"
-                    f"{bbox_note}"
-                    "Focus strictly on the spatial relation specified in the question (e.g. above, below, next to, on).\n"
-                    "State ONLY the direct factual answer (1 to 5 words). Do NOT write explanations or conversational filler.\n"
-                    "If the target object or relative spatial information is NOT clearly visible or cannot be determined with certainty, output strictly:\n"
-                    "<answer>None</answer>\n\n"
-                    "Otherwise, output the concise answer inside <answer>...</answer> tags:\n"
                     "<answer>concise answer</answer>"
                 )
             else:
@@ -496,7 +462,8 @@ def run_foveated_vlm_reading(
                 "final_answer": final_ans,
                 "is_evidence": is_ev,
                 "source_branch": item.source_branch,
-                "is_dual_scale": is_relational,
+                "is_compressed_canvas": getattr(item, "is_compressed_canvas", False),
+                "is_dual_scale": False,
                 "question_type": question_type
             })
 

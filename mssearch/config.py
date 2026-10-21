@@ -47,7 +47,7 @@ class MSSearchConfig:
     sgap_overlap_ratio: float = 0.10             # 10% safety border expansion
     partition_stopping_mode: str = "saliency_plateau"  # "saliency_plateau" (Paradigm 2 dynamic semantic zoom) or "fixed_size" (legacy max_patch_size)
     max_patch_size: int = 512                    # Recursive invariant when partition_stopping_mode == "fixed_size": longer side <= 512px
-    min_plateau_size: int = 256                  # Scale floor in saliency_plateau mode: patches <= this dimension stop splitting
+    min_plateau_size: int = 512                  # Scale floor in saliency_plateau mode: patches <= this dimension stop splitting
     max_plateau_size: int = 1536                 # Physical ceiling in saliency_plateau mode: patches > this dimension must split (VRAM safety)
     saliency_plateau_gain_threshold: float = 0.04 # Saliency gain (max_child - parent) required to justify deeper split
     saliency_target_threshold: float = 0.35      # High confidence target threshold where marginal gain halts zoom
@@ -82,7 +82,7 @@ class MSSearchConfig:
     max_patches_per_latent_group: int = 1        # Max patches kept for latent-retained groups (1 = centroid only)
     max_patches_per_detected_group: int = 4      # Max patches kept for confirmed SAM3 detection groups
     enable_retention_hard_cap: bool = True       # Cap total retained patches across all groups before Stage 5/6
-    max_retained_patches: int = 16               # Global upper bound on candidate patches pool
+    max_retained_patches: int = 32               # Global upper bound on candidate patches pool
     retention_ranking_metric: str = "confidence_hybrid"  # "confidence_hybrid", "entropy", "detection_first"
 
     # -------------------------------------------------------------------------
@@ -96,8 +96,8 @@ class MSSearchConfig:
     stage5_nms_iou_threshold: float = 0.60       # Spatial IoU threshold for candidate patch deduplication
     enable_relational_box_merging: bool = False  # Deprecated in favor of spatial compressed canvas
     relational_merge_distance_px: float = 350.0  # Max edge-to-edge distance (px) to merge relational boxes
-    enable_spatial_compressed_canvas: bool = True # Excise empty rows/cols to form spatial compressed canvas (better than RAP)
-    spatial_compression_gutter_px: int = 8       # Visual separator gap (px) between non-contiguous compressed intervals
+    enable_spatial_compressed_canvas: bool = True # Excise empty rows/cols to form spatial compressed canvas for all samples
+    spatial_compression_gutter_px: int = 28      # Visual separator gap (px) between non-contiguous compressed intervals
 
     # -------------------------------------------------------------------------
     # Stage 6: Foveated VLM Reading, Dual-Scale & Collision-Free Consensus
@@ -108,7 +108,7 @@ class MSSearchConfig:
     enable_early_consensus_exit: bool = True     # Stop evaluating crops once 2 identical/near-identical answers are extracted
     early_consensus_count: int = 2               # Minimum consensus extractions to trigger early exit
     early_consensus_threshold: float = 0.75      # String similarity threshold on extracted core answers
-    enable_query_adaptive_dual_scale: bool = True # Input [Global with BBox, Local Crop] for relational/orientation queries
+    enable_query_adaptive_dual_scale: bool = False # Deprecated: spatial compressed canvas provides native relational context
     prompt_directed_final_answer: bool = True    # Instruct VLM to conclude with 'Final Answer: <concise answer>'
     answer_dedup_similarity: float = 0.85        # Semantic deduplication threshold
 

@@ -293,11 +293,13 @@ def run_resolution_screening(
     active_objects: Optional[List[str]] = None,
     siglip_model = None,
     config: Optional[MSSearchConfig] = None,
-    is_relational: Optional[bool] = None
+    is_relational: Optional[bool] = None  # Deprecated: spatial compressed layout replaces relational mode
 ) -> List[CandidateCrop]:
     """
-    Directly aggregates surviving candidate patches into the Unified Candidate Pool P
-    with spatial NMS deduplication and relational box proximity merging.
+    Aggregates surviving candidate patches into the Unified Candidate Pool P:
+    1. Applies Stage 5 Spatial IoU NMS to suppress overlapping patches per image.
+    2. Synthesizes a Spatial-Awareness Compressed Canvas per image (excising empty rows/cols with 28px gutters).
+       Guarantees at most 1 evaluation per candidate image containing surviving evidence.
     """
     if not remaining_patches:
         return []
@@ -305,27 +307,7 @@ def run_resolution_screening(
     effective_patches = list(remaining_patches)
     verbose = getattr(config, "verbose", True) if config else True
 
-    # Detect relational intent if not explicitly passed
-    if is_relational is None:
-        if active_objects is not None and hasattr(active_objects, "is_relational"):
-            is_relational = bool(active_objects.is_relational)
-        else:
-            is_relational = False
-
-    # 1. Multi-Entity Relational Proximity Box Merging (Legacy fallback)
-    enable_rel_merge = getattr(config, "enable_relational_box_merging", False) if config else False
-    if is_relational and enable_rel_merge:
-        img_shapes = {idx: (img.width, img.height) for idx, img in enumerate(candidate_images)}
-        merge_dist = getattr(config, "relational_merge_distance_px", 350.0) if config else 350.0
-        effective_patches = merge_relational_proximity_boxes(
-            effective_patches,
-            img_shapes=img_shapes,
-            max_merge_dist=merge_dist,
-            max_box_dim=1024,
-            verbose=verbose
-        )
-
-    # 2. Stage 5 Spatial IoU NMS Deduplication
+    # 1. Stage 5 Spatial IoU NMS Deduplication
     enable_nms = getattr(config, "enable_stage5_spatial_nms", True) if config else True
     if enable_nms:
         iou_thresh = getattr(config, "stage5_nms_iou_threshold", 0.60) if config else 0.60
@@ -335,9 +317,9 @@ def run_resolution_screening(
             verbose=verbose
         )
 
-    # 3. Spatial Compressed Canvas or Direct Crop Aggregation
+    # 2. Universal Spatial Compressed Canvas Aggregation
     enable_compressed_canvas = getattr(config, "enable_spatial_compressed_canvas", True) if config else True
-    gutter_px = getattr(config, "spatial_compression_gutter_px", 8) if config else 8
+    gutter_px = getattr(config, "spatial_compression_gutter_px", 28) if config else 28
 
     unified_pool: List[CandidateCrop] = []
 
@@ -360,7 +342,8 @@ def run_resolution_screening(
                             crop_image=crop,
                             score=p.confidence_score if p.confidence_score is not None else 1.0,
                             source_branch="Direct",
-                            is_compressed_canvas=False
+                            is_compressed_canvas=False,
+                            remapped_boxes=[(0, 0, crop.width, crop.height)]
                         )
                     )
             else:
