@@ -106,6 +106,10 @@ def compute_spatial_entropy(
     return float(np.clip(h_total, 0.0, 1.0))
 
 
+# Backward compatibility alias
+calculate_spatial_entropy = compute_spatial_entropy
+
+
 def split_4_subpatches(w: int, h: int) -> Tuple[int, int]:
     """
     CVSearch aspect-ratio aware 4-subpatch splitting (tree.py:L118-L125).
