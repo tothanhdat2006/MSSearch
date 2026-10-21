@@ -301,54 +301,71 @@ def run_foveated_vlm_reading(
         img_pil = candidate_images[img_idx]
         img_w, img_h = img_pil.size
 
-        # Expand bounding box independently by 1.25x
-        exp_box = expand_bounding_box(
-            item.box, img_w, img_h, expansion_factor=config.bbox_expansion_factor
-        )
-
-        foveated_crop = img_pil.crop(exp_box)
-        fcw, fch = foveated_crop.size
-        if fcw < 8 or fch < 8:
-            continue
-
-        # Apply Visual and Textual Prompting if configured
-        vlm_input_crop = foveated_crop
-        x1, y1 = exp_box[0], exp_box[1]
-        local_target_box = (
-            item.box[0] - x1, item.box[1] - y1,
-            item.box[2] - x1, item.box[3] - y1
-        )
-
-        if config.enable_visual_prompt_bbox:
-            vlm_input_crop = render_visual_prompt_bbox(
-                foveated_crop,
-                [local_target_box],
-                color=config.visual_prompt_bbox_color,
-                width=config.visual_prompt_bbox_width
-            )
-
-        text_coords_hint = ""
-        if config.enable_textual_prompt_coords:
-            text_coords_hint = f" Focal region: [{local_target_box[0]}, {local_target_box[1]}, {local_target_box[2]}, {local_target_box[3]}]."
-
-        vlm_image_input: Union[Image.Image, List[Image.Image]] = vlm_input_crop
-        if is_relational:
-            global_annotated = render_visual_prompt_bbox(
-                img_pil,
-                [item.box],
-                color=config.visual_prompt_bbox_color,
-                width=max(2, img_w // 200)
-            )
-            max_global_dim = 768
-            if img_w > max_global_dim or img_h > max_global_dim:
-                scale = max_global_dim / max(img_w, img_h)
-                global_annotated = global_annotated.resize(
-                    (int(round(img_w * scale)), int(round(img_h * scale))),
-                    Image.Resampling.BILINEAR
+        if getattr(item, "is_compressed_canvas", False):
+            # Spatial compressed canvas already has all retained patches arranged with empty rows/cols excised
+            foveated_crop = item.crop_image
+            exp_box = item.box
+            local_target_boxes = getattr(item, "remapped_boxes", []) or []
+            vlm_input_crop = foveated_crop
+            if config.enable_visual_prompt_bbox and local_target_boxes:
+                vlm_input_crop = render_visual_prompt_bbox(
+                    foveated_crop,
+                    local_target_boxes,
+                    color=config.visual_prompt_bbox_color,
+                    width=config.visual_prompt_bbox_width
                 )
-            vlm_image_input = [global_annotated, vlm_input_crop]
-            if config.verbose and c_idx == 0:
-                print(f"[Stage 6][Dual-Scale] Spatial/relational query detected; using Dual-Scale [Global with BBox, Local Crop] mode.")
+            text_coords_hint = ""
+            # Self-contained spatial context at native resolution; no downsampled global view required
+            vlm_image_input: Union[Image.Image, List[Image.Image]] = vlm_input_crop
+        else:
+            # Expand bounding box independently by 1.25x
+            exp_box = expand_bounding_box(
+                item.box, img_w, img_h, expansion_factor=config.bbox_expansion_factor
+            )
+
+            foveated_crop = img_pil.crop(exp_box)
+            fcw, fch = foveated_crop.size
+            if fcw < 8 or fch < 8:
+                continue
+
+            # Apply Visual and Textual Prompting if configured
+            vlm_input_crop = foveated_crop
+            x1, y1 = exp_box[0], exp_box[1]
+            local_target_box = (
+                item.box[0] - x1, item.box[1] - y1,
+                item.box[2] - x1, item.box[3] - y1
+            )
+
+            if config.enable_visual_prompt_bbox:
+                vlm_input_crop = render_visual_prompt_bbox(
+                    foveated_crop,
+                    [local_target_box],
+                    color=config.visual_prompt_bbox_color,
+                    width=config.visual_prompt_bbox_width
+                )
+
+            text_coords_hint = ""
+            if config.enable_textual_prompt_coords:
+                text_coords_hint = f" Focal region: [{local_target_box[0]}, {local_target_box[1]}, {local_target_box[2]}, {local_target_box[3]}]."
+
+            vlm_image_input = vlm_input_crop
+            if is_relational:
+                global_annotated = render_visual_prompt_bbox(
+                    img_pil,
+                    [item.box],
+                    color=config.visual_prompt_bbox_color,
+                    width=max(2, img_w // 200)
+                )
+                max_global_dim = 768
+                if img_w > max_global_dim or img_h > max_global_dim:
+                    scale = max_global_dim / max(img_w, img_h)
+                    global_annotated = global_annotated.resize(
+                        (int(round(img_w * scale)), int(round(img_h * scale))),
+                        Image.Resampling.BILINEAR
+                    )
+                vlm_image_input = [global_annotated, vlm_input_crop]
+                if config.verbose and c_idx == 0:
+                    print(f"[Stage 6][Dual-Scale] Spatial/relational query detected; using Dual-Scale [Global with BBox, Local Crop] mode.")
 
         # Concise Final VLM Answer Prompt
         if getattr(config, "prompt_directed_final_answer", True):

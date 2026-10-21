@@ -94,8 +94,10 @@ class MSSearchConfig:
     siglip_device: str = "cuda:0"                # Shared on GPU 0 with Qwen2.5-VL layers 0-14
     enable_stage5_spatial_nms: bool = True       # Suppress duplicate/overlapping candidate crops on same image
     stage5_nms_iou_threshold: float = 0.60       # Spatial IoU threshold for candidate patch deduplication
-    enable_relational_box_merging: bool = True   # Mitigate relational fragmentation by merging proximate boxes
+    enable_relational_box_merging: bool = False  # Deprecated in favor of spatial compressed canvas
     relational_merge_distance_px: float = 350.0  # Max edge-to-edge distance (px) to merge relational boxes
+    enable_spatial_compressed_canvas: bool = True # Excise empty rows/cols to form spatial compressed canvas (better than RAP)
+    spatial_compression_gutter_px: int = 8       # Visual separator gap (px) between non-contiguous compressed intervals
 
     # -------------------------------------------------------------------------
     # Stage 6: Foveated VLM Reading, Dual-Scale & Collision-Free Consensus
