@@ -20,6 +20,7 @@ import random
 import argparse
 import warnings
 import logging
+from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any, Set, Union
 
 import torch
@@ -300,6 +301,12 @@ def main():
         help="Directory to save JSONL telemetry logs and summaries.",
     )
     parser.add_argument(
+        "--output_file",
+        type=str,
+        default=None,
+        help="Explicit results JSONL filename or path (default: auto-timestamped results_YYYYMMDD_HHMMSS.jsonl in output_dir).",
+    )
+    parser.add_argument(
         "--sam3_path",
         type=str,
         default=os.environ.get("SAM3_PATH", "/home/ubuntu/workspace/hr/models/sam3/sam3/sam3.pt"),
@@ -334,7 +341,8 @@ def main():
     parser.add_argument("--num_candidate_images", type=int, default=3, help="Candidate pool size N (1 target + N-1 distractors).")
     parser.add_argument("--window_size", type=int, default=5, help="Window for distractor sampling.")
     parser.add_argument("--random_seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--resume", action="store_true", help="Skip already evaluated samples in results.jsonl.")
+    parser.add_argument("--resume", action="store_true", help="Skip already evaluated samples and continue appending to results file.")
+    parser.add_argument("--resume_from", type=str, default=None, help="Specific previous results JSONL path to resume from (defaults to latest results_*.jsonl in output_dir).")
     parser.add_argument("--mode", type=str, default="e2e", help="Execution mode (default: e2e).")
     parser.add_argument("--save_visuals", nargs="*", default=None, help="Visual artifact controls (kept for backward compatibility).")
 
@@ -456,9 +464,52 @@ def main():
             setattr(config, param, val)
             print(f"[Config Override] {param} -> {val}")
 
-    # 4. Save config_used.json (Requirement 3: Write all configs out so user can change it)
-    config_out_path = os.path.join(args.output_dir, "config_used.json")
+    # 4. Generate timestamp string for de-duplication
+    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    # If --resume_from is explicitly passed, automatically enable resume mode
+    if args.resume_from:
+        args.resume = True
+
+    # 4a. Resolve results JSONL path and resume tracking
+    if args.output_file:
+        results_log_path = os.path.abspath(args.output_file)
+        if args.resume:
+            print(f"[Resume] Resuming from explicit output file: {results_log_path}")
+        else:
+            print(f"[Results] Telemetry will be logged to: {results_log_path}")
+    elif args.resume:
+        if args.resume_from and os.path.exists(args.resume_from):
+            results_log_path = os.path.abspath(args.resume_from)
+            print(f"[Resume] Resuming from explicit file: {results_log_path}")
+        else:
+            timestamped_candidates = []
+            other_candidates = []
+            if os.path.exists(args.output_dir):
+                for f in os.listdir(args.output_dir):
+                    if f.endswith(".jsonl"):
+                        fp = os.path.join(args.output_dir, f)
+                        if f.startswith("results_"):
+                            timestamped_candidates.append((os.path.getmtime(fp), fp))
+                        elif f == "results.jsonl":
+                            other_candidates.append((os.path.getmtime(fp), fp))
+            candidates = timestamped_candidates or other_candidates
+            if candidates:
+                candidates.sort(reverse=True)
+                results_log_path = candidates[0][1]
+                print(f"[Resume] Auto-detected most recent results file to resume: {results_log_path}")
+            else:
+                results_log_path = os.path.abspath(os.path.join(args.output_dir, f"results_{timestamp_str}.jsonl"))
+                print(f"[Resume] No existing results file found in '{args.output_dir}'. Starting new log: {results_log_path}")
+    else:
+        results_log_path = os.path.abspath(os.path.join(args.output_dir, f"results_{timestamp_str}.jsonl"))
+        print(f"[Results] Telemetry will be logged to timestamped file: {results_log_path}")
+
+    # Config file snapshot (timestamped + canonical pointer)
+    config_out_path = os.path.join(args.output_dir, f"config_used_{timestamp_str}.json")
     config.save_json(config_out_path)
+    config.save_json(os.path.join(args.output_dir, "config_used.json"))
     print(f"[Config] Active configuration written to: {config_out_path}")
 
     # 5. Discover HRBench Dataset
@@ -486,7 +537,6 @@ def main():
     if args.max_samples is not None and args.max_samples > 0:
         target_indices = target_indices[: args.max_samples]
 
-    results_log_path = os.path.abspath(os.path.join(args.output_dir, "results.jsonl"))
     if args.resume and os.path.exists(results_log_path):
         completed_ids = set()
         with open(results_log_path, "r", encoding="utf-8") as f_in:
@@ -500,7 +550,7 @@ def main():
                         pass
         orig_count = len(target_indices)
         target_indices = [idx for idx in target_indices if idx not in completed_ids]
-        print(f"[Resume] Found {len(completed_ids)} completed samples. Remaining: {len(target_indices)} / {orig_count}")
+        print(f"[Resume] Skipping {len(completed_ids)} already-evaluated samples. Remaining: {len(target_indices)} / {orig_count}")
 
     print(f"[Queue] Ready to evaluate {len(target_indices)} sample(s).")
 
@@ -580,6 +630,12 @@ def main():
             with open(results_log_path, "a", encoding="utf-8") as f_out:
                 f_out.write(json.dumps(rec) + "\n")
 
+            # Mirror to canonical results.jsonl in output_dir
+            canonical_results_path = os.path.join(args.output_dir, "results.jsonl")
+            if os.path.abspath(canonical_results_path) != os.path.abspath(results_log_path):
+                with open(canonical_results_path, "a", encoding="utf-8") as f_canon:
+                    f_canon.write(json.dumps(rec) + "\n")
+
             acc_pct = (correct_count / evaluated_count * 100.0) if evaluated_count > 0 else 0.0
             avg_lat = sum(latencies) / len(latencies) if latencies else 0.0
             print(
@@ -601,25 +657,75 @@ def main():
     overall_acc = (correct_count / total_eval * 100.0) if total_eval > 0 else 0.0
     avg_lat = (sum(latencies) / len(latencies)) if latencies else 0.0
 
-    summary_data = {
-        "total_samples_evaluated": total_eval,
-        "correct_samples": correct_count,
-        "accuracy_acc1": round(overall_acc, 2),
-        "avg_latency_sec": round(avg_lat, 2),
-        "routes": route_counter,
-        "results_log_path": results_log_path,
-        "config_used_path": config_out_path,
-    }
+    # Ingest cumulative records from results file if resuming
+    cumulative_records = []
+    if os.path.exists(results_log_path):
+        with open(results_log_path, "r", encoding="utf-8") as f_in:
+            for line in f_in:
+                if line.strip():
+                    try:
+                        cumulative_records.append(json.loads(line))
+                    except Exception:
+                        pass
 
-    summary_path = os.path.join(args.output_dir, "summary.json")
+    if args.resume and cumulative_records:
+        cum_total = len(cumulative_records)
+        cum_correct = sum(1 for r in cumulative_records if r.get("is_correct"))
+        cum_acc = (cum_correct / cum_total * 100.0) if cum_total > 0 else 0.0
+        cum_routes: Dict[str, int] = {}
+        cum_latencies: List[float] = []
+        for r in cumulative_records:
+            r_sel = r.get("route_selected", "UNKNOWN")
+            cum_routes[r_sel] = cum_routes.get(r_sel, 0) + 1
+            if "latency_sec" in r and isinstance(r["latency_sec"], (int, float)):
+                cum_latencies.append(float(r["latency_sec"]))
+        cum_avg_lat = (sum(cum_latencies) / len(cum_latencies)) if cum_latencies else 0.0
+
+        summary_data = {
+            "timestamp": timestamp_str,
+            "resumed": True,
+            "session_samples_evaluated": total_eval,
+            "session_correct_samples": correct_count,
+            "total_samples_evaluated": cum_total,
+            "correct_samples": cum_correct,
+            "accuracy_acc1": round(cum_acc, 2),
+            "avg_latency_sec": round(cum_avg_lat, 2),
+            "routes": cum_routes,
+            "results_log_path": results_log_path,
+            "config_used_path": config_out_path,
+        }
+    else:
+        summary_data = {
+            "timestamp": timestamp_str,
+            "resumed": False,
+            "total_samples_evaluated": total_eval,
+            "correct_samples": correct_count,
+            "accuracy_acc1": round(overall_acc, 2),
+            "avg_latency_sec": round(avg_lat, 2),
+            "routes": route_counter,
+            "results_log_path": results_log_path,
+            "config_used_path": config_out_path,
+        }
+
+    summary_path = os.path.join(args.output_dir, f"summary_{timestamp_str}.json")
     with open(summary_path, "w", encoding="utf-8") as f_sum:
         json.dump(summary_data, f_sum, indent=2)
 
+    canonical_summary_path = os.path.join(args.output_dir, "summary.json")
+    with open(canonical_summary_path, "w", encoding="utf-8") as f_canon_sum:
+        json.dump(summary_data, f_canon_sum, indent=2)
+
     print("\n" + "=" * 80)
-    print(f"BENCHMARK COMPLETED: Evaluated {total_eval} / {len(target_indices)} samples.")
-    print(f"Overall Accuracy (Acc@1): {correct_count}/{total_eval} ({overall_acc:.2f}%)")
-    print(f"Average Latency         : {avg_lat:.2f}s per sample")
-    print(f"Route Breakdown         : {route_counter}")
+    print(f"BENCHMARK COMPLETED: Evaluated {total_eval} new sample(s) this session.")
+    if args.resume and cumulative_records:
+        print(f"Cumulative Evaluated   : {len(cumulative_records)} total samples")
+        print(f"Cumulative Acc (Acc@1) : {summary_data['correct_samples']}/{summary_data['total_samples_evaluated']} ({summary_data['accuracy_acc1']}%)")
+        print(f"Cumulative Avg Latency : {summary_data['avg_latency_sec']}s per sample")
+        print(f"Cumulative Routes      : {summary_data['routes']}")
+    else:
+        print(f"Overall Accuracy (Acc@1): {correct_count}/{total_eval} ({overall_acc:.2f}%)")
+        print(f"Average Latency         : {avg_lat:.2f}s per sample")
+        print(f"Route Breakdown         : {route_counter}")
     print(f"Telemetry log written to: {results_log_path}")
     print(f"Summary JSON written to : {summary_path}")
     print("=" * 80)

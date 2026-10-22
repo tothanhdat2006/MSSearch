@@ -990,8 +990,72 @@ def generate_html_gallery(
 
 
 # ==============================================================================
-# MAIN RUNNER
+# MAIN RUNNER & AUTO-PATH RESOLUTION
 # ==============================================================================
+
+def resolve_results_path(input_path: str) -> str:
+    """
+    Resolves results file path.
+    1. Returns input_path if it exists directly as a file.
+    2. Searches known directories for the most recent results_*.jsonl or results.jsonl.
+    """
+    candidates_to_check = [
+        input_path,
+        os.path.abspath(input_path),
+        os.path.join(os.path.dirname(__file__), input_path),
+        os.path.join("docs/experiments/multisource/MSSearch", input_path),
+    ]
+    for c in candidates_to_check:
+        if os.path.isfile(c) and os.path.getsize(c) > 0:
+            return os.path.abspath(c)
+
+    # Search candidates directories
+    search_dirs = []
+    for c in candidates_to_check:
+        if os.path.isdir(c):
+            search_dirs.append(c)
+        elif os.path.isdir(os.path.dirname(c)):
+            search_dirs.append(os.path.dirname(c))
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    search_dirs.extend([
+        os.path.join(script_dir, "multisource_hrbench", "results"),
+        os.path.join(script_dir, "results"),
+        script_dir,
+        os.path.abspath("docs/experiments/multisource/MSSearch/pilot/multisource_hrbench/results"),
+        os.path.abspath("docs/experiments/multisource/MSSearch/pilot/results"),
+        os.path.abspath("docs/experiments/multisource/MSSearch/pilot"),
+    ])
+
+    timestamped_files = []
+    other_files = []
+    seen_dirs = set()
+
+    for d in search_dirs:
+        d_abs = os.path.abspath(d)
+        if d_abs in seen_dirs or not os.path.exists(d_abs):
+            continue
+        seen_dirs.add(d_abs)
+        for f in os.listdir(d_abs):
+            if f.endswith(".jsonl"):
+                fp = os.path.join(d_abs, f)
+                if os.path.isfile(fp) and os.path.getsize(fp) > 0:
+                    if f.startswith("results_"):
+                        timestamped_files.append((os.path.getmtime(fp), fp))
+                    elif f == "results.jsonl":
+                        other_files.append((os.path.getmtime(fp), fp))
+
+    found = timestamped_files or other_files
+    if found:
+        found.sort(reverse=True)
+        resolved = os.path.abspath(found[0][1])
+        print(f"[Visualizer] Auto-resolved latest results file: {resolved}")
+        return resolved
+
+    raise FileNotFoundError(
+        f"Results file not found for path: '{input_path}'. Searched directories: {list(seen_dirs)}"
+    )
+
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize MSSearch Pilot Results with Stage 6 Layouts")
@@ -999,7 +1063,7 @@ def main():
         "--results_path",
         type=str,
         default="pilot/results.jsonl",
-        help="Path to results.jsonl file."
+        help="Path to results.jsonl or timestamped results_*.jsonl file (auto-detects newest if directory or default)."
     )
     parser.add_argument(
         "--hrbench_dir",
@@ -1033,13 +1097,7 @@ def main():
     args = parser.parse_args()
 
     # Resolve paths
-    results_path = os.path.abspath(args.results_path)
-    if not os.path.exists(results_path):
-        candidate = os.path.join("docs/experiments/multisource/MSSearch", args.results_path)
-        if os.path.exists(candidate):
-            results_path = os.path.abspath(candidate)
-        else:
-            raise FileNotFoundError(f"Results file not found: {args.results_path}")
+    results_path = resolve_results_path(args.results_path)
 
     output_dir = os.path.abspath(args.output_dir)
     os.makedirs(output_dir, exist_ok=True)
