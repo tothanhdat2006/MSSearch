@@ -5,6 +5,7 @@ MSSearch Pilot Results Visualizer
 High-resolution, publication-grade visualization engine for MSSearch results.
 - Reconstructs candidate image pools C = {I_1, ..., I_N} with deterministic random seed
 - Overlays Stage 5 pre-aggregation bounding boxes (scores + entropy) & Stage 6 crops
+- Synthesizes and visualizes the EXACT spatial compressed layout fed to Stage 6 (Qwen2.5-VL)
 - Extracts and magnifies high-resolution zoomed crops for fine-grained evidence inspection
 - Generates composite multi-panel PNGs for each sample
 - Compiles an interactive, dark-mode offline HTML gallery dashboard in the 'vis' folder
@@ -45,23 +46,146 @@ def get_font(size: int = 16, bold: bool = False):
 
 # Color Palette (Modern Dark Theme)
 PALETTE = {
-    "bg": (18, 22, 31),             # Deep Navy
-    "card_bg": (28, 36, 52),        # Card surface
-    "card_border": (45, 55, 75),    # Card outline
-    "text_main": (248, 250, 252),   # White
-    "text_muted": (148, 163, 184),  # Slate muted
-    "accent_cyan": (56, 189, 248),  # Sky cyan
-    "accent_gold": (251, 191, 36),  # Amber gold
-    "correct_green": (74, 222, 128),# Emerald
-    "correct_bg": (20, 83, 45),     # Dark green badge
-    "incorrect_red": (248, 113, 113),# Crimson
-    "incorrect_bg": (127, 29, 29),  # Dark red badge
-    "target_border": (74, 222, 128),# Green border for target
+    "bg": (15, 20, 28),              # Deep Navy
+    "card_bg": (26, 34, 48),         # Card surface
+    "card_border": (45, 55, 75),     # Card outline
+    "text_main": (248, 250, 252),    # White
+    "text_muted": (148, 163, 184),   # Slate muted
+    "accent_cyan": (56, 189, 248),   # Sky cyan
+    "accent_gold": (251, 191, 36),   # Amber gold
+    "correct_green": (74, 222, 128), # Emerald
+    "correct_bg": (20, 83, 45),      # Dark green badge
+    "incorrect_red": (248, 113, 113), # Crimson
+    "incorrect_bg": (127, 29, 29),   # Dark red badge
+    "target_border": (74, 222, 128), # Green border for target
     "distractor_border": (100, 116, 139), # Slate border for distractor
-    "evidence_badge": (14, 116, 144), # Cyan badge
-    "box_cyan": (0, 220, 255),      # Stage 5 candidate boxes
-    "box_gold": (255, 190, 0),      # Top evidence boxes
+    "evidence_badge": (14, 116, 144),# Cyan badge
+    "box_cyan": (0, 220, 255),       # Stage 5 candidate boxes
+    "box_gold": (255, 190, 0),       # Top evidence / Stage 6 boxes
+    "stage6_badge": (124, 58, 237),  # Purple badge for Stage 6 layout
 }
+
+
+def safe_save_image(image: Image.Image, file_path: str, max_retries: int = 5) -> None:
+    """Saves an image safely with atomic swap and retry mechanism to handle Windows file locking."""
+    import time
+    tmp_path = file_path + f".tmp_{os.getpid()}_{random.randint(1000, 9999)}"
+    try:
+        image.save(tmp_path)
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
+        os.replace(tmp_path, file_path)
+        return
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+    for attempt in range(max_retries):
+        try:
+            image.save(file_path)
+            return
+        except OSError:
+            time.sleep(0.3)
+    image.save(file_path)
+
+
+# ==============================================================================
+# SPATIAL COMPRESSED CANVAS SYNTHESIS (STAGE 5 RECONSTRUCTION)
+# ==============================================================================
+
+def merge_intervals(intervals: List[Tuple[int, int]], min_gap: int = 0) -> List[Tuple[int, int]]:
+    """Merges overlapping or near-adjacent 1D intervals [v1, v2]."""
+    if not intervals:
+        return []
+    sorted_ivs = sorted(intervals, key=lambda x: x[0])
+    merged = [list(sorted_ivs[0])]
+    for curr in sorted_ivs[1:]:
+        prev = merged[-1]
+        if curr[0] <= prev[1] + min_gap:
+            prev[1] = max(prev[1], curr[1])
+        else:
+            merged.append(list(curr))
+    return [tuple(m) for m in merged]
+
+
+def create_spatial_compressed_canvas(
+    image: Image.Image,
+    boxes: List[Tuple[int, int, int, int]],
+    gutter_px: int = 28,
+    bg_color: Tuple[int, int, int] = (128, 128, 128)
+) -> Tuple[Image.Image, List[Tuple[int, int, int, int]]]:
+    """
+    Synthesizes the exact continuous-coordinate compressed canvas fed to Stage 6.
+    Excises empty rows and columns outside surviving candidate boxes and inserts 28px neutral visual gutters.
+    """
+    if not boxes:
+        return image, []
+    if len(boxes) == 1:
+        box = boxes[0]
+        crop = image.crop(box)
+        return crop, [(0, 0, crop.width, crop.height)]
+
+    w, h = image.size
+    x_ivs = [(max(0, b[0]), min(w, b[2])) for b in boxes if b[2] > b[0]]
+    y_ivs = [(max(0, b[1]), min(h, b[3])) for b in boxes if b[3] > b[1]]
+
+    merged_x = merge_intervals(x_ivs, min_gap=gutter_px)
+    merged_y = merge_intervals(y_ivs, min_gap=gutter_px)
+
+    x_map_start: Dict[Tuple[int, int], int] = {}
+    curr_x = 0
+    for idx, (x1, x2) in enumerate(merged_x):
+        x_map_start[(x1, x2)] = curr_x
+        curr_x += (x2 - x1)
+        if idx < len(merged_x) - 1:
+            curr_x += gutter_px
+    canvas_w = max(1, curr_x)
+
+    y_map_start: Dict[Tuple[int, int], int] = {}
+    curr_y = 0
+    for idx, (y1, y2) in enumerate(merged_y):
+        y_map_start[(y1, y2)] = curr_y
+        curr_y += (y2 - y1)
+        if idx < len(merged_y) - 1:
+            curr_y += gutter_px
+    canvas_h = max(1, curr_y)
+
+    canvas = Image.new("RGB", (canvas_w, canvas_h), bg_color)
+
+    def remap_coord(val: int, intervals: List[Tuple[int, int]], map_start: Dict[Tuple[int, int], int]) -> int:
+        for (v1, v2) in intervals:
+            if v1 <= val <= v2:
+                return map_start[(v1, v2)] + (val - v1)
+            elif val < v1:
+                return map_start[(v1, v2)]
+        if intervals:
+            last = intervals[-1]
+            return map_start[last] + (last[1] - last[0])
+        return 0
+
+    # Paste patch crops onto canvas
+    for box in boxes:
+        crop = image.crop(box)
+        nx1 = remap_coord(box[0], merged_x, x_map_start)
+        ny1 = remap_coord(box[1], merged_y, y_map_start)
+        canvas.paste(crop, (nx1, ny1))
+
+    # Remap bounding boxes
+    remapped_boxes: List[Tuple[int, int, int, int]] = []
+    for box in boxes:
+        nx1 = remap_coord(box[0], merged_x, x_map_start)
+        ny1 = remap_coord(box[1], merged_y, y_map_start)
+        nx2 = remap_coord(box[2], merged_x, x_map_start)
+        ny2 = remap_coord(box[3], merged_y, y_map_start)
+        remapped_boxes.append((nx1, ny1, nx2, ny2))
+
+    return canvas, remapped_boxes
 
 
 # ==============================================================================
@@ -234,7 +358,6 @@ def draw_header_card(
 
 
 def draw_candidate_image_panel(
-    canvas_w: int,
     img_item: Dict[str, Any],
     img_idx: int,
     boxes: List[Dict[str, Any]],
@@ -245,7 +368,6 @@ def draw_candidate_image_panel(
 ) -> Tuple[Image.Image, float, float]:
     """
     Renders a single candidate image canvas with overlaid bounding boxes and annotations.
-    Returns (rendered_image, scale_x, scale_y).
     """
     orig_img = img_item["image"]
     orig_w, orig_h = orig_img.size
@@ -283,17 +405,18 @@ def visualize_sample(
     hrbench_base_dir: str,
     output_dir: str,
     max_panel_w: int = 760,
-    max_panel_h: int = 680,
+    max_panel_h: int = 650,
     save_crops: bool = True
-) -> str:
+) -> Tuple[str, List[str]]:
     """
-    Generates and saves a composite multi-panel visualization image for a sample.
+    Generates and saves a composite multi-panel visualization image for a sample,
+    incorporating the exact Stage 6 spatial compressed layout.
     """
     sample_index = rec["sample_index"]
     target_pool_idx = rec.get("target_pool_idx", 0)
     evidence_images = set(rec.get("evidence_images", []))
 
-    # Reconstruct candidate pool
+    # 1. Reconstruct candidate pool
     pool_items = reconstruct_candidate_pool(
         sample_index=sample_index,
         hrbench_data=hrbench_data,
@@ -308,13 +431,12 @@ def visualize_sample(
     for b in rec.get("final_crop_boxes_before_aggregate", []):
         boxes_by_img.setdefault(b["img_idx"], []).append(b)
 
-    # Render each candidate image panel
+    # 2. Render Row 1: Candidate Image Panels
     rendered_panels = []
     for idx, item in enumerate(pool_items):
         is_ev = idx in evidence_images
         img_boxes = boxes_by_img.get(idx, [])
         panel_img, sx, sy = draw_candidate_image_panel(
-            canvas_w=max_panel_w,
             img_item=item,
             img_idx=idx,
             boxes=img_boxes,
@@ -332,15 +454,58 @@ def visualize_sample(
             "num_boxes": len(img_boxes)
         })
 
-    # Prepare Detail Zoom Insets from evidence regions
+    # 3. Render Row 2: Exact Stage 6 Spatial Compressed Layouts
+    stage6_layouts = []
+    layout_dir = os.path.join(output_dir, "stage6_layouts")
+    if not os.path.exists(layout_dir):
+        os.makedirs(layout_dir, exist_ok=True)
+
+    layout_filenames = []
+    # Identify images that produced candidate patches for Stage 6
+    for idx, item in enumerate(pool_items):
+        img_boxes = boxes_by_img.get(idx, [])
+        if not img_boxes:
+            continue
+
+        raw_boxes = [tuple(b["box"]) for b in img_boxes]
+        canvas_img, remapped_boxes = create_spatial_compressed_canvas(
+            image=item["image"],
+            boxes=raw_boxes,
+            gutter_px=28
+        )
+
+        # Draw gold outline around remapped patch boundaries on canvas
+        annotated_layout = canvas_img.copy()
+        draw_layout = ImageDraw.Draw(annotated_layout)
+        for r_box in remapped_boxes:
+            draw_layout.rectangle(r_box, outline=PALETTE["box_gold"], width=2)
+
+        layout_fname = f"layout_s{sample_index:03d}_img{idx}.png"
+        safe_save_image(canvas_img, os.path.join(layout_dir, layout_fname))
+        layout_filenames.append(layout_fname)
+
+        # Scale layout image for composite panel display (max 680x480)
+        s_scale = min(680 / annotated_layout.width, 480 / annotated_layout.height)
+        lw = max(10, int(round(annotated_layout.width * s_scale)))
+        lh = max(10, int(round(annotated_layout.height * s_scale)))
+        downscaled_layout = annotated_layout.resize((lw, lh), Image.Resampling.BILINEAR)
+
+        stage6_layouts.append({
+            "img_idx": idx,
+            "image": downscaled_layout,
+            "raw_size": canvas_img.size,
+            "num_patches": len(raw_boxes),
+            "is_evidence": idx in evidence_images,
+            "is_target": item["is_target"]
+        })
+
+    # 4. Prepare Row 3: Detail Zoom Insets from evidence regions
     zoom_crops = []
     crop_dir = os.path.join(output_dir, "crops")
     if save_crops and not os.path.exists(crop_dir):
         os.makedirs(crop_dir, exist_ok=True)
 
-    # Collect top candidate boxes to crop from original high-res canvas
     candidate_crops_to_extract = []
-    # Sort boxes by score descending, then entropy descending
     for b in rec.get("final_crop_boxes_before_aggregate", []):
         if b.get("img_idx") in evidence_images or b.get("img_idx") == target_pool_idx:
             candidate_crops_to_extract.append(b)
@@ -350,7 +515,6 @@ def visualize_sample(
         reverse=True
     )
 
-    # Extract up to 4 high-res crops
     for c_idx, c_info in enumerate(candidate_crops_to_extract[:4]):
         src_img_idx = c_info["img_idx"]
         orig_img = pool_items[src_img_idx]["image"]
@@ -359,10 +523,9 @@ def visualize_sample(
         cw, ch = x2 - x1, y2 - y1
         if cw >= 8 and ch >= 8:
             crop_canvas = orig_img.crop((x1, y1, x2, y2))
-            # Save crop thumbnail
             crop_filename = f"crop_s{sample_index:03d}_img{src_img_idx}_{c_idx}.png"
             if save_crops:
-                crop_canvas.save(os.path.join(crop_dir, crop_filename))
+                safe_save_image(crop_canvas, os.path.join(crop_dir, crop_filename))
             zoom_crops.append({
                 "image": crop_canvas,
                 "img_idx": src_img_idx,
@@ -372,20 +535,25 @@ def visualize_sample(
                 "filename": crop_filename
             })
 
-    # Determine Canvas Dimensions
+    # 5. Calculate Total Canvas Layout Dimensions
     margin = 24
     header_h = 160
-    col_w = max(p["image"].width for p in rendered_panels) + margin
-    total_w = max(1800, len(rendered_panels) * col_w + margin)
-    panels_h = max(p["image"].height for p in rendered_panels) + 40  # 40px for panel title bar
+    panels_total_w = sum(p["image"].width + margin for p in rendered_panels) + margin
+    s6_total_w = (sum(l["image"].width + margin for l in stage6_layouts) + margin) if stage6_layouts else 0
+    zoom_total_w = (sum(min(340, z["image"].width) + 24 for z in zoom_crops) + margin) if zoom_crops else 0
 
+    total_w = max(1920, panels_total_w, s6_total_w, zoom_total_w)
+    panels_h = max((p["image"].height for p in rendered_panels), default=400) + 48
+
+    stage6_row_h = (max((l["image"].height for l in stage6_layouts), default=0) + 72) if stage6_layouts else 0
     zoom_row_h = 240 if zoom_crops else 0
-    total_h = header_h + panels_h + zoom_row_h + margin * 2
+
+    total_h = header_h + panels_h + stage6_row_h + zoom_row_h + margin * 4 + 80
 
     canvas = Image.new("RGB", (total_w, total_h), color=PALETTE["bg"])
     draw = ImageDraw.Draw(canvas)
 
-    # 1. Draw Header Card
+    # 1. Header Banner
     draw.rounded_rectangle(
         [margin, margin, total_w - margin, header_h],
         radius=10,
@@ -395,76 +563,117 @@ def visualize_sample(
     )
     draw_header_card(draw, rec, total_w, margin)
 
-    # 2. Draw Candidate Image Panels
+    # Section 1 Title: Candidate Pool Overview
+    font_sec = get_font(18, bold=True)
     font_panel_title = get_font(15, bold=True)
     font_panel_sub = get_font(13, bold=False)
 
-    panels_start_y = header_h + margin
+    sec1_y = header_h + margin + 8
+    draw.text((margin, sec1_y), "Row 1: Candidate Image Pool & Stage 5 Patch Proposals", fill=PALETTE["accent_cyan"], font=font_sec)
+
+    # 2. Candidate Images Row
+    curr_y = sec1_y + 32
     curr_x = margin
 
     for idx, panel in enumerate(rendered_panels):
         p_img = panel["image"]
         pw, ph = p_img.size
 
-        # Card container for each candidate image
-        card_rect = [curr_x, panels_start_y, curr_x + pw + 16, panels_start_y + ph + 48]
+        card_rect = [curr_x, curr_y, curr_x + pw + 16, curr_y + ph + 48]
         draw.rounded_rectangle(card_rect, radius=8, fill=PALETTE["card_bg"], outline=PALETTE["card_border"], width=1)
 
-        # Title Label
         is_target = panel["is_target"]
         title_tag = "TARGET" if is_target else "DISTRACTOR"
         title_color = PALETTE["correct_green"] if is_target else PALETTE["text_muted"]
 
-        draw.text((curr_x + 12, panels_start_y + 10), f"Image {idx}: {title_tag}", fill=title_color, font=font_panel_title)
+        draw.text((curr_x + 12, curr_y + 10), f"Image {idx}: {title_tag}", fill=title_color, font=font_panel_title)
 
         if panel["is_evidence"]:
             draw.rounded_rectangle(
-                [curr_x + pw - 90, panels_start_y + 8, curr_x + pw + 6, panels_start_y + 30],
+                [curr_x + pw - 90, curr_y + 8, curr_x + pw + 6, curr_y + 30],
                 radius=4,
                 fill=PALETTE["evidence_badge"]
             )
-            draw.text((curr_x + pw - 82, panels_start_y + 11), "[EVIDENCE]", fill=PALETTE["text_main"], font=get_font(12, bold=True))
+            draw.text((curr_x + pw - 82, curr_y + 11), "[EVIDENCE]", fill=PALETTE["text_main"], font=get_font(12, bold=True))
 
         info_sub = f"Sample #{panel['sample_idx']} | {panel['orig_size'][0]}x{panel['orig_size'][1]} | {panel['num_boxes']} boxes"
-        draw.text((curr_x + 140, panels_start_y + 12), info_sub, fill=PALETTE["text_muted"], font=font_panel_sub)
+        draw.text((curr_x + 140, curr_y + 12), info_sub, fill=PALETTE["text_muted"], font=font_panel_sub)
 
-        # Paste Downscaled Annotated Canvas
-        canvas.paste(p_img, (curr_x + 8, panels_start_y + 40))
-
-        # Colored outline around canvas
+        canvas.paste(p_img, (curr_x + 8, curr_y + 40))
         border_col = PALETTE["target_border"] if is_target else PALETTE["distractor_border"]
-        draw.rectangle([curr_x + 7, panels_start_y + 39, curr_x + 8 + pw, panels_start_y + 40 + ph], outline=border_col, width=2)
+        draw.rectangle([curr_x + 7, curr_y + 39, curr_x + 8 + pw, curr_y + 40 + ph], outline=border_col, width=2)
 
         curr_x += pw + margin
 
-    # 3. Draw Zoomed Inset Crops Row
+    # 3. Section 2: Stage 6 Input Layout Row (Exact Canvas Fed to Reader VLM)
+    next_y = curr_y + panels_h + 16
+    if stage6_layouts:
+        draw.text(
+            (margin, next_y),
+            "Row 2: Exact Layout Fed to Stage 6 Reader (Spatial Compressed Canvas / Direct Crop)",
+            fill=PALETTE["accent_gold"],
+            font=font_sec
+        )
+        s6_y = next_y + 32
+        lx = margin
+
+        for s6 in stage6_layouts:
+            l_img = s6["image"]
+            lw, lh = l_img.size
+
+            s6_card = [lx, s6_y, lx + lw + 16, s6_y + lh + 48]
+            draw.rounded_rectangle(s6_card, radius=8, fill=PALETTE["card_bg"], outline=PALETTE["card_border"], width=1)
+
+            # Badge & Header
+            draw.rounded_rectangle([lx + 10, s6_y + 8, lx + 120, s6_y + 30], radius=4, fill=PALETTE["stage6_badge"])
+            draw.text((lx + 16, s6_y + 11), "STAGE 6 VLM FEED", fill=PALETTE["text_main"], font=get_font(11, bold=True))
+
+            role_str = "TARGET" if s6["is_target"] else "DISTRACTOR"
+            role_col = PALETTE["correct_green"] if s6["is_target"] else PALETTE["text_muted"]
+            draw.text((lx + 130, s6_y + 10), f"Image {s6['img_idx']} ({role_str})", fill=role_col, font=font_panel_title)
+
+            meta_str = f"Canvas: {s6['raw_size'][0]}x{s6['raw_size'][1]} | {s6['num_patches']} patches compressed (28px gutters)"
+            draw.text((lx + 270, s6_y + 12), meta_str, fill=PALETTE["text_muted"], font=font_panel_sub)
+
+            canvas.paste(l_img, (lx + 8, s6_y + 40))
+            draw.rectangle([lx + 7, s6_y + 39, lx + 8 + lw, s6_y + 40 + lh], outline=PALETTE["box_gold"], width=2)
+
+            lx += lw + margin
+
+        next_y = s6_y + stage6_row_h
+
+    # 4. Section 3: High-Resolution Evidence Insets
     if zoom_crops:
-        zoom_y = panels_start_y + panels_h + 16
-        draw.text((margin, zoom_y), "High-Resolution Evidence Crops (Native Resolution):", fill=PALETTE["accent_gold"], font=get_font(16, bold=True))
+        draw.text(
+            (margin, next_y),
+            "Row 3: High-Resolution Native Evidence Details (Uncompressed 100% Crop Insets)",
+            fill=PALETTE["correct_green"],
+            font=font_sec
+        )
+        zy = next_y + 28
         zx = margin
-        for z_idx, z in enumerate(zoom_crops):
+        for z in zoom_crops:
             z_img = z["image"]
-            # Target size: max 320x180
-            scale_z = min(320 / z_img.width, 180 / z_img.height, 1.0)
+            scale_z = min(340 / z_img.width, 180 / z_img.height, 1.0)
             zw, zh = max(10, int(z_img.width * scale_z)), max(10, int(z_img.height * scale_z))
             z_down = z_img.resize((zw, zh), Image.Resampling.LANCZOS)
 
-            z_card = [zx, zoom_y + 26, zx + zw + 16, zoom_y + 26 + zh + 32]
+            z_card = [zx, zy, zx + zw + 16, zy + zh + 36]
             draw.rounded_rectangle(z_card, radius=6, fill=PALETTE["card_bg"], outline=PALETTE["card_border"])
 
             label = f"Img {z['img_idx']} | Box: {z['box']} | s={z['score']:.1f}"
-            draw.text((zx + 8, zoom_y + 30), label, fill=PALETTE["accent_cyan"], font=get_font(11, bold=True))
-            canvas.paste(z_down, (zx + 8, zoom_y + 48))
-            draw.rectangle([zx + 7, zoom_y + 47, zx + 8 + zw, zoom_y + 48 + zh], outline=PALETTE["box_gold"], width=1)
+            draw.text((zx + 8, zy + 6), label, fill=PALETTE["accent_cyan"], font=get_font(11, bold=True))
+            canvas.paste(z_down, (zx + 8, zy + 26))
+            draw.rectangle([zx + 7, zy + 25, zx + 8 + zw, zy + 26 + zh], outline=PALETTE["box_gold"], width=1)
 
             zx += zw + 24
 
-    # Save Composite Visualization PNG
+    # Save Final Composite Visualization PNG
     status_suffix = "correct" if rec.get("is_correct", False) else "incorrect"
     out_filename = f"sample_{sample_index:03d}_{status_suffix}.png"
     out_path = os.path.join(output_dir, out_filename)
-    canvas.save(out_path, optimize=True)
-    return out_path
+    safe_save_image(canvas, out_path)
+    return out_path, layout_filenames
 
 
 # ==============================================================================
@@ -474,10 +683,12 @@ def visualize_sample(
 def generate_html_gallery(
     records: List[Dict[str, Any]],
     output_dir: str,
-    vis_filenames: Dict[int, str]
+    vis_filenames: Dict[int, str],
+    layout_map: Dict[int, List[str]]
 ) -> str:
     """
-    Generates a standalone, dark-themed offline HTML dashboard (vis/index.html).
+    Generates a standalone, dark-themed offline HTML dashboard (vis/index.html)
+    with direct modal access to both the full composite and Stage 6 layout feeds.
     """
     total = len(records)
     correct_count = sum(1 for r in records if r.get("is_correct", False))
@@ -492,6 +703,7 @@ def generate_html_gallery(
     for r in records:
         idx = r.get("sample_index", 0)
         img_file = vis_filenames.get(idx, "")
+        layouts = layout_map.get(idx, [])
         html_records.append({
             "index": idx,
             "question": r.get("question", ""),
@@ -501,7 +713,8 @@ def generate_html_gallery(
             "primary": r.get("primary_answer", ""),
             "route": r.get("route_selected", ""),
             "latency": round(r.get("latency_sec", 0.0), 2),
-            "image": img_file
+            "image": img_file,
+            "layouts": layouts
         })
 
     json_data = json.dumps(html_records)
@@ -511,7 +724,7 @@ def generate_html_gallery(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MSSearch Pilot Benchmark Visualizer</title>
+  <title>MSSearch Benchmark Visualizer</title>
   <style>
     :root {{
       --bg: #0f172a;
@@ -523,6 +736,7 @@ def generate_html_gallery(
       --green: #4ade80;
       --red: #f87171;
       --gold: #fbbf24;
+      --purple: #a855f7;
     }}
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
@@ -588,7 +802,7 @@ def generate_html_gallery(
     }}
     .gallery-grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
       gap: 20px;
     }}
     .sample-card {{
@@ -620,12 +834,15 @@ def generate_html_gallery(
     }}
     .badge.correct {{ background: rgba(74, 222, 128, 0.15); color: var(--green); border: 1px solid var(--green); }}
     .badge.incorrect {{ background: rgba(248, 113, 113, 0.15); color: var(--red); border: 1px solid var(--red); }}
+    .badge.layout {{ background: rgba(168, 85, 247, 0.2); color: var(--purple); border: 1px solid var(--purple); cursor: pointer; text-decoration: none; }}
+    .badge.layout:hover {{ background: var(--purple); color: #fff; }}
     .card-body {{ padding: 14px 16px; flex-grow: 1; }}
     .card-q {{ font-weight: 600; font-size: 14px; margin-bottom: 8px; color: var(--text); }}
-    .card-meta {{ font-size: 12px; color: var(--muted); margin-bottom: 12px; display: flex; gap: 12px; }}
+    .card-meta {{ font-size: 12px; color: var(--muted); margin-bottom: 10px; display: flex; gap: 12px; }}
+    .layout-links {{ display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; font-size: 11px; }}
     .card-thumb {{
       width: 100%;
-      height: 220px;
+      height: 240px;
       object-fit: cover;
       cursor: pointer;
       border-top: 1px solid var(--border);
@@ -674,7 +891,7 @@ def generate_html_gallery(
     <button class="btn active" onclick="setFilter('all')">All ({total})</button>
     <button class="btn" onclick="setFilter('correct')">Correct ({correct_count})</button>
     <button class="btn" onclick="setFilter('incorrect')">Incorrect ({total - correct_count})</button>
-    <input type="text" id="searchInput" placeholder="Search question or sample #..." oninput="renderGallery()">
+    <input type="text" id="searchInput" placeholder="Search question, sample #, or answer..." oninput="renderGallery()">
   </div>
 
   <div class="gallery-grid" id="galleryGrid"></div>
@@ -718,6 +935,14 @@ def generate_html_gallery(
         const badgeCls = d.is_correct ? 'correct' : 'incorrect';
         const badgeText = d.is_correct ? 'CORRECT' : 'INCORRECT';
 
+        let layoutBadges = '';
+        if (d.layouts && d.layouts.length > 0) {{
+          layoutBadges = '<span style="color:var(--muted)">Stage 6 Layouts:</span> ';
+          d.layouts.forEach((l, i) => {{
+            layoutBadges += `<span class="badge layout" onclick="event.stopPropagation(); openModal('stage6_layouts/${{l}}')">Layout #${{i}}</span> `;
+          }});
+        }}
+
         card.innerHTML = `
           <div class="card-header">
             <strong>Sample #${{d.index}}</strong>
@@ -731,6 +956,7 @@ def generate_html_gallery(
               <span>Latency: <strong>${{d.latency}}s</strong></span>
             </div>
             <div style="font-size:12px; color:var(--gold); margin-bottom:6px;">Ans: '${{d.primary}}'</div>
+            <div class="layout-links">${{layoutBadges}}</div>
             <div style="font-size:11px; color:var(--muted)">Route: ${{d.route}}</div>
           </div>
           <img class="card-thumb" src="${{d.image}}" alt="Sample #${{d.index}}" onclick="openModal('${{d.image}}')">
@@ -768,7 +994,7 @@ def generate_html_gallery(
 # ==============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Visualize MSSearch Pilot Results")
+    parser = argparse.ArgumentParser(description="Visualize MSSearch Pilot Results with Stage 6 Layouts")
     parser.add_argument(
         "--results_path",
         type=str,
@@ -809,7 +1035,6 @@ def main():
     # Resolve paths
     results_path = os.path.abspath(args.results_path)
     if not os.path.exists(results_path):
-        # Fallback search
         candidate = os.path.join("docs/experiments/multisource/MSSearch", args.results_path)
         if os.path.exists(candidate):
             results_path = os.path.abspath(candidate)
@@ -840,26 +1065,29 @@ def main():
     if args.max_samples is not None:
         records = records[:args.max_samples]
 
-    print(f"[Visualizer] Rendering visualizations for {len(records)} sample(s) -> '{output_dir}'...")
+    print(f"[Visualizer] Rendering visualizations for {len(records)} sample(s) with Stage 6 Layouts -> '{output_dir}'...")
 
     vis_filenames: Dict[int, str] = {}
+    layout_map: Dict[int, List[str]] = {}
+
     for i, rec in enumerate(records):
         s_idx = rec.get("sample_index", i)
         print(f"  [{i+1}/{len(records)}] Rendering Sample #{s_idx} ({'CORRECT' if rec.get('is_correct') else 'INCORRECT'})...")
-        out_png = visualize_sample(
+        out_png, layout_fnames = visualize_sample(
             rec=rec,
             hrbench_data=hrbench_data,
             hrbench_base_dir=base_dir,
             output_dir=output_dir,
             max_panel_w=760,
-            max_panel_h=680,
+            max_panel_h=650,
             save_crops=True
         )
         vis_filenames[s_idx] = os.path.basename(out_png)
+        layout_map[s_idx] = layout_fnames
 
     # Generate HTML gallery dashboard
     if not args.no_html:
-        html_path = generate_html_gallery(records, output_dir, vis_filenames)
+        html_path = generate_html_gallery(records, output_dir, vis_filenames, layout_map)
         print(f"[Visualizer] Interactive HTML dashboard generated: {html_path}")
 
     print(f"[Visualizer] Completed! All outputs saved to: {output_dir}")
