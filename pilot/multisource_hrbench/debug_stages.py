@@ -330,13 +330,20 @@ def main():
     parser.add_argument("--save_visuals", nargs="*", default=None, help="Visual artifact controls (kept for backward compatibility).")
 
 
-    # Configuration File (Requirement 3: Write all configs out so user can change it)
+    # Configuration File & Budget Presets
     default_cfg_path = os.path.join(SCRIPT_DIR, "config_default.json")
     parser.add_argument(
         "--config_file",
         type=str,
         default=default_cfg_path if os.path.exists(default_cfg_path) else None,
         help="Path to external JSON config file specifying all MSSearch parameters.",
+    )
+    parser.add_argument(
+        "--budget",
+        type=str,
+        choices=["small", "medium", "large"],
+        default=None,
+        help="Quick budget preset: 'small' (fast), 'medium' (balanced sweet spot), 'large' (max accuracy).",
     )
 
     # Logging & Display Arguments (Requirement 1: Only print final decision of each stage)
@@ -348,7 +355,15 @@ def main():
         help="Logging level: 'summary' (only print final decision of each stage), 'verbose' (full internal loops), 'quiet' (minimal stdout).",
     )
 
-    # Key Pipeline Hyperparameter Overrides
+    # Key Pipeline Hyperparameter & Budget Overrides
+    parser.add_argument("--max_patches_per_image", type=int, default=None, help="Stage 3 budget: max patches per image.")
+    parser.add_argument("--max_partition_depth", type=int, default=None, help="Stage 3 budget: max recursion depth.")
+    parser.add_argument("--max_sam3_eval_patches", type=int, default=None, help="Stage 4 budget: max SAM3 patch scans.")
+    parser.add_argument("--max_latent_evals", type=int, default=None, help="Stage 4 budget: max speculative VLM latent checks.")
+    parser.add_argument("--max_patches_per_detected_group", type=int, default=None, help="Stage 4 budget: patches kept per detected group.")
+    parser.add_argument("--max_patches_per_latent_group", type=int, default=None, help="Stage 4 budget: patches kept per latent group.")
+    parser.add_argument("--max_retained_patches", type=int, default=None, help="Stage 4 budget: global hard cap on candidate pool.")
+    parser.add_argument("--early_consensus_count", type=int, default=None, help="Stage 6 budget: consensus count before exit.")
     parser.add_argument("--enable_direct_answer", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
     parser.add_argument("--direct_answer_conf_threshold", type=float, default=None)
     parser.add_argument("--enable_fast_path", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
@@ -358,9 +373,6 @@ def main():
     parser.add_argument("--sam3_group_det_threshold", type=float, default=None)
     parser.add_argument("--enable_latent_gating", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
     parser.add_argument("--latent_confidence_threshold", type=float, default=None)
-    parser.add_argument("--max_latent_evals", type=int, default=None)
-    parser.add_argument("--max_sam3_eval_patches", type=int, default=None)
-    parser.add_argument("--max_retained_patches", type=int, default=None)
     parser.add_argument("--enable_stage5_spatial_nms", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
     parser.add_argument("--stage5_nms_iou_threshold", type=float, default=None)
     parser.add_argument("--enable_spatial_compressed_canvas", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
@@ -378,6 +390,20 @@ def main():
         print("[Config] Using default MSSearchConfig dataclass parameters.")
         config = MSSearchConfig()
 
+    # 1b. Ingest Budget Preset if Specified (--budget small|medium|large)
+    if args.budget:
+        budget_path = os.path.join(SCRIPT_DIR, f"budget_{args.budget}.json")
+        if os.path.exists(budget_path):
+            print(f"[Budget Preset] Ingesting budget preset '{args.budget}' from: {budget_path}")
+            with open(budget_path, "r", encoding="utf-8") as bf:
+                b_dict = json.load(bf)
+            for k, v in b_dict.items():
+                if hasattr(config, k):
+                    setattr(config, k, v)
+                    print(f"  - {k} -> {v}")
+        else:
+            print(f"[Warning] Budget preset file not found: {budget_path}")
+
     # 2. Apply Logging Mode (Requirement 1)
     config.log_level = args.log_level
     if args.log_level == "summary":
@@ -392,6 +418,14 @@ def main():
 
     # 3. Apply CLI Overrides
     cli_overrides = [
+        "max_patches_per_image",
+        "max_partition_depth",
+        "max_sam3_eval_patches",
+        "max_latent_evals",
+        "max_patches_per_detected_group",
+        "max_patches_per_latent_group",
+        "max_retained_patches",
+        "early_consensus_count",
         "enable_direct_answer",
         "direct_answer_conf_threshold",
         "enable_fast_path",
@@ -401,14 +435,12 @@ def main():
         "sam3_group_det_threshold",
         "enable_latent_gating",
         "latent_confidence_threshold",
-        "max_latent_evals",
-        "max_sam3_eval_patches",
-        "max_retained_patches",
         "enable_stage5_spatial_nms",
         "stage5_nms_iou_threshold",
         "enable_spatial_compressed_canvas",
         "enable_early_consensus_exit",
     ]
+
     for param in cli_overrides:
         val = getattr(args, param, None)
         if val is not None:

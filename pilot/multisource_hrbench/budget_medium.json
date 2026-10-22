@@ -1,0 +1,10 @@
+{
+  "max_patches_per_image": 100,
+  "max_partition_depth": 3,
+  "max_sam3_eval_patches": 32,
+  "max_latent_evals": 12,
+  "max_patches_per_detected_group": 4,
+  "max_patches_per_latent_group": 1,
+  "max_retained_patches": 48,
+  "early_consensus_count": 2
+}
