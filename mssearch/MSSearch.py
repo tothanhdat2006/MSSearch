@@ -65,6 +65,18 @@ class MultiSourceSearchEngine:
         """
         t_start = time.perf_counter()
 
+        import copy
+
+        # Determine logging modes
+        is_quiet = getattr(self.config, "log_level", "summary") == "quiet" or not getattr(self.config, "verbose", True)
+        is_summary = getattr(self.config, "stage_summary_only", True) and not is_quiet
+        is_verbose = (getattr(self.config, "log_level", "summary") == "verbose") and not is_summary and not is_quiet
+
+        # Pass a quiet config to sub-stages when stage_summary_only is active to suppress internal loop chatter
+        sub_config = copy.copy(self.config)
+        if is_summary:
+            sub_config.verbose = False
+
         # Determine whether candidate options should be added to the VLM reading prompt
         # (Controlled by config.include_options_in_prompt or config.answer_type != "free_form")
         should_add_options = (
@@ -73,14 +85,14 @@ class MultiSourceSearchEngine:
         )
         if should_add_options and options:
             reading_question = format_question_with_options(question, options, cycle_idx=cycle_idx)
-            if self.config.verbose:
+            if is_verbose:
                 print(f"[MSSearch] Options Prompting ACTIVE ({getattr(self.config, 'answer_type', 'option_single')}): Candidate options appended to reading prompt.")
         else:
             reading_question = question
-            if self.config.verbose:
+            if is_verbose:
                 print(f"[MSSearch] Free-form mode ACTIVE: Prompt will NOT contain candidate options.")
 
-        if self.config.verbose:
+        if is_verbose:
             print(f"\n[MSSearch] ====================================================================")
             print(f"[MSSearch] Starting Multi-Source Visual Search across {len(candidate_images)} candidate images.")
             print(f"[MSSearch] Base Question: '{question}'")
@@ -89,6 +101,8 @@ class MultiSourceSearchEngine:
             print(f"[MSSearch] Fast Path Enabled: {self.config.enable_fast_path} (Threshold: {self.config.fast_path_conf_threshold}) | Partition Mode: {self.config.partition_mode}")
             print(f"[MSSearch] Multi-Answer Mode: {getattr(self.config, 'multi_answer_mode', False)}")
             print(f"[MSSearch] ====================================================================")
+        elif not is_quiet:
+            print(f"\n[MSSearch] Starting search across {len(candidate_images)} images | Q: '{question[:90]}{'...' if len(question)>90 else ''}'")
 
         # ---------------------------------------------------------------------
         # Multi-Source Budget Scaling & Early Exit Configuration
@@ -97,7 +111,9 @@ class MultiSourceSearchEngine:
         if getattr(self.config, "enable_query_adaptive_halting", True) and n_candidates == 1:
             self.config.multi_answer_mode = False
             self.config.enable_early_consensus_exit = True
-            if self.config.verbose:
+            sub_config.multi_answer_mode = False
+            sub_config.enable_early_consensus_exit = True
+            if is_verbose:
                 print(f"[MSSearch] Query-Adaptive Halting: Single candidate image (N=1) -> multi_answer_mode=False, early consensus exit enabled.")
 
         if getattr(self.config, "scale_budgets_by_num_images", True) and n_candidates > 1:
@@ -107,11 +123,15 @@ class MultiSourceSearchEngine:
             self.config.max_sam3_eval_patches = base_sam3 * n_candidates
             self.config.max_latent_evals = base_latent * n_candidates
             self.config.max_retained_patches = base_retained * n_candidates
-            if self.config.verbose:
+            sub_config.max_sam3_eval_patches = self.config.max_sam3_eval_patches
+            sub_config.max_latent_evals = self.config.max_latent_evals
+            sub_config.max_retained_patches = self.config.max_retained_patches
+            if is_verbose:
                 print(f"[MSSearch] Scaled budgets by N={n_candidates}: max_sam3={self.config.max_sam3_eval_patches}, max_latent={self.config.max_latent_evals}, max_retained={self.config.max_retained_patches}")
 
         if getattr(self.config, "multi_answer_mode", False):
             self.config.enable_early_consensus_exit = False
+            sub_config.enable_early_consensus_exit = False
 
         # Structured Query Parsing (target_attribute_type, condition_val, target_object)
         from .stages.stage1_parser import parse_visual_query_structure
@@ -152,9 +172,10 @@ class MultiSourceSearchEngine:
                 candidate_images=candidate_images,
                 question=reading_question,
                 zoom_model=self.zoom_model,
-                config=self.config
+                config=sub_config
             )
-            telemetry["timings_sec"]["phase1_direct_answer"] = round(time.perf_counter() - t0, 3)
+            lat_p1 = round(time.perf_counter() - t0, 3)
+            telemetry["timings_sec"]["phase1_direct_answer"] = lat_p1
             telemetry["stages_executed"].append("phase1_direct_answer")
 
             if direct_result.triggered:
@@ -181,12 +202,20 @@ class MultiSourceSearchEngine:
 
                 unresolved_images = [i for i in unresolved_images if i not in ev_imgs]
 
+                if not is_quiet:
+                    print(f"[Phase 1: Direct Global Answer] Decision: ANSWERED directly (Confidence: {direct_result.confidence:.2f} >= {self.config.direct_answer_conf_threshold:.2f}) -> Answer: '{direct_result.answer}' | Evidence Images: {ev_imgs} (Latency: {lat_p1}s)")
+
                 # Early return if single image or if all candidate images resolved
                 if (total_images == 1 and not is_multi) or len(unresolved_images) == 0:
                     telemetry["route"] = "direct_global_answer"
                     telemetry["routes_executed"] = routes_executed
                     telemetry["evidence_images"] = harvested_evidence_images
                     telemetry["stage6_patch_boxes"] = harvested_patch_boxes
+                    pre_agg_boxes = [
+                        {"img_idx": idx, "box": [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])], "score": 1.0, "source_branch": "DirectGlobalAnswer", "entropy": 0.0}
+                        for idx in harvested_evidence_images
+                    ]
+                    telemetry["final_crop_boxes_before_aggregate"] = pre_agg_boxes
                     telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
 
                     from .stages.stage6_foveated_reader import split_attribute_answer
@@ -197,6 +226,8 @@ class MultiSourceSearchEngine:
                                 pred_list.append(t)
                     is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
                     primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else direct_result.answer
+                    if not is_quiet:
+                        print(f"[MSSearch Final Decision] Primary Answer: '{primary_ans}' | Evidence Images: {harvested_evidence_images} | Route: direct_global_answer | Latency: {telemetry['total_latency_sec']}s")
                     return {
                         "answers": harvested_answers,
                         "prediction_list": pred_list if pred_list else harvested_answers,
@@ -204,11 +235,15 @@ class MultiSourceSearchEngine:
                         "raw_vlm_response": direct_result.raw_response,
                         "evidence_images": harvested_evidence_images,
                         "stage6_patch_boxes": harvested_patch_boxes,
+                        "final_crop_boxes_before_aggregate": pre_agg_boxes,
                         "extractions": harvested_extractions,
                         "telemetry": telemetry
                     }
-                elif self.config.verbose:
+                elif is_verbose:
                     print(f"[Phase 1][Waterfall Cascade] Direct answer confirmed on images {ev_imgs}. Unresolved images {unresolved_images} cascading to Fast Path...")
+            else:
+                if not is_quiet:
+                    print(f"[Phase 1: Direct Global Answer] Decision: INSUFFICIENT confidence ({direct_result.confidence:.2f} < {self.config.direct_answer_conf_threshold:.2f}) -> Cascading to Stage 1 (Latency: {lat_p1}s)")
 
         # ---------------------------------------------------------------------
         # Stage 1: Question Parsing & Active Object Set (A_q)
@@ -220,14 +255,17 @@ class MultiSourceSearchEngine:
             zoom_model=self.zoom_model,
             nlp_model=self.nlp_model,
             ic_examples=ic_examples,
-            verbose=self.config.verbose,
+            verbose=sub_config.verbose,
             image_pil=first_img,
-            config=self.config
+            config=sub_config
         )
-        telemetry["timings_sec"]["stage1_parser"] = round(time.perf_counter() - t0, 3)
+        lat_s1 = round(time.perf_counter() - t0, 3)
+        telemetry["timings_sec"]["stage1_parser"] = lat_s1
         telemetry["active_objects"] = list(active_objects)
         telemetry["parsed_question"] = active_objects.to_dict() if hasattr(active_objects, "to_dict") else {}
         telemetry["stages_executed"].append("stage1_parser")
+        if not is_quiet:
+            print(f"[Stage 1: Question Parsing] Decision: Extracted Active Objects {list(active_objects)} | Type: '{getattr(active_objects, 'question_type', 'standard')}' (Latency: {lat_s1}s)")
 
         # ---------------------------------------------------------------------
         # Stage 2: Tool-Based Fast Path Canvas Check
@@ -239,10 +277,11 @@ class MultiSourceSearchEngine:
             question=reading_question,
             sam_model=self.sam_model,
             zoom_model=self.zoom_model,
-            config=self.config,
+            config=sub_config,
             active_img_indices=unresolved_images if is_multi else None
         )
-        telemetry["timings_sec"]["stage2_fast_path"] = round(time.perf_counter() - t0, 3)
+        lat_s2 = round(time.perf_counter() - t0, 3)
+        telemetry["timings_sec"]["stage2_fast_path"] = lat_s2
         telemetry["stages_executed"].append("stage2_fast_path")
 
         if fast_path_result.triggered:
@@ -275,12 +314,26 @@ class MultiSourceSearchEngine:
 
             unresolved_images = [i for i in unresolved_images if i not in ev_imgs]
 
+            if not is_quiet:
+                print(f"[Stage 2: Tool Fast Path] Decision: TRIGGERED (Confidence: {fast_path_result.confidence:.2f} >= {self.config.fast_path_conf_threshold:.2f}) -> Answer: '{fast_path_result.answer}' | Evidence Images: {ev_imgs} (Latency: {lat_s2}s)")
+
             # Early return if single image or if all candidate images resolved
             if (total_images == 1 and not is_multi) or len(unresolved_images) == 0:
                 telemetry["route"] = "tool_based_fast_path" if routes_executed == ["tool_based_fast_path"] else "hybrid_direct_and_fast_path"
                 telemetry["routes_executed"] = routes_executed
                 telemetry["evidence_images"] = harvested_evidence_images
                 telemetry["stage6_patch_boxes"] = harvested_patch_boxes
+                pre_agg_boxes = [
+                    {
+                        "img_idx": idx,
+                        "box": list(map(int, fast_path_result.detected_boxes[0])) if fast_path_result.detected_boxes else [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])],
+                        "score": float(fast_path_result.confidence),
+                        "source_branch": "FastPath",
+                        "entropy": 0.0
+                    }
+                    for idx in harvested_evidence_images
+                ]
+                telemetry["final_crop_boxes_before_aggregate"] = pre_agg_boxes
                 telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
 
                 from .stages.stage6_foveated_reader import split_attribute_answer
@@ -291,6 +344,8 @@ class MultiSourceSearchEngine:
                             pred_list.append(t)
                 is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
                 primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else (harvested_answers[0] if harvested_answers else "No answer found")
+                if not is_quiet:
+                    print(f"[MSSearch Final Decision] Primary Answer: '{primary_ans}' | Evidence Images: {harvested_evidence_images} | Route: {telemetry['route']} | Latency: {telemetry['total_latency_sec']}s")
                 return {
                     "answers": harvested_answers,
                     "prediction_list": pred_list if pred_list else harvested_answers,
@@ -298,11 +353,15 @@ class MultiSourceSearchEngine:
                     "raw_vlm_response": fast_path_result.raw_response or fast_path_result.answer,
                     "evidence_images": harvested_evidence_images,
                     "stage6_patch_boxes": harvested_patch_boxes,
+                    "final_crop_boxes_before_aggregate": pre_agg_boxes,
                     "extractions": harvested_extractions,
                     "telemetry": telemetry
                 }
-            elif self.config.verbose:
+            elif is_verbose:
                 print(f"[Stage 2][Waterfall Cascade] Fast path confirmed on images {ev_imgs}. Unresolved images {unresolved_images} cascading to Visual Search branch...")
+        else:
+            if not is_quiet:
+                print(f"[Stage 2: Tool Fast Path] Decision: NOT TRIGGERED (Confidence: {fast_path_result.confidence:.2f} < {self.config.fast_path_conf_threshold:.2f}) -> Cascading to Stage 3 (Latency: {lat_s2}s)")
 
         # ---------------------------------------------------------------------
         # Stage 3: Entropy-Gated Recursive Patch Partitioning & SAM3-SGAP
@@ -316,14 +375,17 @@ class MultiSourceSearchEngine:
         bounded_patches = partition_candidate_images(
             candidate_images=candidate_images,
             stage2_feature_cache=feature_cache,
-            config=self.config,
+            config=sub_config,
             active_objects=active_objects,
             siglip_model=self.siglip_model,
             target_img_indices=unresolved_images if is_multi else None
         )
-        telemetry["timings_sec"]["stage3_partitioning"] = round(time.perf_counter() - t0, 3)
+        lat_s3 = round(time.perf_counter() - t0, 3)
+        telemetry["timings_sec"]["stage3_partitioning"] = lat_s3
         telemetry["num_bounded_patches"] = len(bounded_patches)
         telemetry["stages_executed"].append("stage3_partitioning")
+        if not is_quiet:
+            print(f"[Stage 3: Partitioning] Decision: Partitioned {len(candidate_images)} images into {len(bounded_patches)} bounded patches (Mode: {self.config.partition_mode}) (Latency: {lat_s3}s)")
 
         # ---------------------------------------------------------------------
         # Stage 4: SAM3 Feature Grouping & Active Object Gating
@@ -334,18 +396,21 @@ class MultiSourceSearchEngine:
             candidate_images=candidate_images,
             active_objects=active_objects,
             sam_model=self.sam_model,
-            config=self.config,
+            config=sub_config,
             detected_boxes=fast_path_result.detected_boxes,
             zoom_model=self.zoom_model,
             return_debug=True,
             question=question
         )
-        telemetry["timings_sec"]["stage4_grouping_gating"] = round(time.perf_counter() - t0, 3)
+        lat_s4 = round(time.perf_counter() - t0, 3)
+        telemetry["timings_sec"]["stage4_grouping_gating"] = lat_s4
         telemetry["num_remaining_patches"] = len(remaining_patches)
         telemetry["stage4_groups"] = stage4_groups
         telemetry["stage4_kept_groups"] = sum(1 for g in stage4_groups if g.get("status") == "KEPT")
         telemetry["stage4_pruned_groups"] = sum(1 for g in stage4_groups if g.get("status") == "PRUNED")
         telemetry["stages_executed"].append("stage4_grouping_gating")
+        if not is_quiet:
+            print(f"[Stage 4: Grouping & Gating] Decision: Evaluated {len(stage4_groups)} semantic groups -> Kept {telemetry['stage4_kept_groups']} groups ({len(remaining_patches)} patches), Pruned {telemetry['stage4_pruned_groups']} groups (Latency: {lat_s4}s)")
 
         # ---------------------------------------------------------------------
         # Stage 5: Resolution-Aware Screening & Spatial Optimization
@@ -357,13 +422,18 @@ class MultiSourceSearchEngine:
             candidate_images=candidate_images,
             active_objects=active_objects,
             siglip_model=self.siglip_model,
-            config=self.config
+            config=sub_config
         )
-        telemetry["timings_sec"]["stage5_screening"] = round(time.perf_counter() - t0, 3)
+        lat_s5 = round(time.perf_counter() - t0, 3)
+        telemetry["timings_sec"]["stage5_screening"] = lat_s5
         telemetry["num_unified_crops"] = len(unified_pool)
         telemetry["branch_a_count"] = sum(1 for c in unified_pool if "Branch A" in c.source_branch)
         telemetry["branch_b_count"] = sum(1 for c in unified_pool if "Branch B" in c.source_branch)
+        pre_agg_boxes = getattr(unified_pool, "pre_aggregation_boxes", [])
+        telemetry["final_crop_boxes_before_aggregate"] = pre_agg_boxes
         telemetry["stages_executed"].append("stage5_screening")
+        if not is_quiet:
+            print(f"[Stage 5: Screening & Aggregation] Decision: Synthesized {len(unified_pool)} candidate crops from {len(pre_agg_boxes)} pre-aggregation bboxes (Branch A: {telemetry['branch_a_count']}, Branch B: {telemetry['branch_b_count']}) (Latency: {lat_s5}s)")
 
         # ---------------------------------------------------------------------
         # Stage 6: Foveated VLM Reading with 1.25x Padding & Deduplication
@@ -374,10 +444,11 @@ class MultiSourceSearchEngine:
             candidate_images=candidate_images,
             question=reading_question,
             zoom_model=self.zoom_model,
-            config=self.config,
+            config=sub_config,
             question_type=question_type
         )
-        telemetry["timings_sec"]["stage6_reading"] = round(time.perf_counter() - t0, 3)
+        lat_s6 = round(time.perf_counter() - t0, 3)
+        telemetry["timings_sec"]["stage6_reading"] = lat_s6
         telemetry["stage6_crops"] = getattr(final_result, "crop_records", [])
         telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
         telemetry["stages_executed"].append("stage6_foveated_reading")
@@ -442,6 +513,10 @@ class MultiSourceSearchEngine:
         if raw_vlm_resp is None and harvested_extractions:
             raw_vlm_resp = harvested_extractions[0].get("raw_answer")
 
+        if not is_quiet:
+            print(f"[Stage 6: Foveated Reading] Decision: Read {len(unified_pool)} candidate crops -> Harvested {len(final_answers_out)} answer(s): {final_answers_out} (Latency: {lat_s6}s)")
+            print(f"[MSSearch Final Decision] Primary Answer: '{primary_answer}' | Evidence Images: {harvested_evidence_images} | Route: {telemetry.get('route')} | Latency: {telemetry.get('total_latency_sec')}s\n")
+
         return {
             "answers": final_answers_out,
             "prediction_list": pred_list if pred_list else final_answers_out,
@@ -449,9 +524,12 @@ class MultiSourceSearchEngine:
             "raw_vlm_response": raw_vlm_resp,
             "evidence_images": harvested_evidence_images,
             "stage6_patch_boxes": harvested_patch_boxes,
+            "final_crop_boxes_before_aggregate": pre_agg_boxes,
             "extractions": harvested_extractions,
             "telemetry": telemetry
         }
+
+
 
 
 def get_mssearch_response(

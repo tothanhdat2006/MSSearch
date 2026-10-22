@@ -3,8 +3,9 @@ Configuration and Ablation Parameters for Dual-Path Multi-Source Visual Search (
 Strictly decoupled into a typed dataclass for comprehensive ablation testing.
 """
 
-from dataclasses import dataclass, field
-from typing import Tuple, List, Optional
+from dataclasses import dataclass, field, asdict, fields
+import json
+from typing import Tuple, List, Optional, Dict, Any
 
 
 @dataclass
@@ -41,7 +42,7 @@ class MSSearchConfig:
     sgap_n_atoms: int = 100
     quadrant_overlap_ratio: float = 0.10         # 10% safety border expansion
     sgap_overlap_ratio: float = 0.10             # 10% safety border expansion
-    partition_stopping_mode: str = "saliency_plateau"  # "saliency_plateau" (Paradigm 2 dynamic semantic zoom) or "fixed_size" (legacy max_patch_size)
+    partition_stopping_mode: str = "saliency_plateau"  # "saliency_plateau" (dynamic semantic zoom) or "fixed_size"
     max_patch_size: int = 512                    # Recursive invariant when partition_stopping_mode == "fixed_size": longer side <= 512px
     min_plateau_size: int = 512                  # Scale floor in saliency_plateau mode: patches <= this dimension stop splitting
     max_plateau_size: int = 1536                 # Physical ceiling in saliency_plateau mode: patches > this dimension must split (VRAM safety)
@@ -116,13 +117,54 @@ class MSSearchConfig:
     enable_query_adaptive_halting: bool = True   # Query-adaptive dynamic halting in multi-answer mode (e.g. N=1 disables multi-answer mode)
     query_meta: Optional[dict] = None            # Optional structured query metadata: {'target_attribute_type': ..., 'condition_attribute': ..., 'target_object': ...}
 
+    # -------------------------------------------------------------------------
+    # Diagnostic & Logging Controls
+    # -------------------------------------------------------------------------
+    verbose: bool = True                         # Master verbose toggle (set False to silence all sub-stage debug prints)
+    stage_summary_only: bool = True              # If True, only prints the final decision of each stage (clean 1-line summary)
+    log_level: str = "summary"                   # "summary" (clean 1-line per stage), "verbose" (full internal loops), "quiet" (silent)
+
     def __post_init__(self):
         # In multi-answer mode, disable early consensus exit to read all evidence crops across N images
         if self.multi_answer_mode:
             self.enable_early_consensus_exit = False
+        # Normalize log_level and verbose flags
+        if self.log_level == "summary":
+            self.stage_summary_only = True
+        elif self.log_level == "quiet":
+            self.verbose = False
+            self.stage_summary_only = False
+        elif self.log_level == "verbose":
+            self.stage_summary_only = False
+            self.verbose = True
 
-    # -------------------------------------------------------------------------
-    # Diagnostic & Debug Logging
-    # -------------------------------------------------------------------------
-    verbose: bool = True                         # Print clear debug logs on fallback / non-fallback decisions
+    def to_dict(self) -> Dict[str, Any]:
+        """Exports configuration to a JSON-serializable dictionary."""
+        d = asdict(self)
+        # Ensure tuples are converted to lists for JSON compatibility
+        if "entropy_weights" in d and isinstance(d["entropy_weights"], tuple):
+            d["entropy_weights"] = list(d["entropy_weights"])
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MSSearchConfig":
+        """Constructs an MSSearchConfig instance from a dictionary, safely ignoring unexpected keys."""
+        valid_field_names = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in valid_field_names}
+        if "entropy_weights" in filtered and isinstance(filtered["entropy_weights"], list):
+            filtered["entropy_weights"] = tuple(filtered["entropy_weights"])
+        return cls(**filtered)
+
+    def save_json(self, file_path: str) -> None:
+        """Saves configuration to a JSON file."""
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=2)
+
+    @classmethod
+    def load_json(cls, file_path: str) -> "MSSearchConfig":
+        """Loads configuration from a JSON file."""
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return cls.from_dict(data)
+
 

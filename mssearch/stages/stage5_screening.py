@@ -26,6 +26,7 @@ class CandidateCrop:
     source_branch: str = "Direct"
     is_compressed_canvas: bool = False
     remapped_boxes: Optional[List[Tuple[int, int, int, int]]] = None
+    original_boxes: Optional[List[Tuple[int, int, int, int]]] = None
 
     @property
     def confidence_score(self) -> float:
@@ -320,6 +321,18 @@ def run_resolution_screening(
     enable_compressed_canvas = getattr(config, "enable_spatial_compressed_canvas", True) if config else True
     gutter_px = getattr(config, "spatial_compression_gutter_px", 28) if config else 28
 
+    # Extract final crop bounding boxes before aggregation for re-visualization
+    pre_aggregation_boxes: List[Dict[str, Any]] = [
+        {
+            "img_idx": int(p.img_idx),
+            "box": [int(round(float(c))) for c in p.box],
+            "score": float(p.confidence_score) if p.confidence_score is not None else 1.0,
+            "source_branch": str(getattr(p, "source_branch", "Direct")),
+            "entropy": float(getattr(p, "entropy", 0.0)),
+        }
+        for p in effective_patches
+    ]
+
     unified_pool: List[CandidateCrop] = []
 
     if enable_compressed_canvas:
@@ -342,7 +355,8 @@ def run_resolution_screening(
                             score=p.confidence_score if p.confidence_score is not None else 1.0,
                             source_branch="Direct",
                             is_compressed_canvas=False,
-                            remapped_boxes=[(0, 0, crop.width, crop.height)]
+                            remapped_boxes=[(0, 0, crop.width, crop.height)],
+                            original_boxes=[box_ints]
                         )
                     )
             else:
@@ -371,7 +385,8 @@ def run_resolution_screening(
                         score=max_score,
                         source_branch="SpatialCompressedCanvas",
                         is_compressed_canvas=True,
-                        remapped_boxes=remapped_boxes
+                        remapped_boxes=remapped_boxes,
+                        original_boxes=boxes
                     )
                 )
                 if verbose:
@@ -394,9 +409,14 @@ def run_resolution_screening(
                     crop_image=crop,
                     score=patch.confidence_score if patch.confidence_score is not None else 1.0,
                     source_branch="Direct",
-                    is_compressed_canvas=False
+                    is_compressed_canvas=False,
+                    remapped_boxes=[(0, 0, crop.width, crop.height)],
+                    original_boxes=[box_ints]
                 )
             )
+
+    # Attach pre-aggregation coordinates to unified_pool for downstream telemetry and re-visualization
+    setattr(unified_pool, "pre_aggregation_boxes", pre_aggregation_boxes)
 
     if verbose:
         print(f"[Stage 5] Unified Candidate Pool P aggregated: {len(unified_pool)} total items ready for foveated VLM reading.")

@@ -62,7 +62,6 @@ echo "==========================================================================
 exec "${PYTHON_BIN}" "${SCRIPT_DIR}/debug_stages.py" \
     --all_samples \
     --resume \
-    --mode e2e \
     --hrbench_dir "${HRBENCH_DIR}" \
     --output_dir "${OUTPUT_DIR}" \
     --sam3_path "${SAM3_PATH}" \
