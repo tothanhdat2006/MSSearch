@@ -305,7 +305,20 @@ def run_foveated_vlm_reading(
                     color=config.visual_prompt_bbox_color,
                     width=config.visual_prompt_bbox_width
                 )
+
+            # Local target box inside compressed canvas coordinates
+            if local_target_boxes:
+                local_target_box = local_target_boxes[0]
+            else:
+                fcw, fch = foveated_crop.size
+                local_target_box = (0, 0, fcw, fch)
+                local_target_boxes = [local_target_box]
+
             text_coords_hint = ""
+            if config.enable_textual_prompt_coords and local_target_boxes:
+                boxes_str = "; ".join([f"[{b[0]}, {b[1]}, {b[2]}, {b[3]}]" for b in local_target_boxes[:4]])
+                text_coords_hint = f" Focal region(s): {boxes_str}."
+
             vlm_image_input: Union[Image.Image, List[Image.Image]] = vlm_input_crop
         else:
             # Expand bounding box independently by 1.25x
@@ -325,6 +338,7 @@ def run_foveated_vlm_reading(
                 item.box[0] - x1, item.box[1] - y1,
                 item.box[2] - x1, item.box[3] - y1
             )
+            local_target_boxes = [local_target_box]
 
             if config.enable_visual_prompt_bbox:
                 vlm_input_crop = render_visual_prompt_bbox(
@@ -379,6 +393,7 @@ def run_foveated_vlm_reading(
             "img_idx": img_idx,
             "exp_box": exp_box,
             "local_target_box": local_target_box,
+            "local_target_boxes": local_target_boxes,
             "vlm_image_input": vlm_image_input,
             "prompt": prompt
         })
@@ -439,6 +454,7 @@ def run_foveated_vlm_reading(
             img_idx = c["img_idx"]
             exp_box = c["exp_box"]
             local_target_box = c["local_target_box"]
+            local_target_boxes = c.get("local_target_boxes", [local_target_box] if local_target_box else [])
 
             final_ans = extract_final_answer(raw_answer)
             is_ev = bool(final_ans) and not is_negative_or_unanswerable(final_ans)
@@ -448,7 +464,8 @@ def run_foveated_vlm_reading(
                 "img_idx": img_idx,
                 "box": list(item.box),
                 "expanded_box": list(exp_box),
-                "local_target_box": list(local_target_box),
+                "local_target_box": list(local_target_box) if local_target_box is not None else [],
+                "local_target_boxes": [list(b) for b in local_target_boxes] if local_target_boxes else [],
                 "raw_answer": raw_answer,
                 "final_answer": final_ans,
                 "is_evidence": is_ev,

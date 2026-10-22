@@ -589,6 +589,7 @@ def render_stage6_reading(
     real_question: str,
     target_pool_idx: int,
     output_path: str,
+    unified_pool: Optional[List[Any]] = None,
 ) -> None:
     """Renders 06_stage6_reading.png: Foveated reading crops with predicted text and evidence borders."""
     n_read = len(crop_records)
@@ -617,25 +618,43 @@ def render_stage6_reading(
         img_idx = c_rec.get("img_idx", 0)
         exp_box = c_rec.get("expanded_box", [0, 0, 100, 100])
         loc_box = c_rec.get("local_target_box", None)
+        loc_boxes = c_rec.get("local_target_boxes", [loc_box] if loc_box else [])
         is_ev = c_rec.get("is_evidence", False)
         ans = c_rec.get("raw_answer", "")
         is_t = (img_idx == target_pool_idx)
+        is_compressed = c_rec.get("is_compressed_canvas", False)
 
-        exp_box_clean = tuple(int(round(float(v))) for v in exp_box[:4])
-        crop_pil = candidate_images[img_idx].crop(exp_box_clean)
+        crop_idx = c_rec.get("crop_idx", i)
+        if (
+            is_compressed
+            and unified_pool is not None
+            and crop_idx < len(unified_pool)
+            and getattr(unified_pool[crop_idx], "crop_image", None) is not None
+        ):
+            crop_pil = unified_pool[crop_idx].crop_image
+        else:
+            exp_box_clean = tuple(int(round(float(v))) for v in exp_box[:4])
+            iw, ih = candidate_images[img_idx].size
+            x1 = max(0, min(iw - 1, exp_box_clean[0]))
+            y1 = max(0, min(ih - 1, exp_box_clean[1]))
+            x2 = max(x1 + 1, min(iw, exp_box_clean[2]))
+            y2 = max(y1 + 1, min(ih, exp_box_clean[3]))
+            crop_pil = candidate_images[img_idx].crop((x1, y1, x2, y2))
+
         ax.imshow(crop_pil)
 
-        if loc_box and len(loc_box) >= 4:
-            loc_clean = [int(round(float(v))) for v in loc_box[:4]]
-            rect = mpatches.Rectangle(
-                (loc_clean[0], loc_clean[1]),
-                max(1, loc_clean[2] - loc_clean[0]),
-                max(1, loc_clean[3] - loc_clean[1]),
-                linewidth=2.5,
-                edgecolor="red",
-                facecolor="none",
-            )
-            ax.add_patch(rect)
+        for b in loc_boxes:
+            if b and len(b) >= 4:
+                loc_clean = [int(round(float(v))) for v in b[:4]]
+                rect = mpatches.Rectangle(
+                    (loc_clean[0], loc_clean[1]),
+                    max(1, loc_clean[2] - loc_clean[0]),
+                    max(1, loc_clean[3] - loc_clean[1]),
+                    linewidth=2.5,
+                    edgecolor="red",
+                    facecolor="none",
+                )
+                ax.add_patch(rect)
 
         wrapped_ans = (ans[:65] + "...") if len(ans) > 65 else ans
         status_tag = "EVIDENCE" if is_ev else "FILTERED"
@@ -1025,7 +1044,12 @@ def execute_single_sample_stages(
 
     if save_vis:
         render_stage6_reading(
-            candidate_images, crop_records, real_question, target_pool_idx, os.path.join(sample_vis_dir, "06_stage6_reading.png")
+            candidate_images,
+            crop_records,
+            real_question,
+            target_pool_idx,
+            os.path.join(sample_vis_dir, "06_stage6_reading.png"),
+            unified_pool=unified_pool,
         )
 
     # --------------------------------------------------------------------------

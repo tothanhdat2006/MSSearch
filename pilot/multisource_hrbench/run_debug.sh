@@ -32,6 +32,10 @@ if [ ! -f "${PYTHON_BIN}" ]; then
     PYTHON_BIN="$(command -v python || echo "python")"
 fi
 
+# Ensure MSSearch root is in PYTHONPATH
+export PYTHONPATH="${MSSEARCH_DIR}:${PYTHONPATH:-}"
+
+
 # Default Model and Dataset Paths on Local Server
 HRBENCH_DIR="${HRBENCH_DIR:-/home/ubuntu/workspace/hr/data/hr-bench_8k}"
 SAM3_PATH="${SAM3_PATH:-/home/ubuntu/workspace/hr/models/sam3/sam3/sam3.pt}"
