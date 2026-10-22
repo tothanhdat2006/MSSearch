@@ -43,6 +43,7 @@ QWEN_PATH="${QWEN_PATH:-/home/ubuntu/workspace/hr/models/Qwen2.5-VL-7B-Instruct}
 SIGLIP_NAME="${SIGLIP_NAME:-google/siglip-base-patch16-384}"
 NLP_MODEL="${NLP_MODEL:-/home/ubuntu/workspace/hr/models/spacy/en_core_web_sm-3.8.0}"
 OUTPUT_DIR="${OUTPUT_DIR:-${SCRIPT_DIR}/results}"
+mkdir -p "${OUTPUT_DIR}"
 
 echo "=========================================================================="
 echo "RUNNING LOCAL HRBENCH MULTI-SOURCE STAGE DIAGNOSTICS"

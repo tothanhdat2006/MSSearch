@@ -1210,6 +1210,7 @@ def main():
     )
 
     args = parser.parse_args()
+    args.output_dir = os.path.abspath(args.output_dir)
     os.makedirs(args.output_dir, exist_ok=True)
 
     # 1. Parse --save_visuals flag
@@ -1288,7 +1289,8 @@ def main():
             print(f"  [Notice] spaCy load skipped: {e}")
 
     # 5. Execute Evaluation Loop
-    results_log_path = os.path.join(args.output_dir, "results.jsonl")
+    results_log_path = os.path.abspath(os.path.join(args.output_dir, "results.jsonl"))
+    os.makedirs(os.path.dirname(results_log_path), exist_ok=True)
     print(f"\n[Logging] Results will be appended to: {results_log_path}")
 
     all_records = []
@@ -1311,6 +1313,7 @@ def main():
             )
             all_records.append(rec)
 
+            os.makedirs(os.path.dirname(results_log_path), exist_ok=True)
             with open(results_log_path, "a", encoding="utf-8") as f_out:
                 f_out.write(json.dumps(rec) + "\n")
 
