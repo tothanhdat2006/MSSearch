@@ -34,6 +34,18 @@ class CandidateCrop:
         return self.score
 
 
+class CandidatePool(list):
+    """
+    List container for unified CandidateCrop instances.
+    Subclasses list so all indexing, iteration, and len() calls operate natively,
+    while holding pre_aggregation_boxes metadata for downstream visualization.
+    """
+    def __init__(self, iterable=None, pre_aggregation_boxes: Optional[List[Dict[str, Any]]] = None):
+        super().__init__(iterable or [])
+        self.pre_aggregation_boxes: List[Dict[str, Any]] = pre_aggregation_boxes or []
+
+
+
 def merge_intervals(intervals: List[Tuple[int, int]], min_gap: int = 0) -> List[Tuple[int, int]]:
     """Merges overlapping or near-adjacent 1D intervals [v1, v2]."""
     if not intervals:
@@ -302,7 +314,7 @@ def run_resolution_screening(
        Guarantees at most 1 evaluation per candidate image containing surviving evidence.
     """
     if not remaining_patches:
-        return []
+        return CandidatePool([], pre_aggregation_boxes=[])
 
     effective_patches = list(remaining_patches)
     verbose = getattr(config, "verbose", True) if config else True
@@ -415,10 +427,10 @@ def run_resolution_screening(
                 )
             )
 
-    # Attach pre-aggregation coordinates to unified_pool for downstream telemetry and re-visualization
-    setattr(unified_pool, "pre_aggregation_boxes", pre_aggregation_boxes)
+    pool = CandidatePool(unified_pool, pre_aggregation_boxes=pre_aggregation_boxes)
 
     if verbose:
-        print(f"[Stage 5] Unified Candidate Pool P aggregated: {len(unified_pool)} total items ready for foveated VLM reading.")
+        print(f"[Stage 5] Unified Candidate Pool P aggregated: {len(pool)} total items ready for foveated VLM reading.")
 
-    return unified_pool
+    return pool
+

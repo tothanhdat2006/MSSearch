@@ -1,9 +1,16 @@
+import warnings
+import logging
 from typing import Optional, List, Dict, Any, Tuple, Union
 import torch
 from torch.nn import CrossEntropyLoss
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from .tree import Node, NodeA
 from .utils import *
+
+# Suppress harmless upstream deprecation warnings
+warnings.filterwarnings("ignore", category=FutureWarning, message=r".*min_pixels.*max_pixels.*")
+warnings.filterwarnings("ignore", message=r".*`torch_dtype` is deprecated.*")
+
 BOX_COLOR = "red"
 
 class ModelQwenVL:
@@ -32,15 +39,26 @@ class ModelQwenVL:
 
         self.processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
         self.tokenizer = self.processor.tokenizer
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            model_path,
-            torch_dtype=self.dtype,
-            attn_implementation=actual_attn_implementation,
-            device_map=device_map,
-            max_memory=max_memory,
-            low_cpu_mem_usage=True,
-            trust_remote_code=True
-        )
+        try:
+            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_path,
+                dtype=self.dtype,
+                attn_implementation=actual_attn_implementation,
+                device_map=device_map,
+                max_memory=max_memory,
+                low_cpu_mem_usage=True,
+                trust_remote_code=True
+            )
+        except TypeError:
+            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_path,
+                torch_dtype=self.dtype,
+                attn_implementation=actual_attn_implementation,
+                device_map=device_map,
+                max_memory=max_memory,
+                low_cpu_mem_usage=True,
+                trust_remote_code=True
+            )
         self.model.eval()
         self.device = self.model.device
 

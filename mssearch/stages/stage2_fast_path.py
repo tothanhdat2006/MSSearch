@@ -37,6 +37,7 @@ class FastPathResult:
     raw_response: Optional[str] = None
     evidence_img_idx: Optional[int] = None
     confidence: float = 0.0
+    bypass_reason: Optional[str] = None
     detected_boxes: List[Tuple[int, int, int, int]] = field(default_factory=list)
     # Caches dense SAM3 feature maps {img_idx: np.ndarray [C, H_f, W_f]} for zero-overhead reuse in Stage 3
     feature_cache: Dict[int, np.ndarray] = field(default_factory=dict)
@@ -166,6 +167,7 @@ def run_direct_global_assessment(
     from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer, deduplicate_answers
 
     collected_direct: List[Dict[str, Any]] = []
+    max_observed_conf: float = 0.0
 
     # Batch probe answering confidence c_q across all candidate images if supported
     vlm_batch_size = max(1, getattr(config, "vlm_batch_size", 4))
@@ -226,6 +228,7 @@ def run_direct_global_assessment(
                         print(f"[Phase 1][Direct Answer Notice] Image {img_idx} confidence probing error ({e})")
                     conf = 0.0
 
+        max_observed_conf = max(max_observed_conf, conf)
         if config.verbose:
             print(f"[Phase 1][Direct Answer] Image {img_idx}: answering confidence = {conf:.3f} (Threshold = {threshold:.2f})")
 
@@ -299,7 +302,7 @@ def run_direct_global_assessment(
             evidence_images=ev_imgs
         )
 
-    return DirectAnswerResult(triggered=False)
+    return DirectAnswerResult(triggered=False, confidence=max_observed_conf)
 
 
 def run_tool_based_fast_path(
@@ -330,6 +333,8 @@ def run_tool_based_fast_path(
         print(f"[Stage 2] Scanning {len(target_indices)} candidate images (indices: {target_indices}) for Active Objects {active_objects} (Fast Path Threshold: {config.fast_path_conf_threshold})...")
 
     collected_fp: List[Dict[str, Any]] = []
+    max_observed_existence_conf: float = 0.0
+    targets_detected_on_any_image: bool = False
 
     for img_idx, img_pil in enumerate(candidate_images):
         if active_img_indices is not None and img_idx not in active_img_indices:
@@ -396,6 +401,8 @@ def run_tool_based_fast_path(
                 print(f"[Stage 2] Image {img_idx}: Detected {len(matched_boxes_by_obj)}/{len(active_objects)} objects -> missing targets, fast path bypass.")
             continue
 
+        targets_detected_on_any_image = True
+
         # 4. Construct composite crop encompassing all active target detections (guaranteed pure ints)
         composite_box = compute_composite_bbox(matched_boxes_by_obj, img_w, img_h)
         crop_pil = img_pil.crop(composite_box)
@@ -437,6 +444,8 @@ def run_tool_based_fast_path(
         # 7. Query VLM Existence Confidence
         existence_query = f"{', '.join(active_objects)}.{text_coords_hint}"
         existence_conf = _query_vlm_existence(zoom_model, vlm_crop, existence_query)
+        if existence_conf > max_observed_existence_conf:
+            max_observed_existence_conf = float(existence_conf)
 
         if config.verbose:
             print(f"[Stage 2] Image {img_idx}: All targets detected! VLM existence conf = {existence_conf:.3f} (Threshold = {config.fast_path_conf_threshold:.2f})")
@@ -525,4 +534,11 @@ def run_tool_based_fast_path(
     if config.verbose:
         print(f"[Stage 2][Fallback to Stage 3] Fast Path did not trigger across all candidate images. Switching to Visual Search Branch. (Cached {len(feature_cache)} feature maps).")
 
-    return FastPathResult(triggered=False, feature_cache=feature_cache)
+    bypass_reason = "low_existence_confidence" if targets_detected_on_any_image else "targets_not_detected"
+    conf_out = max_observed_existence_conf if targets_detected_on_any_image else 0.0
+    return FastPathResult(
+        triggered=False,
+        confidence=conf_out,
+        bypass_reason=bypass_reason,
+        feature_cache=feature_cache
+    )

@@ -358,7 +358,10 @@ class MultiSourceSearchEngine:
                 print(f"[Stage 2][Waterfall Cascade] Fast path confirmed on images {ev_imgs}. Unresolved images {unresolved_images} cascading to Visual Search branch...")
         else:
             if not is_quiet:
-                print(f"[Stage 2: Tool Fast Path] Decision: NOT TRIGGERED (Confidence: {fast_path_result.confidence:.2f} < {self.config.fast_path_conf_threshold:.2f}) -> Cascading to Stage 3 (Latency: {lat_s2}s)")
+                if getattr(fast_path_result, "bypass_reason", None) == "targets_not_detected":
+                    print(f"[Stage 2: Tool Fast Path] Decision: NOT TRIGGERED (Targets not found on canvas) -> Cascading to Stage 3 (Latency: {lat_s2}s)")
+                else:
+                    print(f"[Stage 2: Tool Fast Path] Decision: NOT TRIGGERED (Confidence: {fast_path_result.confidence:.2f} < {self.config.fast_path_conf_threshold:.2f}) -> Cascading to Stage 3 (Latency: {lat_s2}s)")
 
         # ---------------------------------------------------------------------
         # Stage 3: Entropy-Gated Recursive Patch Partitioning & SAM3-SGAP

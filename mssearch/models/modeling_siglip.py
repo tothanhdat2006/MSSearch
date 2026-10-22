@@ -4,10 +4,18 @@ Runs on GPU 0 with fp16 precision to preserve memory headroom alongside Qwen2.5-
 """
 
 import os
+import warnings
+import logging
 from typing import List, Union, Optional, Any
 from PIL import Image
 import torch
 import torch.nn.functional as F
+
+# Suppress harmless upstream config token ID mismatch warnings and dtype deprecation
+logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", message=r".*bos_token_id.*")
+warnings.filterwarnings("ignore", message=r".*eos_token_id.*")
+warnings.filterwarnings("ignore", message=r".*`torch_dtype` is deprecated.*")
 
 
 def _extract_embedding_tensor(output: Any) -> torch.Tensor:
@@ -52,6 +60,8 @@ class SigLIPScorer:
         """Lazy loader to prevent unneeded GPU allocation until Stage 5 is invoked."""
         if self.model is None:
             print(f"[SigLIPScorer] Loading '{self.model_name}' on {self.device} ({self.dtype})...")
+            # Mute configuration warnings during checkpoint config ingestion
+            logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
             if self.is_siglip:
                 try:
                     from transformers import SiglipModel, SiglipProcessor, AutoConfig
@@ -64,28 +74,50 @@ class SigLIPScorer:
                     cfg.bos_token_id = None
                     cfg.eos_token_id = None
 
-                    self.model = SiglipModel.from_pretrained(
-                        self.model_name,
-                        config=cfg,
-                        torch_dtype=self.dtype,
-                        low_cpu_mem_usage=True
-                    ).to(self.device).eval()
+                    try:
+                        self.model = SiglipModel.from_pretrained(
+                            self.model_name,
+                            config=cfg,
+                            dtype=self.dtype,
+                            low_cpu_mem_usage=True
+                        ).to(self.device).eval()
+                    except TypeError:
+                        self.model = SiglipModel.from_pretrained(
+                            self.model_name,
+                            config=cfg,
+                            torch_dtype=self.dtype,
+                            low_cpu_mem_usage=True
+                        ).to(self.device).eval()
                     self.processor = SiglipProcessor.from_pretrained(self.model_name)
                 except Exception:
                     from transformers import AutoModel, AutoProcessor
-                    self.model = AutoModel.from_pretrained(
+                    try:
+                        self.model = AutoModel.from_pretrained(
+                            self.model_name,
+                            dtype=self.dtype,
+                            low_cpu_mem_usage=True
+                        ).to(self.device).eval()
+                    except TypeError:
+                        self.model = AutoModel.from_pretrained(
+                            self.model_name,
+                            torch_dtype=self.dtype,
+                            low_cpu_mem_usage=True
+                        ).to(self.device).eval()
+                    self.processor = AutoProcessor.from_pretrained(self.model_name)
+            else:
+                from transformers import CLIPModel, CLIPProcessor
+                try:
+                    self.model = CLIPModel.from_pretrained(
+                        self.model_name,
+                        dtype=self.dtype,
+                        low_cpu_mem_usage=True
+                    ).to(self.device).eval()
+                except TypeError:
+                    self.model = CLIPModel.from_pretrained(
                         self.model_name,
                         torch_dtype=self.dtype,
                         low_cpu_mem_usage=True
                     ).to(self.device).eval()
-                    self.processor = AutoProcessor.from_pretrained(self.model_name)
-            else:
-                from transformers import CLIPModel, CLIPProcessor
-                self.model = CLIPModel.from_pretrained(
-                    self.model_name,
-                    torch_dtype=self.dtype,
-                    low_cpu_mem_usage=True
-                ).to(self.device).eval()
                 self.processor = CLIPProcessor.from_pretrained(self.model_name)
 
     @torch.inference_mode()

@@ -24,7 +24,7 @@ from .stage3_partitioning import (
     partition_into_sam3_sgap,
 )
 from .stage4_grouping_gating import run_feature_grouping_and_gating, group_patches_by_cosine_similarity
-from .stage5_screening import run_resolution_screening, CandidateCrop
+from .stage5_screening import run_resolution_screening, CandidateCrop, CandidatePool
 from .stage6_foveated_reader import run_foveated_vlm_reading, FinalSearchResult, is_negative_or_unanswerable, deduplicate_answers
 
 __all__ = [
@@ -47,6 +47,7 @@ __all__ = [
     "group_patches_by_cosine_similarity",
     "run_resolution_screening",
     "CandidateCrop",
+    "CandidatePool",
     "run_foveated_vlm_reading",
     "FinalSearchResult",
     "is_negative_or_unanswerable",

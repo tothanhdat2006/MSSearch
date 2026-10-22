@@ -18,10 +18,19 @@ import json
 import time
 import random
 import argparse
+import warnings
+import logging
 from typing import List, Dict, Tuple, Optional, Any, Set, Union
 
 import torch
 from PIL import Image
+
+# Suppress harmless upstream deprecation warnings and checkpoint config token ID warnings
+warnings.filterwarnings("ignore", category=FutureWarning, message=r".*min_pixels.*max_pixels.*")
+warnings.filterwarnings("ignore", message=r".*bos_token_id.*")
+warnings.filterwarnings("ignore", message=r".*eos_token_id.*")
+warnings.filterwarnings("ignore", message=r".*`torch_dtype` is deprecated.*")
+logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
 
 # Ensure MSSearch repository root is in sys.path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
