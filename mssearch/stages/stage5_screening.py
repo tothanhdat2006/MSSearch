@@ -8,7 +8,7 @@ Stage 5: Unified Candidate Pool Aggregation & Spatial Optimization.
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Any
 import math
 from PIL import Image
 
