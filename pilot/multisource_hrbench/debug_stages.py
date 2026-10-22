@@ -162,6 +162,63 @@ def resolve_gt_letter(answer_obj: Any, cycle_idx: int = 0) -> str:
     return str(answer_obj).strip().upper()
 
 
+def parse_options_text(options_raw: Any) -> Dict[str, str]:
+    """Parses candidate options block into { 'A': text, 'B': text, ... }."""
+    opt_dict: Dict[str, str] = {}
+    if not options_raw:
+        return opt_dict
+
+    if isinstance(options_raw, list) and len(options_raw) > 0:
+        opt_block = options_raw[0]
+    else:
+        opt_block = options_raw
+
+    if isinstance(opt_block, dict):
+        for k, v in opt_block.items():
+            opt_dict[str(k).upper()] = str(v).strip().lower()
+    elif isinstance(opt_block, str):
+        for line in opt_block.splitlines():
+            m = re.match(r"^[\(\[\"']*([A-Da-d])[\)\]\.\:\s]+(.*)$", line.strip())
+            if m:
+                opt_dict[m.group(1).upper()] = m.group(2).strip().lower()
+
+    return opt_dict
+
+
+def extract_predicted_option(pred_str: Optional[str], options_raw: Any = None) -> Optional[str]:
+    """Extracts the multiple-choice option letter ('A', 'B', 'C', 'D') from model output."""
+    if pred_str is None or not isinstance(pred_str, str):
+        return None
+
+    clean_pred = pred_str.strip()
+    if not clean_pred or clean_pred.lower() in ("no answer found", "none", "n/a", "[error: image not found]"):
+        return None
+
+    # 1. Regex check for leading letter (e.g. 'A. 27B', '(A)', 'A: ')
+    m = re.match(r"^[\(\[\"']*([A-Da-d])[\)\]\.\:\s]", clean_pred)
+    if m:
+        return m.group(1).upper()
+
+    # 2. Exact single letter
+    if clean_pred.upper() in ("A", "B", "C", "D"):
+        return clean_pred.upper()
+
+    # 3. Final Answer / Option phrase anywhere in text
+    m = re.search(r"\b(?:final answer|answer|choice|option)\b[^\w\n\r]*([A-Da-d])\b", clean_pred, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+
+    # 4. Fallback: match prediction content against option candidate text
+    if options_raw:
+        opt_dict = parse_options_text(options_raw)
+        p_lower = clean_pred.lower()
+        for letter, text in opt_dict.items():
+            if text and (p_lower == text or p_lower.startswith(text) or text in p_lower):
+                return letter
+
+    return None
+
+
 def discover_hrbench_dir(preferred_path: Optional[str]) -> Tuple[str, str]:
     """Discovers HRBench root directory and annotation file with multiple local fallbacks."""
     search_dirs = []
@@ -814,6 +871,70 @@ def execute_single_sample_stages(
         verbose=True,
     )
 
+    run_mode = getattr(args, "mode", "both")
+    if run_mode == "e2e":
+        print("\n--- EXECUTING END-TO-END PIPELINE ---")
+        e2e_t0 = time.perf_counter()
+        e2e_response = get_mssearch_response(
+            sam_model=sam3_engine,
+            zoom_model=qwen_engine,
+            siglip_model=siglip_engine,
+            nlp_model=nlp_parser,
+            annotation=target_sample,
+            candidate_images=candidate_images,
+            config=config,
+        )
+        e2e_latency = time.perf_counter() - e2e_t0
+
+        telemetry = e2e_response.get("telemetry", {})
+        timings = telemetry.get("timings_sec", {})
+        e2e_primary_answer = e2e_response.get("primary_answer", "")
+        route_selected = telemetry.get("route", "UNKNOWN")
+
+        pred_letter = extract_predicted_option(e2e_primary_answer, raw_options)
+        is_correct = (pred_letter == gt_letter) if pred_letter and gt_letter else False
+        res_tag = "[CORRECT]" if is_correct else "[INCORRECT]"
+
+        print(f"\n[End-to-End Result] Route: {route_selected} | Latency: {e2e_latency:.2f}s")
+        print(f"  - E2E Primary Answer : '{e2e_primary_answer}'")
+        print(f"  - Predicted Option   : '{pred_letter}' | Ground Truth: '{gt_letter}' -> {res_tag}")
+        print(f"  - Evidence Images    : {e2e_response.get('evidence_images')} (Target: {target_pool_idx})")
+
+        print("\n[Latency Profiling Breakdown]")
+        total_recorded = sum(timings.values()) if timings else e2e_latency
+        stage_meta = [
+            ("phase1_direct_answer", "Phase 1: Direct Global Answer", "GPU 0 (Qwen2.5-VL)"),
+            ("stage1_parser", "Stage 1: Question Parsing & Anchor Reorder", "GPU 0 (Qwen2.5-VL / spaCy)"),
+            ("stage2_fast_path", "Stage 2: Tool Fast Path & Feat Cache", "GPU 1 (SAM3) + GPU 0 (Qwen2.5-VL)"),
+            ("stage3_partitioning", "Stage 3: Saliency-Plateau Partitioning", "CPU + GPU 0 (SigLIP)"),
+            ("stage4_grouping_gating", "Stage 4: SAM3 Feature Grouping & Gating", "GPU 1 (SAM3) + GPU 0 (Qwen2.5-VL)"),
+            ("stage5_screening", "Stage 5: Unified Candidate Pool Aggregation", "CPU Direct"),
+            ("stage6_reading", "Stage 6: Foveated Reading & Multi-Answer", "GPU 0 (Qwen2.5-VL)"),
+        ]
+        for key, name, dev in stage_meta:
+            lat = timings.get(key, 0.0)
+            pct = (lat / total_recorded * 100.0) if total_recorded > 0 else 0.0
+            print(f"  - {name:<46} | {dev:<30} | {lat:5.2f}s ({pct:4.1f}%)")
+
+        record = {
+            "sample_index": sample_index,
+            "question": real_question,
+            "cycle_idx": cycle_idx,
+            "gt_letter": gt_letter,
+            "predicted_letter": pred_letter,
+            "is_correct": is_correct,
+            "target_pool_idx": target_pool_idx,
+            "step_answer": e2e_primary_answer,
+            "e2e_answer": e2e_primary_answer,
+            "route_selected": route_selected,
+            "is_e2e_step_match": True,
+            "e2e_latency": round(e2e_latency, 3),
+            "evidence_images": e2e_response.get("evidence_images", []),
+            "timings": timings,
+            "visuals_saved": save_vis,
+        }
+        return record
+
     # --------------------------------------------------------------------------
     # STAGE 1: QUESTION PARSING
     # --------------------------------------------------------------------------
@@ -1073,10 +1194,14 @@ def execute_single_sample_stages(
     e2e_primary_answer = e2e_response.get("primary_answer", "")
     route_selected = telemetry.get("route", "UNKNOWN")
 
+    pred_letter = extract_predicted_option(e2e_primary_answer or step_consolidated_answer, raw_options)
+    is_correct = (pred_letter == gt_letter) if pred_letter and gt_letter else False
+    res_tag = "[CORRECT]" if is_correct else "[INCORRECT]"
+
     print(f"[End-to-End Result] Route: {route_selected} | Latency: {e2e_latency:.2f}s")
     print(f"  - E2E Primary Answer : '{e2e_primary_answer}'")
     print(f"  - Step Primary Answer: '{step_consolidated_answer}'")
-    print(f"  - Ground Truth Option: '{gt_letter}'")
+    print(f"  - Predicted Option   : '{pred_letter}' | Ground Truth: '{gt_letter}' -> {res_tag}")
     print(f"  - Discovered Evidence Images: {e2e_response.get('evidence_images')} (Target at {target_pool_idx})")
 
     # Cross-verification comparison
@@ -1108,6 +1233,8 @@ def execute_single_sample_stages(
         "question": real_question,
         "cycle_idx": cycle_idx,
         "gt_letter": gt_letter,
+        "predicted_letter": pred_letter,
+        "is_correct": is_correct,
         "target_pool_idx": target_pool_idx,
         "step_answer": step_consolidated_answer,
         "e2e_answer": e2e_primary_answer,
@@ -1203,6 +1330,37 @@ def main():
         help="Random seed for deterministic sampling and shuffling (default: 42).",
     )
     parser.add_argument(
+        "--all_samples",
+        "--all",
+        dest="all_samples",
+        action="store_true",
+        help="Evaluate all samples in the HRBench dataset.",
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["e2e", "both", "step"],
+        default=None,
+        help="Execution mode: 'e2e' (direct single-pass pipeline, recommended for full runs), 'both' (runs step-by-step AND e2e for cross-verification), 'step' (step-by-step diagnostics only). Default: 'e2e' when --all_samples is active, 'both' otherwise.",
+    )
+    parser.add_argument(
+        "--start_idx",
+        type=int,
+        default=None,
+        help="Starting sample index when slicing the dataset (0-indexed).",
+    )
+    parser.add_argument(
+        "--end_idx",
+        type=int,
+        default=None,
+        help="Ending sample index (exclusive) when slicing the dataset.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume execution: inspects existing results.jsonl and skips already evaluated sample indices.",
+    )
+    parser.add_argument(
         "--save_visuals",
         nargs="*",
         default=None,
@@ -1213,6 +1371,9 @@ def main():
     args.output_dir = os.path.abspath(args.output_dir)
     os.makedirs(args.output_dir, exist_ok=True)
 
+    if args.mode is None:
+        args.mode = "e2e" if args.all_samples else "both"
+
     # 1. Parse --save_visuals flag
     save_visuals_spec = parse_save_visuals_arg(args.save_visuals)
     if save_visuals_spec is None:
@@ -1221,6 +1382,8 @@ def main():
         print("[Config] --save_visuals 'all' -> Visual PNGs will be saved for ALL evaluated samples.")
     else:
         print(f"[Config] --save_visuals active for sample indices: {sorted(list(save_visuals_spec))}")
+
+    print(f"[Config] Execution Mode: '{args.mode.upper()}' ({'Single-Pass High-Throughput' if args.mode == 'e2e' else 'Dual Step + E2E Verification'})")
 
     # 2. Discover HRBench Dataset
     hrbench_base_dir, hrbench_annotation_path = discover_hrbench_dir(args.hrbench_dir)
@@ -1232,15 +1395,40 @@ def main():
     print(f"[Dataset] Ingested {len(hrbench_data)} total samples.")
 
     # 3. Resolve Sample Indices
-    if args.sample_indices is not None and len(args.sample_indices) > 0:
+    if args.all_samples:
+        target_indices = list(range(len(hrbench_data)))
+    elif args.sample_indices is not None and len(args.sample_indices) > 0:
         target_indices = args.sample_indices
     else:
         target_indices = [args.sample_idx]
 
+    if args.start_idx is not None or args.end_idx is not None:
+        start_i = args.start_idx or 0
+        end_i = args.end_idx if args.end_idx is not None else len(target_indices)
+        target_indices = target_indices[start_i:end_i]
+
     if args.max_samples is not None and args.max_samples > 0:
         target_indices = target_indices[: args.max_samples]
 
-    print(f"[Execution Queue] Evaluating {len(target_indices)} sample(s): {target_indices}")
+    results_log_path = os.path.abspath(os.path.join(args.output_dir, "results.jsonl"))
+    os.makedirs(os.path.dirname(results_log_path), exist_ok=True)
+
+    if args.resume and os.path.exists(results_log_path):
+        completed_ids = set()
+        with open(results_log_path, "r", encoding="utf-8") as f_in:
+            for line in f_in:
+                if line.strip():
+                    try:
+                        r_data = json.loads(line)
+                        if "sample_index" in r_data:
+                            completed_ids.add(r_data["sample_index"])
+                    except Exception:
+                        pass
+        original_count = len(target_indices)
+        target_indices = [idx for idx in target_indices if idx not in completed_ids]
+        print(f"[Resume] Found {len(completed_ids)} already completed samples. Remaining in queue: {len(target_indices)} / {original_count}")
+
+    print(f"[Execution Queue] Evaluating {len(target_indices)} sample(s) (First 10: {target_indices[:10]}...)")
 
     # 4. Asymmetric Dual-GPU Allocation & Model Initialization
     num_gpus = torch.cuda.device_count()
@@ -1289,12 +1477,15 @@ def main():
             print(f"  [Notice] spaCy load skipped: {e}")
 
     # 5. Execute Evaluation Loop
-    results_log_path = os.path.abspath(os.path.join(args.output_dir, "results.jsonl"))
-    os.makedirs(os.path.dirname(results_log_path), exist_ok=True)
     print(f"\n[Logging] Results will be appended to: {results_log_path}")
 
     all_records = []
-    for s_idx in target_indices:
+    correct_count = 0
+    evaluated_count = 0
+    route_counter = {}
+    latencies = []
+
+    for queue_pos, s_idx in enumerate(target_indices, start=1):
         if s_idx < 0 or s_idx >= len(hrbench_data):
             print(f"[Warning] Sample index {s_idx} out of range [0, {len(hrbench_data)-1}]. Skipping.")
             continue
@@ -1312,19 +1503,60 @@ def main():
                 save_visuals_spec=save_visuals_spec,
             )
             all_records.append(rec)
+            evaluated_count += 1
+            if rec.get("is_correct"):
+                correct_count += 1
+            r_sel = rec.get("route_selected", "UNKNOWN")
+            route_counter[r_sel] = route_counter.get(r_sel, 0) + 1
+            latencies.append(rec.get("e2e_latency", 0.0))
 
             os.makedirs(os.path.dirname(results_log_path), exist_ok=True)
             with open(results_log_path, "a", encoding="utf-8") as f_out:
                 f_out.write(json.dumps(rec) + "\n")
+
+            # Running status banner
+            acc_pct = (correct_count / evaluated_count * 100.0) if evaluated_count > 0 else 0.0
+            avg_lat_so_far = sum(latencies) / len(latencies) if latencies else 0.0
+            print(
+                f"\n>>> PROGRESS: {queue_pos}/{len(target_indices)} (Sample #{s_idx}) | "
+                f"Running Acc: {correct_count}/{evaluated_count} ({acc_pct:.1f}%) | "
+                f"Avg Latency: {avg_lat_so_far:.2f}s <<<\n"
+            )
 
         except Exception as e:
             print(f"\n[ERROR] Exception encountered on sample #{s_idx}: {e}")
             import traceback
             traceback.print_exc()
 
+        # Dynamic Memory Shield: Periodic CUDA flush
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    total_eval = len(all_records)
+    overall_acc = (correct_count / total_eval * 100.0) if total_eval > 0 else 0.0
+    avg_lat = (sum(latencies) / len(latencies)) if latencies else 0.0
+
+    summary_data = {
+        "total_samples_evaluated": total_eval,
+        "correct_samples": correct_count,
+        "accuracy_acc1": round(overall_acc, 2),
+        "avg_latency_sec": round(avg_lat, 2),
+        "routes": route_counter,
+        "results_log_path": results_log_path,
+    }
+
+    summary_path = os.path.join(args.output_dir, "summary.json")
+    with open(summary_path, "w", encoding="utf-8") as f_sum:
+        json.dump(summary_data, f_sum, indent=2)
+
     print("\n" + "=" * 80)
-    print(f"BENCHMARK COMPLETED: Evaluated {len(all_records)} / {len(target_indices)} samples.")
+    print(f"BENCHMARK COMPLETED: Evaluated {total_eval} / {len(target_indices)} samples.")
+    print(f"Overall Accuracy (Acc@1): {correct_count}/{total_eval} ({overall_acc:.2f}%)")
+    print(f"Average Latency         : {avg_lat:.2f}s per sample")
+    print(f"Route Breakdown         : {route_counter}")
     print(f"Telemetry log written to: {results_log_path}")
+    print(f"Summary JSON written to : {summary_path}")
     print("=" * 80)
 
 
