@@ -447,12 +447,6 @@ def main():
             setattr(config, param, val)
             print(f"[Config Override] {param} -> {val}")
 
-    # Scale budgets by number of candidate images
-    if getattr(config, "scale_budgets_by_num_images", True) and args.num_candidate_images > 1:
-        config.max_sam3_eval_patches = config.max_sam3_eval_patches * args.num_candidate_images
-        config.max_latent_evals = config.max_latent_evals * args.num_candidate_images
-        config.max_retained_patches = config.max_retained_patches * args.num_candidate_images
-
     # 4. Save config_used.json (Requirement 3: Write all configs out so user can change it)
     config_out_path = os.path.join(args.output_dir, "config_used.json")
     config.save_json(config_out_path)

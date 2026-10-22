@@ -6,5 +6,5 @@
   "max_patches_per_detected_group": 4,
   "max_patches_per_latent_group": 1,
   "max_retained_patches": 48,
-  "early_consensus_count": 2
+  "enable_early_consensus_exit": false
 }

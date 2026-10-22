@@ -64,7 +64,7 @@
   "vlm_batch_size": 4,
   "bbox_expansion_factor": 1.25,
   "max_vlm_tokens": 128,
-  "enable_early_consensus_exit": true,
+  "enable_early_consensus_exit": false,
   "early_consensus_count": 2,
   "early_consensus_threshold": 0.75,
   "prompt_directed_final_answer": true,

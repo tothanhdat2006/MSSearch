@@ -120,14 +120,11 @@ class MultiSourceSearchEngine:
             base_sam3 = getattr(self.config, "max_sam3_eval_patches", 16)
             base_latent = getattr(self.config, "max_latent_evals", 8)
             base_retained = getattr(self.config, "max_retained_patches", 32)
-            self.config.max_sam3_eval_patches = base_sam3 * n_candidates
-            self.config.max_latent_evals = base_latent * n_candidates
-            self.config.max_retained_patches = base_retained * n_candidates
-            sub_config.max_sam3_eval_patches = self.config.max_sam3_eval_patches
-            sub_config.max_latent_evals = self.config.max_latent_evals
-            sub_config.max_retained_patches = self.config.max_retained_patches
+            sub_config.max_sam3_eval_patches = base_sam3 * n_candidates
+            sub_config.max_latent_evals = base_latent * n_candidates
+            sub_config.max_retained_patches = base_retained * n_candidates
             if is_verbose:
-                print(f"[MSSearch] Scaled budgets by N={n_candidates}: max_sam3={self.config.max_sam3_eval_patches}, max_latent={self.config.max_latent_evals}, max_retained={self.config.max_retained_patches}")
+                print(f"[MSSearch] Scaled budgets by N={n_candidates}: max_sam3={sub_config.max_sam3_eval_patches}, max_latent={sub_config.max_latent_evals}, max_retained={sub_config.max_retained_patches}")
 
         if getattr(self.config, "multi_answer_mode", False):
             self.config.enable_early_consensus_exit = False
