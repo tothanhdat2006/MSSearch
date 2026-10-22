@@ -148,8 +148,8 @@ def parse_question_to_active_objects(
                         "text": (
                             "You are an expert visual search parser. Given a question, extract search targets and return a JSON object with:\n"
                             "- \"active_objects\": list of key visual search entities or text needed to answer the question\n"
-                            "- \"question_type\": one of ['relational_reading', 'spatial_orientation', 'counting', 'fine_grained_attribute', 'general']\n"
-                            "- \"is_relational\": boolean (true if question requires relative spatial positioning or dual-scale context)\n"
+                            "- \"question_type\": one of ['cross_object_relation', 'single_object_attribute', 'counting', 'text_reading', 'general']\n"
+                            "- \"is_relational\": boolean (true for cross-object questions asking about spatial relationships or relative positioning between multiple objects; false for single-object questions asking about one object's attributes, text, color, or identity)\n"
                             "Return ONLY valid JSON."
                         )
                     }]
@@ -160,7 +160,23 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"active_objects": ["jacket", "sleeve", "logo", "text"], "question_type": "relational_reading", "is_relational": true}'}]
+                    "content": [{"type": "text", "text": '{"active_objects": ["jacket", "sleeve", "logo", "text"], "question_type": "cross_object_relation", "is_relational": true}'}]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Question: \"What is the registration number of the boat?\""}]
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"active_objects": ["boat"], "question_type": "single_object_attribute", "is_relational": false}'}]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Question: \"What is the color of the mailbox?\""}]
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"active_objects": ["mailbox"], "question_type": "single_object_attribute", "is_relational": false}'}]
                 },
                 {
                     "role": "user",
@@ -178,12 +194,15 @@ def parse_question_to_active_objects(
 
             few_shot_prompt = (
                 "You are an expert visual search parser. Given a question, return a JSON object with 'active_objects', 'question_type', and 'is_relational'.\n\n"
-                "Example 1:\n"
+                "Example 1 (Cross-Object):\n"
                 "Question: \"What is the text written above the logo on the jacket's sleeve?\"\n"
-                "JSON: {\"active_objects\": [\"jacket\", \"sleeve\", \"logo\", \"text\"], \"question_type\": \"relational_reading\", \"is_relational\": true}\n\n"
-                "Example 2:\n"
-                "Question: \"How many windows are on the brick building?\"\n"
-                "JSON: {\"active_objects\": [\"brick building\", \"window\"], \"question_type\": \"counting\", \"is_relational\": false}\n\n"
+                "JSON: {\"active_objects\": [\"jacket\", \"sleeve\", \"logo\", \"text\"], \"question_type\": \"cross_object_relation\", \"is_relational\": true}\n\n"
+                "Example 2 (Single-Object):\n"
+                "Question: \"What is the registration number of the boat?\"\n"
+                "JSON: {\"active_objects\": [\"boat\"], \"question_type\": \"single_object_attribute\", \"is_relational\": false}\n\n"
+                "Example 3 (Single-Object):\n"
+                "Question: \"What is the color of the mailbox?\"\n"
+                "JSON: {\"active_objects\": [\"mailbox\"], \"question_type\": \"single_object_attribute\", \"is_relational\": false}\n\n"
                 f"Question: \"{question}\"\nJSON:"
             )
 
@@ -344,6 +363,10 @@ def parse_question_to_active_objects(
             parsed_question_type = "fine_grained_attribute"
         else:
             parsed_question_type = "general"
+
+    # Strict invariant: single target is definitionally non-relational
+    if len(clean_targets) <= 1:
+        parsed_is_relational = False
 
     parsed_question = ParsedQuestion(
         active_objects=clean_targets,

@@ -350,61 +350,63 @@ def run_feature_grouping_and_gating(
             patches_to_scan = candidate_pool[:max_evals]
             if config.verbose:
                 print(f"[Stage 4][Prioritized SAM3 Scan] Scanning top {len(patches_to_scan)} / {len(bounded_patches)} prioritized candidate patches/centroids (max_evals={max_evals})...")
-        else:
-            patches_to_scan = list(range(len(bounded_patches)))
-            if config.verbose:
-                print(f"[Stage 4][SAM3 All-Patch Detection] Scanning all {len(bounded_patches)} bounded patches for active objects {active_objects}...")
-
+        # Step 2c: Batched SAM3 crop scanning
+        valid_patches = []
+        valid_crops = []
         for p_idx in patches_to_scan:
             patch = bounded_patches[p_idx]
             p_box_ints = tuple(int(round(float(c))) for c in patch.box)
             p_img = candidate_images[patch.img_idx].crop(p_box_ints)
             pw, ph = p_img.size
-            if pw < 8 or ph < 8:
-                continue
+            if pw >= 8 and ph >= 8:
+                valid_patches.append((p_idx, patch, p_box_ints))
+                valid_crops.append(p_img)
 
+        sam3_bs = getattr(config, "sam3_batch_size", 4)
+        if hasattr(sam_model, "batch_inference_multi_images") and sam3_bs > 1:
+            batched_outputs = sam_model.batch_inference_multi_images(
+                valid_crops, active_objects, batch_size=sam3_bs
+            )
+        else:
+            batched_outputs = []
+            for p_img in valid_crops:
+                try:
+                    if torch is not None and hasattr(torch, "inference_mode"):
+                        with torch.inference_mode():
+                            batched_outputs.append(sam_model.batch_inference(p_img, active_objects))
+                    else:
+                        batched_outputs.append(sam_model.batch_inference(p_img, active_objects))
+                except Exception as e:
+                    batched_outputs.append((None, {}, []))
+
+        for (p_idx, patch, p_box_ints), (_, processed_results, text_id) in zip(valid_patches, batched_outputs):
             dets = []
-            try:
-                if torch is not None and hasattr(torch, "inference_mode"):
-                    with torch.inference_mode():
-                        _, processed_results, text_id = sam_model.batch_inference(
-                            p_img, active_objects
-                        )
-                else:
-                    _, processed_results, text_id = sam_model.batch_inference(
-                        p_img, active_objects
-                    )
-                for tid in text_id:
-                    # SAM3 batch_inference uses 1-based text indexing (1 -> active_objects[0], 2 -> active_objects[1], etc.)
-                    obj_idx = (int(tid) - 1) if str(tid).isdigit() else 0
-                    label_str = active_objects[obj_idx] if 0 <= obj_idx < len(active_objects) else str(tid)
-
-                    res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
-                    boxes = res.get('boxes', [])
-                    scores = res.get('scores', [])
-                    for b, s in zip(boxes, scores):
-                        s_float = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
-                        b_clean = [int(round(float(c))) for c in (b.tolist() if hasattr(b, 'tolist') else b)]
-                        dets.append({
-                            "label": label_str,
-                            "score": round(s_float, 3),
-                            "local_box": b_clean,
-                            "global_box": [b_clean[0] + p_box_ints[0], b_clean[1] + p_box_ints[1],
-                                           b_clean[2] + p_box_ints[0], b_clean[3] + p_box_ints[1]],
-                            "patch_idx": p_idx
-                        })
-            except Exception as e:
-                if config.verbose:
-                    print(f"[Stage 4][SAM3 Detection Exception] Patch {p_idx} ({e})")
+            for tid in text_id:
+                obj_idx = (int(tid) - 1) if str(tid).isdigit() else 0
+                label_str = active_objects[obj_idx] if 0 <= obj_idx < len(active_objects) else str(tid)
+                res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
+                boxes = res.get('boxes', [])
+                scores = res.get('scores', [])
+                for b, s in zip(boxes, scores):
+                    s_float = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
+                    b_clean = [int(round(float(c))) for c in (b.tolist() if hasattr(b, 'tolist') else b)]
+                    dets.append({
+                        "label": label_str,
+                        "score": round(s_float, 3),
+                        "local_box": b_clean,
+                        "global_box": [b_clean[0] + p_box_ints[0], b_clean[1] + p_box_ints[1],
+                                       b_clean[2] + p_box_ints[0], b_clean[3] + p_box_ints[1]],
+                        "patch_idx": p_idx
+                    })
             patch_detections[p_idx].extend(dets)
 
-    remaining_patches: List[BoundedPatch] = []
-    group_records: List[Dict[str, Any]] = []
-    latent_vlm_queries_count = 0
+    # 3. Two-Phase Batched VLM Gating per group
+    # Initial per-group state extraction
+    group_states: List[Dict[str, Any]] = []
+    existence_queue: List[Dict[str, Any]] = []
+    latent_queue: List[Dict[str, Any]] = []
 
-    # 3. Dual Gating per group
     for g_idx, member_indices in enumerate(groups):
-        # Select representative patch (patch closest to group centroid in feature space)
         if len(member_indices) == 1:
             rep_idx = member_indices[0]
         else:
@@ -421,8 +423,13 @@ def run_feature_grouping_and_gating(
         match_reason = "none_pruned"
         vlm_exist_score = None
         vlm_latent_score = None
+        vlm_prompt = None
+        vlm_tested_patch_idx = None
+        vlm_tested_role = None
+        fovea_box = None
+        best_det_box = None
+        is_repart_candidate = False
 
-        # Aggregate SAM3 detections across all member patches of this group
         group_detected_objects: List[Dict[str, Any]] = []
         for mem_i in member_indices:
             for det in patch_detections.get(mem_i, []):
@@ -440,7 +447,6 @@ def run_feature_grouping_and_gating(
                         mem_box = bounded_patches[mem_i].box
                         center_in = target_center_in_patch(mem_box, d_box_clean)
                         cov_ratio = compute_target_coverage_ratio(mem_box, d_box_clean)
-
                         if center_in or cov_ratio >= 0.35:
                             has_active_match = True
                             match_reason = "stage2_detection_anchor"
@@ -449,7 +455,6 @@ def run_feature_grouping_and_gating(
                             rel_by1 = max(0, d_box_clean[1] - mem_box[1])
                             rel_bx2 = min(mem_box[2] - mem_box[0], d_box_clean[2] - mem_box[0])
                             rel_by2 = min(mem_box[3] - mem_box[1], d_box_clean[3] - mem_box[1])
-
                             group_detected_objects.append({
                                 "label": target_label,
                                 "score": 1.0,
@@ -457,21 +462,13 @@ def run_feature_grouping_and_gating(
                                 "global_box": list(d_box_clean),
                                 "coverage_ratio": round(cov_ratio, 2)
                             })
-                            if config.verbose:
-                                print(f"[Stage 4][Detection Anchor] Group {g_idx} encompasses Stage 2 target '{target_label}' -> automatically [KEPT].")
+                            vlm_tested_role = "Stage 2 Anchor"
+                            vlm_prompt = "N/A (Bypassed VLM Gating via Stage 2 Global Anchor)"
                             break
                 if has_active_match:
                     break
 
-        # Dual VLM Gating & Micro-Fovea Telemetry
-        vlm_prompt = None
-        vlm_tested_patch_idx = None
-        vlm_tested_role = None
-        vlm_per_object_scores = {}
-        fovea_box = None
-        best_det_box = None
-
-        # Safeguard B (Fix C): High-confidence SAM3 or SigLIP bypass (zero VLM latency)
+        # Safeguard B: High-confidence SAM3 or SigLIP bypass
         max_siglip_score = max([bounded_patches[mem_i].siglip_score or 0.0 for mem_i in member_indices], default=0.0)
         if getattr(config, "bypass_vlm_for_confirmed_groups", True) and not has_active_match:
             if max_det_score >= config.sam3_group_det_threshold:
@@ -480,143 +477,177 @@ def run_feature_grouping_and_gating(
                 match_reason = f"sam3_high_confidence (score={best_det['score']:.2f} >= {config.sam3_group_det_threshold:.2f})"
                 vlm_tested_patch_idx = best_det["patch_idx"]
                 vlm_tested_role = "Detection Crop (SAM3 Confirmed)"
-                if config.verbose:
-                    print(f"[Stage 4][SAM3 Confirmed] Group {g_idx} has confident detection '{best_det['label']}' (score={best_det['score']:.2f}) -> [KEPT] (bypassed VLM check).")
             elif max_siglip_score >= 0.45:
                 has_active_match = True
                 match_reason = f"siglip_high_confidence (score={max_siglip_score:.2f} >= 0.45)"
                 vlm_tested_patch_idx = rep_idx
                 vlm_tested_role = "Centroid (SigLIP Confirmed)"
-                if config.verbose:
-                    print(f"[Stage 4][SigLIP Confirmed] Group {g_idx} has strong semantic similarity (score={max_siglip_score:.2f}) -> [KEPT] (bypassed VLM check).")
 
+        state = {
+            "g_idx": g_idx,
+            "member_indices": member_indices,
+            "rep_idx": rep_idx,
+            "rep_patch": rep_patch,
+            "rep_box_ints": rep_box_ints,
+            "rep_img": rep_img,
+            "has_active_match": has_active_match,
+            "match_reason": match_reason,
+            "vlm_exist_score": vlm_exist_score,
+            "vlm_latent_score": vlm_latent_score,
+            "vlm_prompt": vlm_prompt,
+            "vlm_tested_patch_idx": vlm_tested_patch_idx,
+            "vlm_tested_role": vlm_tested_role,
+            "fovea_box": fovea_box,
+            "best_det_box": best_det_box,
+            "group_detected_objects": group_detected_objects,
+            "max_det_score": max_det_score,
+            "is_repart_candidate": is_repart_candidate
+        }
+        group_states.append(state)
+
+        # Queue unresolved groups for VLM probing
         if not has_active_match:
-            if group_detected_objects:
-                # -------------------------------------------------------------
-                # Branch (2): Object Found by SAM3 in group (below bypass threshold)
-                # Challenge 1: Micro-Fovea Extraction to avoid token dilution
-                # Gating: Verified via Standard Existence Prompt on Micro-Fovea
-                # -------------------------------------------------------------
+            if group_detected_objects and config.enable_existence_gating and zoom_model is not None:
                 best_det = max(group_detected_objects, key=lambda d: d["score"])
                 best_patch = bounded_patches[best_det["patch_idx"]]
                 best_box_ints = tuple(int(round(float(c))) for c in best_patch.box)
                 best_patch_crop = candidate_images[best_patch.img_idx].crop(best_box_ints)
-
-                vlm_tested_patch_idx = best_det["patch_idx"]
-                vlm_tested_role = "Detection Crop (Micro-Fovea)"
                 target_label = best_det["label"]
-
-                # Challenge 1: Extract focused micro-fovea crop around detected object
                 local_box = best_det.get("local_box", [0, 0, best_patch_crop.width, best_patch_crop.height])
-                best_det_box = local_box
-                fovea_crop, fovea_box = extract_micro_fovea_crop(best_patch_crop, local_box, expansion_ratio=1.75, min_dim=256)
+                state["best_det_box"] = local_box
+                fovea_crop, fb = extract_micro_fovea_crop(best_patch_crop, local_box, expansion_ratio=1.75, min_dim=256)
+                state["fovea_box"] = fb
+                state["vlm_tested_patch_idx"] = best_det["patch_idx"]
+                state["vlm_tested_role"] = "Detection Crop (Micro-Fovea)"
+                state["vlm_prompt"] = config.existence_prompt_template.format(target_label)
 
-                # Standard existence prompt queried on focused micro-fovea crop
-                vlm_prompt = config.existence_prompt_template.format(target_label)
+                existence_queue.append({
+                    "g_idx": g_idx,
+                    "crop": fovea_crop,
+                    "label": target_label,
+                    "state": state
+                })
+            elif not group_detected_objects and config.enable_latent_gating and zoom_model is not None and active_objects:
+                latent_queue.append({
+                    "g_idx": g_idx,
+                    "state": state
+                })
 
-                if config.enable_existence_gating and zoom_model is not None:
-                    vlm_exist_score = _query_vlm_existence(
-                        zoom_model, fovea_crop, target_label, config
-                    )
-                    vlm_per_object_scores[target_label] = vlm_exist_score
-
-                    if vlm_exist_score >= config.existence_confidence_threshold:
-                        has_active_match = True
-                        match_reason = f"sam3_det_vlm_confirmed (conf={vlm_exist_score:.2f} >= {config.existence_confidence_threshold:.2f})"
-                        if config.verbose:
-                            print(f"[Stage 4][Existence Confirmed] Group {g_idx} SAM3 detection '{target_label}' verified by VLM existence (conf={vlm_exist_score:.2f}) -> [KEPT].")
-                    else:
-                        if config.verbose:
-                            print(f"[Stage 4][Existence Rejected] Group {g_idx} SAM3 detection '{target_label}' rejected by VLM existence (conf={vlm_exist_score:.2f} < {config.existence_confidence_threshold:.2f}).")
-                else:
-                    # Gating disabled or zoom_model absent -> retain on SAM3 detection score
-                    has_active_match = True
-                    match_reason = f"sam3_detection (score={best_det['score']:.2f})"
-
-            if not has_active_match:
-                # -------------------------------------------------------------
-                # Branch (1): No Object Found (or existence check rejected)
-                # Check VLM latent confidence on the representative centroid patch
-                # -------------------------------------------------------------
-                if config.enable_latent_gating and zoom_model is not None and active_objects:
-                    max_latent_evals = getattr(config, "max_latent_evals", 8)
-                    if latent_vlm_queries_count >= max_latent_evals:
-                        match_reason = f"budget_capped (max {max_latent_evals} reached)"
-                        if config.verbose:
-                            print(f"[Stage 4][Latent Budget Guard] Max latent VLM evaluations reached ({max_latent_evals}) -> Group {g_idx} speculative check skipped to save latency.")
-                    else:
-                        latent_vlm_queries_count += 1
-                        # Target crop selection: prioritize candidate detection patch over centroid if detections exist
-                        if group_detected_objects:
-                            best_det = max(group_detected_objects, key=lambda d: d["score"])
-                            eval_patch = bounded_patches[best_det["patch_idx"]]
-                            vlm_tested_patch_idx = best_det["patch_idx"]
-                            vlm_tested_role = "Detection Crop (p_det)"
-                        else:
-                            eval_patch = rep_patch
-                            vlm_tested_patch_idx = rep_idx
-                            vlm_tested_role = "Centroid (p_rep)"
-
-                        eval_box_ints = tuple(int(round(float(c))) for c in eval_patch.box)
-                        eval_img = candidate_images[eval_patch.img_idx].crop(eval_box_ints)
-
-                        # Support both question-aware contextual probing and legacy target-object probing
-                        prompt_mode = getattr(config, "latent_prompt_mode", "question_aware")
-                        primary_obj = active_objects[0]
-                        if prompt_mode == "question_aware" and question:
-                            latent_query = question
-                            latent_template = getattr(
-                                config,
-                                "latent_prompt_template_qa",
-                                "According to visual common sense and the content of the image, is it possible to find the information needed to answer '{}' by further zooming the sub-patch? Answer Yes or No."
-                            )
-                        else:
-                            latent_query = primary_obj
-                            latent_template = getattr(
-                                config,
-                                "latent_prompt_template",
-                                "According to your common sense knowledge and the content of the image, is it possible to find a {} by further zooming the sub-patch? Answer Yes or No."
-                            )
-
-                        vlm_prompt = latent_template.format(latent_query)
-                        vlm_latent_score = _query_vlm_latent(
-                            zoom_model, eval_img, latent_query, config, custom_prompt_template=latent_template
-                        )
-                        vlm_per_object_scores = {latent_query: vlm_latent_score}
-
-                        if vlm_latent_score >= config.latent_confidence_threshold:
-                            has_active_match = True
-                            match_reason = f"latent_confidence (conf={vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f})"
-                            if config.verbose:
-                                print(f"[Stage 4][Latent Kept] Group {g_idx} {vlm_tested_role} has latent zoom confidence ({vlm_latent_score:.2f} >= {config.latent_confidence_threshold:.2f}) -> [KEPT].")
-                        else:
-                            if config.verbose:
-                                print(f"[Stage 4][Latent Pruned] Group {g_idx} {vlm_tested_role} latent confidence below threshold ({vlm_latent_score:.2f} < {config.latent_confidence_threshold:.2f}) -> [PRUNED].")
-                elif active_objects:
-                    # Simulation or no zoom model: record what prompt would be asked
-                    vlm_tested_patch_idx = best_det["patch_idx"] if group_detected_objects else rep_idx
-                    vlm_tested_role = "Detection Crop (p_det)" if group_detected_objects else "Centroid (p_rep)"
-                    prompt_mode = getattr(config, "latent_prompt_mode", "question_aware")
-                    primary_obj = active_objects[0]
-                    if prompt_mode == "question_aware" and question:
-                        latent_template = getattr(
-                            config,
-                            "latent_prompt_template_qa",
-                            "According to visual common sense and the content of the image, is it possible to find the information needed to answer '{}' by further zooming the sub-patch? Answer Yes or No."
-                        )
-                        vlm_prompt = latent_template.format(question)
-                    else:
-                        latent_template = getattr(
-                            config,
-                            "latent_prompt_template",
-                            "According to your common sense knowledge and the content of the image, is it possible to find a {} by further zooming the sub-patch? Answer Yes or No."
-                        )
-                        vlm_prompt = latent_template.format(primary_obj)
+    # Phase 1: Vectorized VLM Existence Probing
+    vlm_batch_size = getattr(config, "vlm_gating_batch_size", 4)
+    if existence_queue and zoom_model is not None:
+        crops = [item["crop"] for item in existence_queue]
+        labels = [item["label"] for item in existence_queue]
+        if hasattr(zoom_model, "batch_get_confidence_values"):
+            exist_scores = zoom_model.batch_get_confidence_values(
+                image_list=crops,
+                confidence_type="existence",
+                input_ele=labels,
+                batch_size=vlm_batch_size
+            )
         else:
-            vlm_tested_role = "Stage 2 Anchor"
-            vlm_prompt = "N/A (Bypassed VLM Gating via Stage 2 Global Anchor)"
+            exist_scores = [_query_vlm_existence(zoom_model, c, l, config) for c, l in zip(crops, labels)]
 
-        # Pairwise cosine similarity submatrix for member patches
+        for item, score in zip(existence_queue, exist_scores):
+            st = item["state"]
+            st["vlm_exist_score"] = float(score)
+            if score >= config.existence_confidence_threshold:
+                st["has_active_match"] = True
+                st["match_reason"] = f"sam3_det_vlm_confirmed (conf={score:.2f} >= {config.existence_confidence_threshold:.2f})"
+            else:
+                # Existence rejected: route to Latent Queue if budget allows
+                if config.enable_latent_gating and active_objects:
+                    latent_queue.append({"g_idx": st["g_idx"], "state": st})
+
+    # Phase 2: Vectorized VLM Latent Probing (Budget Capped)
+    max_latent_evals = getattr(config, "max_latent_evals", 8)
+    prompt_mode = getattr(config, "latent_prompt_mode", "question_aware")
+    primary_obj = active_objects[0] if active_objects else "object"
+
+    if prompt_mode == "question_aware" and question:
+        latent_query_str = question
+        latent_tmpl = getattr(
+            config,
+            "latent_prompt_template_qa",
+            "According to visual common sense and the content of the image, is it possible to find the information needed to answer '{}' by further zooming the sub-patch? Answer Yes or No."
+        )
+    else:
+        latent_query_str = primary_obj
+        latent_tmpl = getattr(
+            config,
+            "latent_prompt_template",
+            "According to your common sense knowledge and the content of the image, is it possible to find a {} by further zooming the sub-patch? Answer Yes or No."
+        )
+
+    evaluated_latent_items = latent_queue[:max_latent_evals]
+    capped_latent_items = latent_queue[max_latent_evals:]
+    for item in capped_latent_items:
+        st = item["state"]
+        st["match_reason"] = f"budget_capped (max {max_latent_evals} reached)"
+
+    if evaluated_latent_items and zoom_model is not None:
+        latent_crops = []
+        for item in evaluated_latent_items:
+            st = item["state"]
+            if st["group_detected_objects"]:
+                best_d = max(st["group_detected_objects"], key=lambda d: d["score"])
+                eval_p = bounded_patches[best_d["patch_idx"]]
+                st["vlm_tested_patch_idx"] = best_d["patch_idx"]
+                st["vlm_tested_role"] = "Detection Crop (p_det)"
+            else:
+                eval_p = st["rep_patch"]
+                st["vlm_tested_patch_idx"] = st["rep_idx"]
+                st["vlm_tested_role"] = "Centroid (p_rep)"
+            eb_ints = tuple(int(round(float(c))) for c in eval_p.box)
+            latent_crops.append(candidate_images[eval_p.img_idx].crop(eb_ints))
+            st["vlm_prompt"] = latent_tmpl.format(latent_query_str)
+
+        if hasattr(zoom_model, "batch_get_confidence_values"):
+            latent_scores = zoom_model.batch_get_confidence_values(
+                image_list=latent_crops,
+                confidence_type="latent",
+                input_ele=latent_query_str,
+                batch_size=vlm_batch_size,
+                custom_prompt_templates=latent_tmpl
+            )
+        else:
+            latent_scores = [_query_vlm_latent(zoom_model, c, latent_query_str, config, custom_prompt_template=latent_tmpl) for c in latent_crops]
+
+        repart_thresh = getattr(config, "latent_repartition_threshold", 0.70)
+        for item, score in zip(evaluated_latent_items, latent_scores):
+            st = item["state"]
+            st["vlm_latent_score"] = float(score)
+            if score >= config.latent_confidence_threshold:
+                st["has_active_match"] = True
+                st["match_reason"] = f"latent_confidence (conf={score:.2f} >= {config.latent_confidence_threshold:.2f})"
+                if score >= repart_thresh:
+                    st["is_repart_candidate"] = True
+            else:
+                st["match_reason"] = f"latent_pruned (conf={score:.2f} < {config.latent_confidence_threshold:.2f})"
+
+    # Finalize remaining patches and telemetry group records
+    remaining_patches: List[BoundedPatch] = []
+    group_records: List[Dict[str, Any]] = []
+
+    for state in group_states:
+        g_idx = state["g_idx"]
+        member_indices = state["member_indices"]
+        rep_idx = state["rep_idx"]
+        rep_patch = state["rep_patch"]
+        rep_box_ints = state["rep_box_ints"]
+        has_active_match = state["has_active_match"]
+        match_reason = state["match_reason"]
+        vlm_exist_score = state["vlm_exist_score"]
+        vlm_latent_score = state["vlm_latent_score"]
+        vlm_prompt = state["vlm_prompt"]
+        vlm_tested_patch_idx = state["vlm_tested_patch_idx"]
+        vlm_tested_role = state["vlm_tested_role"]
+        fovea_box = state["fovea_box"]
+        best_det_box = state["best_det_box"]
+        group_detected_objects = state["group_detected_objects"]
+        max_det_score = state["max_det_score"]
+        is_repart_candidate = state["is_repart_candidate"]
+
         if sim_mat.size > 0 and len(member_indices) > 0:
             sub_sim = sim_mat[member_indices][:, member_indices].tolist()
         else:
@@ -624,7 +655,6 @@ def run_feature_grouping_and_gating(
 
         rep_local = member_indices.index(rep_idx) if rep_idx in member_indices else 0
 
-        # Record rich group debug telemetry
         group_records.append({
             "group_idx": g_idx,
             "member_indices": member_indices,
@@ -645,10 +675,10 @@ def run_feature_grouping_and_gating(
             "vlm_prompt": vlm_prompt,
             "vlm_tested_patch_idx": vlm_tested_patch_idx,
             "vlm_tested_role": vlm_tested_role,
-            "vlm_per_object_scores": {k: round(v, 3) for k, v in vlm_per_object_scores.items()},
-            # Challenge 1: Micro-Fovea Zoom Telemetry
+            "vlm_per_object_scores": {primary_obj: round(vlm_latent_score, 3)} if vlm_latent_score is not None else {},
             "fovea_box": fovea_box,
-            "best_det_box": best_det_box
+            "best_det_box": best_det_box,
+            "is_latent_repartition_candidate": is_repart_candidate
         })
 
         if has_active_match:
@@ -661,17 +691,14 @@ def run_feature_grouping_and_gating(
             else:
                 group_score = 0.5
 
-            # Granular group retention cap
             if getattr(config, "enable_group_retention_caps", True):
                 if is_detection:
                     k_det = getattr(config, "max_patches_per_detected_group", 4)
-                    # Prioritize patches containing actual SAM3 detections
                     det_patch_indices = [d["patch_idx"] for d in group_detected_objects if d.get("patch_idx") in member_indices]
                     other_indices = [i for i in member_indices if i not in det_patch_indices]
                     other_sorted = sorted(other_indices, key=lambda i: bounded_patches[i].entropy, reverse=True)
                     chosen_indices = (det_patch_indices + other_sorted)[:k_det]
                 else:
-                    # Latent speculation: keep representative centroid only (default 1 patch)
                     k_lat = getattr(config, "max_patches_per_latent_group", 1)
                     if rep_idx in member_indices:
                         other_indices = [i for i in member_indices if i != rep_idx]

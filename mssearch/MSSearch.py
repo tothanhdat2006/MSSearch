@@ -31,6 +31,7 @@ from .stages import (
     FastPathResult,
     FinalSearchResult
 )
+from .stages.stage3_partitioning import BoundedPatch
 
 
 class MultiSourceSearchEngine:
@@ -79,9 +80,12 @@ class MultiSourceSearchEngine:
 
         # Determine whether candidate options should be added to the VLM reading prompt
         # (Controlled by config.include_options_in_prompt or config.answer_type != "free_form")
+        is_mc = getattr(self.config, "answer_type", "free_form") in [
+            "option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"
+        ]
         should_add_options = (
             getattr(self.config, "include_options_in_prompt", False) or
-            getattr(self.config, "answer_type", "free_form") in ["option_single", "multiple_choice", "mc", "Multiple Choice"]
+            is_mc
         )
         if should_add_options and options:
             reading_question = format_question_with_options(question, options, cycle_idx=cycle_idx)
@@ -413,27 +417,103 @@ class MultiSourceSearchEngine:
             print(f"[Stage 4: Grouping & Gating] Decision: Evaluated {len(stage4_groups)} semantic groups -> Kept {telemetry['stage4_kept_groups']} groups ({len(remaining_patches)} patches), Pruned {telemetry['stage4_pruned_groups']} groups (Latency: {lat_s4}s)")
 
         # ---------------------------------------------------------------------
+        # Recursive Latent Re-Partitioning Feedback Loop (Stage 4 -> Stage 3)
+        # ---------------------------------------------------------------------
+        if getattr(sub_config, "enable_latent_repartition", True):
+            repart_thresh = getattr(sub_config, "latent_repartition_threshold", 0.70)
+            max_repart_per_img = getattr(sub_config, "max_latent_repartition_patches_per_image", 2)
+
+            high_latent_groups = [
+                g for g in stage4_groups
+                if g.get("status") == "KEPT" and (g.get("vlm_latent_score") or -1.0) >= repart_thresh
+            ]
+
+            if high_latent_groups:
+                by_img_hl: Dict[int, List[Dict[str, Any]]] = {}
+                for g in high_latent_groups:
+                    by_img_hl.setdefault(g["img_idx"], []).append(g)
+
+                repartitioned_patches: List[BoundedPatch] = []
+                replaced_parent_boxes = set()
+
+                for img_idx, g_list in by_img_hl.items():
+                    sorted_g = sorted(g_list, key=lambda g: g.get("vlm_latent_score", 0.0), reverse=True)[:max_repart_per_img]
+                    for g in sorted_g:
+                        parent_box = tuple(int(round(float(c))) for c in g["rep_box"])
+                        pw = parent_box[2] - parent_box[0]
+                        ph = parent_box[3] - parent_box[1]
+                        if pw < 128 or ph < 128:
+                            continue
+
+                        parent_crop = candidate_images[img_idx].crop(parent_box)
+                        local_child_patches = partition_candidate_images(
+                            candidate_images=[parent_crop],
+                            feature_cache={},
+                            config=sub_config,
+                            active_objects=active_objects,
+                            siglip_model=self.siglip_model
+                        )
+
+                        if local_child_patches:
+                            replaced_parent_boxes.add((img_idx, parent_box))
+                            for cp in local_child_patches:
+                                lx1, ly1, lx2, ly2 = cp.box
+                                child_global_box = (
+                                    parent_box[0] + lx1,
+                                    parent_box[1] + ly1,
+                                    parent_box[0] + lx2,
+                                    parent_box[1] + ly2
+                                )
+                                child_bp = BoundedPatch(
+                                    img_idx=img_idx,
+                                    box=child_global_box,
+                                    feature_vector=cp.feature_vector,
+                                    entropy=cp.entropy,
+                                    confidence_score=max(1.5, (g.get("vlm_latent_score") or 0.0) + 1.0),
+                                    siglip_score=cp.siglip_score
+                                )
+                                setattr(child_bp, "is_fine_grain", True)
+                                setattr(child_bp, "is_recursive_child", True)
+                                repartitioned_patches.append(child_bp)
+
+                if repartitioned_patches:
+                    remaining_patches = [
+                        p for p in remaining_patches
+                        if (p.img_idx, tuple(int(round(float(c))) for c in p.box)) not in replaced_parent_boxes
+                    ] + repartitioned_patches
+                    if not is_quiet:
+                        print(f"[Stage 4 -> Stage 3 Feedback] Re-partitioned {len(replaced_parent_boxes)} high-latent patches into {len(repartitioned_patches)} fine sub-patches at 100% native resolution.")
+
+        # ---------------------------------------------------------------------
         # Stage 5: Resolution-Aware Screening & Spatial Optimization
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
         question_type = getattr(active_objects, "question_type", None)
+        is_relational = getattr(active_objects, "is_relational", None)
         unified_pool = run_resolution_screening(
             remaining_patches=remaining_patches,
             candidate_images=candidate_images,
             active_objects=active_objects,
             siglip_model=self.siglip_model,
-            config=sub_config
+            config=sub_config,
+            question=question,
+            is_relational=is_relational,
+            zoom_model=self.zoom_model
         )
         lat_s5 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage5_screening"] = lat_s5
         telemetry["num_unified_crops"] = len(unified_pool)
         telemetry["branch_a_count"] = sum(1 for c in unified_pool if "Branch A" in c.source_branch)
         telemetry["branch_b_count"] = sum(1 for c in unified_pool if "Branch B" in c.source_branch)
+        telemetry["is_relational"] = is_relational
+        has_compressed_canvas = any(getattr(c, "is_compressed_canvas", False) for c in unified_pool)
+        telemetry["stage5_mode"] = "layout" if has_compressed_canvas else "crops_only"
         pre_agg_boxes = getattr(unified_pool, "pre_aggregation_boxes", [])
         telemetry["final_crop_boxes_before_aggregate"] = pre_agg_boxes
         telemetry["stages_executed"].append("stage5_screening")
         if not is_quiet:
-            print(f"[Stage 5: Screening & Aggregation] Decision: Synthesized {len(unified_pool)} candidate crops from {len(pre_agg_boxes)} pre-aggregation bboxes (Branch A: {telemetry['branch_a_count']}, Branch B: {telemetry['branch_b_count']}) (Latency: {lat_s5}s)")
+            mode_desc = "Layout (relational=True)" if has_compressed_canvas else "Crops Only (relational=False)"
+            print(f"[Stage 5: Screening & Aggregation] Decision: Mode={mode_desc} | Synthesized {len(unified_pool)} candidate crops from {len(pre_agg_boxes)} pre-aggregation bboxes (Latency: {lat_s5}s)")
 
         # ---------------------------------------------------------------------
         # Stage 6: Foveated VLM Reading with 1.25x Padding & Deduplication
@@ -563,12 +643,15 @@ def get_mssearch_response(
     # Respect annotation['answer_type'] if specified (aligned with CVSearch perform_CVSearch.py)
     if 'answer_type' in annotation and engine.config is not None:
         anno_type = annotation['answer_type']
-        if anno_type in ["option_single", "multiple_choice", "mc", "Multiple Choice"]:
+        if anno_type in ["option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"]:
             engine.config.include_options_in_prompt = True
             engine.config.answer_type = anno_type
         elif anno_type == "free_form":
             engine.config.include_options_in_prompt = False
             engine.config.answer_type = "free_form"
+    elif options and engine.config is not None and getattr(engine.config, "answer_type", "free_form") != "free_form":
+        engine.config.include_options_in_prompt = True
+        engine.config.answer_type = "option_list"
 
     if 'query' in annotation and engine.config is not None:
         engine.config.query_meta = annotation['query']

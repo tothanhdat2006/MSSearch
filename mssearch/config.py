@@ -80,16 +80,25 @@ class MSSearchConfig:
     enable_retention_hard_cap: bool = True       # Cap total retained patches across all groups before Stage 5/6
     max_retained_patches: int = 32               # Global upper bound on candidate patches pool
     retention_ranking_metric: str = "confidence_hybrid"  # "confidence_hybrid", "entropy", "detection_first"
+    sam3_batch_size: int = 4                     # Batch size for batched SAM3 patch inference
+    vlm_gating_batch_size: int = 4               # Batch size for vectorized VLM existence and latent gating
+    enable_latent_repartition: bool = True       # Re-partition high-latent patches (c_latent >= threshold) locally in Stage 3 at 100% native resolution
+    max_latent_repartition_depth: int = 1        # Max recursion levels for latent re-partitioning
+    max_latent_repartition_patches_per_image: int = 2 # Max high-latent patches per image to re-partition
+    latent_repartition_threshold: float = 0.70   # Minimum latent confidence to trigger Stage 3 re-partitioning
 
     # -------------------------------------------------------------------------
     # Stage 5: Direct Unified Candidate Pool Aggregation & Spatial NMS
     # -------------------------------------------------------------------------
     siglip_model_name: str = "google/siglip-base-patch16-384"
     siglip_device: str = "cuda:0"                # Shared on GPU 0 with Qwen2.5-VL layers 0-14
+    enable_ios_containment_merging: bool = True  # Merge nested candidate boxes with IoS >= threshold (Area(A cap B) / Area(A) >= 0.95)
+    ios_containment_threshold: float = 0.95      # Intersection-over-Self (IoS) threshold for nested containment pruning
     enable_stage5_spatial_nms: bool = True       # Suppress duplicate/overlapping candidate crops on same image
     stage5_nms_iou_threshold: float = 0.60       # Spatial IoU threshold for candidate patch deduplication
     enable_spatial_compressed_canvas: bool = True # Excise empty rows/cols to form spatial compressed canvas for all samples
     spatial_compression_gutter_px: int = 28      # Visual separator gap (px) between non-contiguous compressed intervals
+    spatial_canvas_relational_only: bool = True  # If True, synthesizes spatial compressed canvas layout ONLY for cross-object relational questions; uses individual crops for single-object questions
 
     # -------------------------------------------------------------------------
     # Stage 6: Foveated VLM Reading, Dual-Scale & Collision-Free Consensus
@@ -107,7 +116,7 @@ class MSSearchConfig:
     # Multiple-Choice & Options Prompting Flag (e.g. HRBench)
     # -------------------------------------------------------------------------
     include_options_in_prompt: bool = False      # If True, appends candidate options block to reading prompt (like CVSearch option_single); if False, operates in open-ended free_form mode
-    answer_type: str = "free_form"               # "free_form" (default) or "option_single" / "multiple_choice"
+    answer_type: str = "free_form"               # "free_form" (default) or "option_single" / "option_list" / "multiple_choice"
 
     # -------------------------------------------------------------------------
     # Multi-Source / Multi-Answer Configuration (Annotation Charter Standard)

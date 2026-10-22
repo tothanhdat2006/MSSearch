@@ -235,13 +235,26 @@ def run_direct_global_assessment(
         # 2. Check threshold gate
         if conf > threshold:
             if getattr(config, "prompt_directed_final_answer", True):
-                prompt = (
-                    f"{question}\n\n"
-                    "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                    "<answer>None</answer>\n\n"
-                    "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
-                    "<answer>concise answer</answer>"
-                )
+                answer_mode = getattr(config, "answer_type", "free_form")
+                if answer_mode in ["option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"] or "Options:\n" in question:
+                    prompt = (
+                        f"{question}\n\n"
+                        "Select the best option from the choices above that answers the question.\n"
+                        "State ONLY the option letter and concise choice (e.g. <answer>(A)</answer> or <answer>A. choice text</answer>).\n"
+                        "Do NOT write conversational filler, reasoning, or explanations.\n"
+                        "If the target object or requested text/information is NOT clearly visible in this crop, output strictly:\n"
+                        "<answer>None</answer>\n\n"
+                        "Otherwise, output the option letter inside <answer>...</answer> tags:\n"
+                        "<answer>(A)</answer>"
+                    )
+                else:
+                    prompt = (
+                        f"{question}\n\n"
+                        "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
+                        "<answer>None</answer>\n\n"
+                        "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
+                        "<answer>concise answer</answer>"
+                    )
             else:
                 prompt = (
                     f"{question}\n\n"
@@ -454,13 +467,26 @@ def run_tool_based_fast_path(
         if existence_conf > config.fast_path_conf_threshold:
             # High existence confidence confirmed -> Generate final answer immediately!
             if getattr(config, "prompt_directed_final_answer", True):
-                answer_prompt = (
-                    f"{question}{text_coords_hint}\n\n"
-                    "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                    "<answer>None</answer>\n\n"
-                    "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
-                    "<answer>concise answer</answer>"
-                )
+                answer_mode = getattr(config, "answer_type", "free_form")
+                if answer_mode in ["option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"] or "Options:\n" in question:
+                    answer_prompt = (
+                        f"{question}{text_coords_hint}\n\n"
+                        "Select the best option from the choices above that answers the question.\n"
+                        "State ONLY the option letter and concise choice (e.g. <answer>(A)</answer> or <answer>A. choice text</answer>).\n"
+                        "Do NOT write conversational filler, reasoning, or explanations.\n"
+                        "If the target object or requested text/information is NOT clearly visible in this crop, output strictly:\n"
+                        "<answer>None</answer>\n\n"
+                        "Otherwise, output the option letter inside <answer>...</answer> tags:\n"
+                        "<answer>(A)</answer>"
+                    )
+                else:
+                    answer_prompt = (
+                        f"{question}{text_coords_hint}\n\n"
+                        "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
+                        "<answer>None</answer>\n\n"
+                        "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
+                        "<answer>concise answer</answer>"
+                    )
             else:
                 answer_prompt = (
                     f"{question}{text_coords_hint}\n\n"

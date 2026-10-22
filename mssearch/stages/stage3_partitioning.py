@@ -45,6 +45,8 @@ class BoundedPatch:
     entropy: float
     confidence_score: Optional[float] = None # Composite confidence score for Stage 4 hard capping
     siglip_score: Optional[float] = None     # Zero-shot SigLIP alignment score (max over active objects)
+    is_fine_grain: bool = False              # Flag indicating detection anchor or high-resolution zoom
+    is_recursive_child: bool = False         # Flag indicating child patch from Stage 4 -> Stage 3 local re-partition
 
 
 def compute_spatial_entropy(

@@ -163,6 +163,66 @@ class sam3_inference():
 
         return backbone_out, processed_results, text_id
 
+    @torch.inference_mode()
+    def batch_inference_multi_images(self, images, text_prompts, batch_size=4):
+        """
+        Batched inference across multiple image crops and queries.
+        Processes images in chunks of batch_size, collating them into a single SAM3 forward pass.
+        Returns a list of (backbone_out, processed_results, text_id) matching the length of images.
+        Falls back to single-image batch_inference() on any batching failure or OOM.
+        """
+        if not images:
+            return []
+
+        results = []
+        standard_t_ids = list(range(1, len(text_prompts) + 1))
+
+        for c_start in range(0, len(images), max(1, batch_size)):
+            chunk = images[c_start : c_start + max(1, batch_size)]
+            if len(chunk) == 1 or batch_size <= 1:
+                for img in chunk:
+                    try:
+                        results.append(self.batch_inference(img, text_prompts))
+                    except Exception:
+                        results.append((None, {}, []))
+                continue
+
+            try:
+                datapoints = []
+                chunk_meta = []
+                q_counter = 1
+                for img_local_idx, img in enumerate(chunk):
+                    dp = self.create_empty_datapoint()
+                    dp = self.set_image(dp, img)
+                    t_ids = []
+                    for idx, text in enumerate(text_prompts, start=1):
+                        dp, t_id = self.add_text_prompt(dp, text, q_counter)
+                        t_ids.append(t_id)
+                        q_counter += 1
+                    dp = self.transform(dp)
+                    datapoints.append(dp)
+                    chunk_meta.append(t_ids)
+
+                batch = collate(datapoints, dict_key="dummy")["dummy"]
+                batch = copy_data_to_device(batch, torch.device(self.device), non_blocking=True)
+                output, backbone_out = self.model(batch)
+                processed_results = self.postprocessor.process_results(output, batch.find_metadatas)
+
+                for img_local_idx, t_ids in enumerate(chunk_meta):
+                    img_results = {}
+                    for std_id, actual_tid in zip(standard_t_ids, t_ids):
+                        img_results[std_id] = processed_results.get(actual_tid, {})
+                    results.append((None, img_results, standard_t_ids))
+            except Exception:
+                # Safe fallback to sequential single-image execution for this chunk
+                for img in chunk:
+                    try:
+                        results.append(self.batch_inference(img, text_prompts))
+                    except Exception:
+                        results.append((None, {}, []))
+
+        return results
+
     def plot_results(self, image, processed_result, t_id):
         plot_results(image, processed_result[t_id])
 

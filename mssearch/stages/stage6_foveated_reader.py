@@ -369,6 +369,19 @@ def run_foveated_vlm_reading(
                     "Otherwise, output the exact attributes inside <answer>...</answer> tags:\n"
                     "<answer>concise answer</answer>"
                 )
+            elif answer_mode in ["option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"] or "Options:\n" in question:
+                prompt = (
+                    f"{question}{text_coords_hint}\n\n"
+                    "Carefully inspect this crop.\n"
+                    f"{bbox_note}"
+                    "Select the best option from the choices above that answers the question.\n"
+                    "State ONLY the option letter and concise choice (e.g. <answer>(A)</answer> or <answer>A. choice text</answer>).\n"
+                    "Do NOT write conversational filler, reasoning, or explanations.\n"
+                    "If the target object or requested information is NOT clearly visible in this crop, output strictly:\n"
+                    "<answer>None</answer>\n\n"
+                    "Otherwise, output the option letter inside <answer>...</answer> tags:\n"
+                    "<answer>(A)</answer>"
+                )
             else:
                 prompt = (
                     f"{question}{text_coords_hint}\n\n"

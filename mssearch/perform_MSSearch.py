@@ -93,7 +93,7 @@ def main():
     print(f"[MSSearch] Destination file: {args.answers_file}")
 
     # Build typed configuration dataclass
-    opt_in_prompt = args.include_options_in_prompt or (args.answer_type in ["option_single", "multiple_choice", "mc"])
+    opt_in_prompt = args.include_options_in_prompt or (args.answer_type in ["option_single", "option_list", "multiple_choice", "mc"])
     chosen_answer_type = "option_single" if args.include_options_in_prompt and args.answer_type == "free_form" else args.answer_type
 
     config = MSSearchConfig(

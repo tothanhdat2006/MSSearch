@@ -448,33 +448,74 @@ class ModelQwenVL:
         self,
         image_list: List[Image.Image],
         confidence_type: str = 'existence',
-        input_ele: str = '',
-        batch_size: int = 4
+        input_ele: Union[str, List[str]] = '',
+        batch_size: int = 4,
+        custom_prompt_templates: Optional[Union[str, List[str]]] = None
     ) -> List[float]:
         """
         Batch-evaluates VLM existence or latent logit probes across candidate images (batch size 4 or 8).
         Calculates normalized confidence in [-1, 1] via softmax over [Yes, No] logits.
+        Supports both homogeneous (string) and heterogeneous (list of strings) queries and prompt templates.
         """
         assert confidence_type in ['existence', 'latent', 'answering']
         if not image_list:
             return []
 
         prompt_tag = "search"
-        qs = self.prompts[prompt_tag]["pre_information_image1"] + self.prompts[prompt_tag][f"{confidence_type}_prompt"].format(input_ele)
-        prompt = self.get_prompt_from_qs(qs)
+        n_imgs = len(image_list)
+
+        # Build individual queries
+        if isinstance(input_ele, (list, tuple)):
+            queries = list(input_ele)
+            if len(queries) < n_imgs:
+                queries.extend([queries[-1] if queries else ""] * (n_imgs - len(queries)))
+        else:
+            queries = [str(input_ele)] * n_imgs
+
+        # Build templates
+        if custom_prompt_templates is not None:
+            if isinstance(custom_prompt_templates, (list, tuple)):
+                templates = list(custom_prompt_templates)
+                if len(templates) < n_imgs:
+                    templates.extend([templates[-1] if templates else None] * (n_imgs - len(templates)))
+            else:
+                templates = [custom_prompt_templates] * n_imgs
+        else:
+            templates = [None] * n_imgs
+
+        # Build pre-computed prompts for all items
+        all_prompts = []
+        for q_str, tmpl in zip(queries, templates):
+            if tmpl:
+                q_prompt = tmpl.format(q_str)
+            else:
+                q_prompt = self.prompts[prompt_tag][f"{confidence_type}_prompt"].format(q_str)
+            qs = self.prompts[prompt_tag]["pre_information_image1"] + q_prompt
+            all_prompts.append(self.get_prompt_from_qs(qs))
 
         results: List[float] = []
         for i in range(0, len(image_list), max(1, batch_size)):
             chunk = image_list[i : i + max(1, batch_size)]
+            chunk_prompts = all_prompts[i : i + max(1, batch_size)]
+            chunk_queries = queries[i : i + max(1, batch_size)]
+            chunk_templates = templates[i : i + max(1, batch_size)]
+
             if len(chunk) == 1 or batch_size <= 1:
-                for img in chunk:
-                    results.append(self.get_confidence_value(node=None, image_pil=img, confidence_type=confidence_type, input_ele=input_ele))
+                for img, q_str, tmpl in zip(chunk, chunk_queries, chunk_templates):
+                    orig_prompt = None
+                    if tmpl and hasattr(self, "prompts") and "search" in self.prompts:
+                        orig_prompt = self.prompts["search"].get(f"{confidence_type}_prompt")
+                        self.prompts["search"][f"{confidence_type}_prompt"] = tmpl
+                    try:
+                        results.append(self.get_confidence_value(node=None, image_pil=img, confidence_type=confidence_type, input_ele=q_str))
+                    finally:
+                        if orig_prompt is not None:
+                            self.prompts["search"][f"{confidence_type}_prompt"] = orig_prompt
                 continue
 
             try:
-                prompts = [prompt] * len(chunk)
                 model_inputs = self.processor(
-                    text=prompts,
+                    text=chunk_prompts,
                     images=chunk,
                     return_tensors="pt",
                     padding=True,
@@ -488,8 +529,16 @@ class ModelQwenVL:
                 results.extend(confidences)
             except Exception:
                 # Safe single-item fallback if batch forward pass fails
-                for img in chunk:
-                    results.append(self.get_confidence_value(node=None, image_pil=img, confidence_type=confidence_type, input_ele=input_ele))
+                for img, q_str, tmpl in zip(chunk, chunk_queries, chunk_templates):
+                    orig_prompt = None
+                    if tmpl and hasattr(self, "prompts") and "search" in self.prompts:
+                        orig_prompt = self.prompts["search"].get(f"{confidence_type}_prompt")
+                        self.prompts["search"][f"{confidence_type}_prompt"] = tmpl
+                    try:
+                        results.append(self.get_confidence_value(node=None, image_pil=img, confidence_type=confidence_type, input_ele=q_str))
+                    finally:
+                        if orig_prompt is not None:
+                            self.prompts["search"][f"{confidence_type}_prompt"] = orig_prompt
 
         return results
 
