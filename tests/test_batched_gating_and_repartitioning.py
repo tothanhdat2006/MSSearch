@@ -324,28 +324,14 @@ class TestRelationalLayoutConditioning(unittest.TestCase):
         loaded_cfg = MSSearchConfig.load_json(default_cfg_path)
         self.assertIsInstance(loaded_cfg, MSSearchConfig)
 
-        # Test budget presets
-        budgets = {}
-        for b_name in ["small", "medium", "large"]:
-            b_path = os.path.join(hrbench_dir, f"budget_{b_name}.json")
-            self.assertTrue(os.path.exists(b_path))
-            with open(b_path, "r", encoding="utf-8") as f:
-                b_data = json.load(f)
-            budgets[b_name] = b_data
-            for k in b_data:
-                self.assertIn(k, cfg_fields)
-
-        # Monotonicity checks across budget tiers
-        for metric in [
-            "max_patches_per_image",
-            "max_sam3_eval_patches",
-            "max_latent_evals",
-            "max_patches_per_detected_group",
-            "max_retained_patches",
-            "max_latent_repartition_patches_per_image"
-        ]:
-            self.assertLessEqual(budgets["small"][metric], budgets["medium"][metric])
-            self.assertLessEqual(budgets["medium"][metric], budgets["large"][metric])
+        # Test budget preset (budget_large is the default and only budget preset)
+        b_path = os.path.join(hrbench_dir, "budget_large.json")
+        self.assertTrue(os.path.exists(b_path))
+        with open(b_path, "r", encoding="utf-8") as f:
+            b_data = json.load(f)
+        for k in b_data:
+            self.assertIn(k, cfg_fields)
+            self.assertEqual(default_data[k], b_data[k])
 
 
 if __name__ == "__main__":
