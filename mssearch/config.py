@@ -127,6 +127,12 @@ class MSSearchConfig:
     query_meta: Optional[dict] = None            # Optional structured query metadata: {'target_attribute_type': ..., 'condition_attribute': ..., 'target_object': ...}
 
     # -------------------------------------------------------------------------
+    # Visual Pixel Budget & Resolution Controls
+    # -------------------------------------------------------------------------
+    min_pixels: int = 3136                       # Corresponds to 56 x 56 minimum patch resolution
+    max_pixels: int = 12845056                   # Default 12,845,056 (~12.8M pixels, roughly 3584 x 3584); 4,194,304 (~4.2M pixels, 2048 x 2048) for 32B models
+
+    # -------------------------------------------------------------------------
     # Diagnostic & Logging Controls
     # -------------------------------------------------------------------------
     verbose: bool = True                         # Master verbose toggle (set False to silence all sub-stage debug prints)

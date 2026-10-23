@@ -644,6 +644,20 @@ def main():
         help="Logging level: 'summary' (only print final decision of each stage), 'verbose' (full internal loops), 'quiet' (minimal stdout).",
     )
 
+    # Visual Pixel Budget Arguments
+    parser.add_argument(
+        "--min_pixels",
+        type=int,
+        default=3136,
+        help="Minimum patch resolution in pixels (default: 3136, corresponds to 56x56 minimum patch resolution).",
+    )
+    parser.add_argument(
+        "--max_pixels",
+        type=int,
+        default=None,
+        help="Maximum image resolution in pixels (default: 12845056, ~12.8M pixels, 3584x3584; overridden to 4194304, ~4.2M pixels, 2048x2048 for 32B checkpoints to prevent OOM).",
+    )
+
     # Key Pipeline Hyperparameter & Budget Overrides
     parser.add_argument("--max_patches_per_image", type=int, default=None, help="Stage 3 budget: max patches per image.")
     parser.add_argument("--max_partition_depth", type=int, default=None, help="Stage 3 budget: max recursion depth.")
@@ -871,12 +885,23 @@ def main():
     if ModelQwenVL is None:
         raise ImportError("ModelQwenVL dependencies not installed; required for VLM evaluation.")
 
+    # Resolve visual pixel budget
+    if args.max_pixels is not None:
+        resolved_max_pixels = args.max_pixels
+    elif "32b" in str(args.qwen_path).lower():
+        resolved_max_pixels = 4194304
+    else:
+        resolved_max_pixels = 12845056
+
     print(f"[Loading] Qwen2.5-VL from '{args.qwen_path}' on {qwen_device}...")
+    print(f"  • Pixel Budget: min_pixels={args.min_pixels} (56x56) | max_pixels={resolved_max_pixels} ({'32B OOM-guard' if resolved_max_pixels == 4194304 else 'full-scale'})")
     qwen_engine = ModelQwenVL(
         model_path=args.qwen_path,
         device=qwen_device,
         torch_dtype=torch.float16 if "cuda" in qwen_device else torch.float32,
         patch_scale=1.2,
+        min_pixels=args.min_pixels,
+        max_pixels=resolved_max_pixels,
     )
 
     nlp_parser = None

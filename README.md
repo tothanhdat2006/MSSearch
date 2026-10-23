@@ -149,13 +149,29 @@ Launch [`notebooks/run_mssearch_2xt4_dual_track.ipynb`](notebooks/run_mssearch_2
 - **Track B**: Benchmarks on the Multi-Source Visual Search dataset ($K>1, N=20$ candidate images per scene).
 - Includes 3-sample smoke tests, latency profiling, and automated 4-panel publication figure generation.
 
-### 6.3 Local Visual Stage-by-Stage Diagnostics
+### 6.3 Local Visual Stage-by-Stage Diagnostics (HRBench)
 Execute the headless visual diagnostic suite on HRBench:
 ```bash
-bash pilot/multisource_hrbench/run_debug.sh --num_samples 5 --save_visuals all
+cd pilot/multisource_hrbench
+bash run_debug.sh --num_samples 5 --save_visuals all
 ```
 
-### 6.4 Command Line Batch Evaluation
+### 6.4 Full Dataset Benchmark Evaluation
+Run end-to-end multi-stage visual search across all 999 samples with crash-resilient auto-resume:
+```bash
+cd pilot/multisource_hrbench
+bash run_all.sh
+```
+
+### 6.5 Direct Vanilla VLM Baseline Benchmark
+Evaluate vanilla direct VLM answering without visual search or SAM3:
+```bash
+cd pilot/multisource_hrbench
+bash run_baseline.sh                     # Interleaved multi-image baseline (N candidate images)
+bash run_baseline.sh --direct_target_only # Single-image vanilla baseline (N=1 target only)
+```
+
+### 6.6 Command Line Batch Evaluation
 ```bash
 python -m mssearch.perform_MSSearch \
     --annotation-path /path/to/annotations.json \
@@ -210,6 +226,10 @@ config = MSSearchConfig(
     # Stage 5: Direct Unified Candidate Pool Aggregation
     # Stage 5 Branch B SigLIP screening purged; surviving Stage 4 patches pass directly
 
+    # Visual Pixel Budget & Resolution Controls
+    min_pixels=3136,                       # 56 x 56 minimum patch resolution floor
+    max_pixels=12845056,                   # 12.8M pixels (~3584 x 3584) default; auto-capped to 4194304 (2048 x 2048) for 32B checkpoints
+
     # Stage 6: Foveated VLM Reading & Multi-Answer Consolidation
     bbox_expansion_factor=1.25,            # Independent 25% margin padding per crop
     enable_early_consensus_exit=False,     # Deactivated in multi_answer_mode to read all evidence
@@ -223,5 +243,21 @@ config = MSSearchConfig(
 
 ---
 
-## 8. Citation & Acknowledgements
+## 8. Visual Pixel Budget & Budget Presets
+
+### Visual Pixel Resolution Controls
+Qwen2.5-VL native resolution is governed by `min_pixels` and `max_pixels`:
+- **`min_pixels: 3136`**: Corresponds to $56 \times 56$ minimum patch resolution. Guarantees fine OCR digits and small signs are upscaled to preserve character legibility.
+- **`max_pixels: 12,845,056` (~12.8M pixels, roughly $3584 \times 3584$)**: Default ceiling for 7B models (`Qwen2.5-VL-7B-Instruct`), supporting ultra-high-resolution ingestion.
+- **`max_pixels: 4,194,304` (~4.2M pixels, $2048 \times 2048$)**: Automatically overridden for 32B checkpoints (`Qwen2.5-VL-32B-Instruct`) to prevent CUDA OOM from excessive SDPA self-attention memory allocations during multi-image forward passes.
+
+### Budget Presets (`--budget`)
+Control throughput vs accuracy trade-offs:
+- **`--budget small`**: Fastest throughput (`max_sam3_eval_patches=16`, `max_latent_evals=6`, `max_retained_patches=24`).
+- **`--budget medium`**: Recommended balanced sweet spot (`max_sam3_eval_patches=32`, `max_latent_evals=12`, `max_retained_patches=48`).
+- **`--budget large`**: Maximum visual search depth (`max_sam3_eval_patches=64`, `max_latent_evals=20`, `max_retained_patches=80`).
+
+---
+
+## 9. Citation & Acknowledgements
 Built upon architectural principles from SAM3, SigLIP, and Qwen2.5-VL for scalable high-resolution visual question answering.

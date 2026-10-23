@@ -62,10 +62,13 @@ class ModelQwenVL:
         self.model.eval()
         self.device = self.model.device
 
-        # Tesla T4 Safety Shield: Cap max visual pixels to 1.05M (~1,300 tokens)
-        # Unbounded 12.8M pixels causes SDPA attention buffers to exceed 16GB (e.g. 27.79 GiB OOM on 8K)
-        max_pixels = kwargs.get("max_pixels", 1048576)
+        # Visual pixel budget:
+        # - min_pixels: 3136 (corresponds to 56 x 56 minimum patch resolution).
+        # - max_pixels: Default 12,845,056 (~12.8M pixels, roughly 3584 x 3584).
+        #   Overridden to 4,194,304 (~4.2M pixels, 2048 x 2048) for 32B checkpoints to prevent OOM.
         min_pixels = kwargs.get("min_pixels", 3136)
+        default_max_pixels = 4194304 if "32b" in str(model_path).lower() else 12845056
+        max_pixels = kwargs.get("max_pixels", default_max_pixels)
         print("[ModelQwenVL] max_pixels capped at:", max_pixels)
         print("[ModelQwenVL] min_pixels:", min_pixels)
         self.processor.image_processor.max_pixels = max_pixels

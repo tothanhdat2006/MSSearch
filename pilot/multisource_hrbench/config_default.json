@@ -75,6 +75,8 @@
   "scale_budgets_by_num_images": true,
   "enable_query_adaptive_halting": true,
   "query_meta": null,
+  "min_pixels": 3136,
+  "max_pixels": 12845056,
   "verbose": true,
   "stage_summary_only": true,
   "log_level": "summary"
