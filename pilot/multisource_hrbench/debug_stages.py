@@ -709,9 +709,18 @@ def main():
     parser.add_argument("--sam3_group_det_threshold", type=float, default=None)
     parser.add_argument("--enable_latent_gating", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
     parser.add_argument("--latent_confidence_threshold", type=float, default=None)
+    parser.add_argument("--sam3_batch_size", type=int, default=None, help="Batch size for SAM3 patch inference.")
+    parser.add_argument("--vlm_gating_batch_size", type=int, default=None, help="Batch size for vectorized VLM gating.")
+    parser.add_argument("--enable_latent_repartition", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
+    parser.add_argument("--max_latent_repartition_depth", type=int, default=None)
+    parser.add_argument("--max_latent_repartition_patches_per_image", type=int, default=None)
+    parser.add_argument("--latent_repartition_threshold", type=float, default=None)
+    parser.add_argument("--enable_ios_containment_merging", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
+    parser.add_argument("--ios_containment_threshold", type=float, default=None)
     parser.add_argument("--enable_stage5_spatial_nms", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
     parser.add_argument("--stage5_nms_iou_threshold", type=float, default=None)
     parser.add_argument("--enable_spatial_compressed_canvas", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
+    parser.add_argument("--spatial_canvas_relational_only", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
     parser.add_argument("--enable_early_consensus_exit", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
 
     args, unknown = parser.parse_known_args()
@@ -771,9 +780,18 @@ def main():
         "sam3_group_det_threshold",
         "enable_latent_gating",
         "latent_confidence_threshold",
+        "sam3_batch_size",
+        "vlm_gating_batch_size",
+        "enable_latent_repartition",
+        "max_latent_repartition_depth",
+        "max_latent_repartition_patches_per_image",
+        "latent_repartition_threshold",
+        "enable_ios_containment_merging",
+        "ios_containment_threshold",
         "enable_stage5_spatial_nms",
         "stage5_nms_iou_threshold",
         "enable_spatial_compressed_canvas",
+        "spatial_canvas_relational_only",
         "enable_early_consensus_exit",
     ]
 

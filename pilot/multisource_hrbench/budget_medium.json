@@ -6,5 +6,7 @@
   "max_patches_per_detected_group": 4,
   "max_patches_per_latent_group": 1,
   "max_retained_patches": 48,
-  "enable_early_consensus_exit": false
+  "enable_early_consensus_exit": false,
+  "max_latent_repartition_patches_per_image": 2,
+  "max_latent_repartition_depth": 1
 }
