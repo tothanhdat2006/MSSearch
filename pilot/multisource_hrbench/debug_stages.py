@@ -258,6 +258,10 @@ def execute_single_sample(
 
     print(f"[Result] Predicted: '{pred_letter}' vs GT: '{gt_letter}' -> {res_tag} | Primary: '{primary_answer}' | Route: {route_selected} | Latency: {total_latency}s")
 
+    is_cross_object = bool(resp.get("is_cross_object", telemetry.get("is_cross_object", False)))
+    is_relational = bool(resp.get("is_relational", telemetry.get("is_relational", False)))
+    stage5_mode = str(resp.get("stage5_mode", telemetry.get("stage5_mode", "crops_only")))
+
     record = {
         "sample_index": sample_index,
         "question": real_question,
@@ -272,6 +276,9 @@ def execute_single_sample(
         "route_selected": route_selected,
         "latency_sec": total_latency,
         "timings": telemetry.get("timings_sec", {}),
+        "is_cross_object": is_cross_object,
+        "is_relational": is_relational,
+        "stage5_mode": stage5_mode,
         "final_crop_boxes_before_aggregate": final_crop_boxes_before_aggregate,
         "stage6_patch_boxes": resp.get("stage6_patch_boxes", []),
     }

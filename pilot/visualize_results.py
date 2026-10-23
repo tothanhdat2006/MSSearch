@@ -235,6 +235,57 @@ def discover_hrbench_dir(preferred_path: Optional[str] = None) -> Tuple[str, str
     return resolved_base, annotation_path
 
 
+def is_sample_cross_object(rec: Dict[str, Any]) -> bool:
+    """
+    Determines whether a sample used cross-object relational layout mode or single-object crops-only mode.
+    Prioritizes authoritative flags saved in the record, with fallback heuristics for legacy logs.
+    """
+    # 1. Authoritative flags saved in results JSONL
+    if "is_cross_object" in rec:
+        return bool(rec["is_cross_object"])
+    if "is_relational" in rec:
+        return bool(rec["is_relational"])
+    s5_mode = rec.get("stage5_mode")
+    if s5_mode == "layout":
+        return True
+    elif s5_mode == "crops_only":
+        return False
+
+    # 2. Check telemetry dict if nested
+    telemetry = rec.get("telemetry", {})
+    if isinstance(telemetry, dict):
+        if "is_cross_object" in telemetry:
+            return bool(telemetry["is_cross_object"])
+        if "is_relational" in telemetry:
+            return bool(telemetry["is_relational"])
+        if telemetry.get("stage5_mode") == "layout":
+            return True
+        elif telemetry.get("stage5_mode") == "crops_only":
+            return False
+
+    # 3. Fallback heuristic strictly for legacy results generated prior to flag persistence
+    q = rec.get("question", "").lower()
+    single_obj_kws = [
+        "phone number", "registration number", "license plate",
+        "color of the", "color are the", "what color is", "title of the", "name of the",
+        "brand of the", "what is written on", "text on the", "text written on",
+        "number written on", "number displayed on", "what number is", "what letter is",
+        "how many", "what type of", "what kind of", "what model is"
+    ]
+    if any(kw in q for kw in single_obj_kws):
+        return False
+
+    rel_kws = [
+        "left of", "right of", "above the", "below the", "under the",
+        "next to", "in front of", "behind the", "between", "which side of",
+        "closer to", "farther from", "higher than", "lower than"
+    ]
+    if any(kw in q for kw in rel_kws):
+        return True
+
+    return False
+
+
 def reconstruct_candidate_pool(
     sample_index: int,
     hrbench_data: List[Dict[str, Any]],
@@ -333,11 +384,16 @@ def draw_header_card(
     primary_ans = rec.get("primary_answer", "N/A")
     ev_imgs = rec.get("evidence_images", [])
 
+    is_cross = is_sample_cross_object(rec)
+    mode_text = "Mode: Layout (Cross-Object)" if is_cross else "Mode: Crops Only (Single-Object)"
+    mode_col = PALETTE["accent_gold"] if is_cross else PALETTE["correct_green"]
+
     pred_color = PALETTE["correct_green"] if is_correct else PALETTE["incorrect_red"]
     draw.text((pad_x, curr_y), f"Ground Truth: [{gt}]", fill=PALETTE["text_muted"], font=font_main)
     draw.text((pad_x + 180, curr_y), f"Predicted: [{pred}]", fill=pred_color, font=font_bold)
     draw.text((pad_x + 360, curr_y), f"Primary Answer: '{primary_ans}'", fill=PALETTE["text_main"], font=font_main)
-    draw.text((pad_x + 820, curr_y), f"Evidence Images: {ev_imgs}", fill=PALETTE["accent_gold"], font=font_main)
+    draw.text((pad_x + 800, curr_y), f"Evidence Images: {ev_imgs}", fill=PALETTE["accent_cyan"], font=font_main)
+    draw.text((pad_x + 1040, curr_y), f"[{mode_text}]", fill=mode_col, font=font_bold)
     curr_y += 28
 
     # Stage Timings Chips
@@ -454,50 +510,89 @@ def visualize_sample(
             "num_boxes": len(img_boxes)
         })
 
-    # 3. Render Row 2: Exact Stage 6 Spatial Compressed Layouts
+    # 3. Render Row 2: Exact Stage 6 Inputs (Spatial Compressed Canvas vs Native Crops Only)
+    is_cross_object = is_sample_cross_object(rec)
     stage6_layouts = []
     layout_dir = os.path.join(output_dir, "stage6_layouts")
     if not os.path.exists(layout_dir):
         os.makedirs(layout_dir, exist_ok=True)
 
     layout_filenames = []
-    # Identify images that produced candidate patches for Stage 6
-    for idx, item in enumerate(pool_items):
-        img_boxes = boxes_by_img.get(idx, [])
-        if not img_boxes:
-            continue
+    if is_cross_object:
+        # Cross-Object Mode: Synthesize exact continuous-coordinate compressed canvas per image
+        for idx, item in enumerate(pool_items):
+            img_boxes = boxes_by_img.get(idx, [])
+            if not img_boxes:
+                continue
 
-        raw_boxes = [tuple(b["box"]) for b in img_boxes]
-        canvas_img, remapped_boxes = create_spatial_compressed_canvas(
-            image=item["image"],
-            boxes=raw_boxes,
-            gutter_px=28
+            raw_boxes = [tuple(b["box"]) for b in img_boxes]
+            canvas_img, remapped_boxes = create_spatial_compressed_canvas(
+                image=item["image"],
+                boxes=raw_boxes,
+                gutter_px=28
+            )
+
+            annotated_layout = canvas_img.copy()
+            draw_layout = ImageDraw.Draw(annotated_layout)
+            for r_box in remapped_boxes:
+                draw_layout.rectangle(r_box, outline=PALETTE["box_gold"], width=2)
+
+            layout_fname = f"layout_s{sample_index:03d}_img{idx}.png"
+            safe_save_image(canvas_img, os.path.join(layout_dir, layout_fname))
+            layout_filenames.append(layout_fname)
+
+            s_scale = min(680 / annotated_layout.width, 480 / annotated_layout.height)
+            lw = max(10, int(round(annotated_layout.width * s_scale)))
+            lh = max(10, int(round(annotated_layout.height * s_scale)))
+            downscaled_layout = annotated_layout.resize((lw, lh), Image.Resampling.BILINEAR)
+
+            stage6_layouts.append({
+                "type": "canvas",
+                "img_idx": idx,
+                "image": downscaled_layout,
+                "raw_size": canvas_img.size,
+                "num_patches": len(raw_boxes),
+                "is_evidence": idx in evidence_images,
+                "is_target": item["is_target"]
+            })
+    else:
+        # Single-Object Mode: Native-resolution candidate crops ONLY (no grey voids)
+        all_candidate_boxes = list(rec.get("final_crop_boxes_before_aggregate", []))
+        all_candidate_boxes.sort(
+            key=lambda b: (b.get("score", 0.0), b.get("entropy", 0.0)),
+            reverse=True
         )
 
-        # Draw gold outline around remapped patch boundaries on canvas
-        annotated_layout = canvas_img.copy()
-        draw_layout = ImageDraw.Draw(annotated_layout)
-        for r_box in remapped_boxes:
-            draw_layout.rectangle(r_box, outline=PALETTE["box_gold"], width=2)
+        for c_idx, b_info in enumerate(all_candidate_boxes[:6]):
+            src_idx = b_info["img_idx"]
+            orig_img = pool_items[src_idx]["image"]
+            b_coords = tuple(b_info["box"])
+            x1, y1, x2, y2 = b_coords
+            cw = max(1, x2 - x1)
+            ch = max(1, y2 - y1)
+            if cw >= 8 and ch >= 8:
+                crop_img = orig_img.crop((x1, y1, x2, y2))
+                crop_fname = f"crop_s{sample_index:03d}_c{c_idx}_img{src_idx}.png"
+                safe_save_image(crop_img, os.path.join(layout_dir, crop_fname))
+                layout_filenames.append(crop_fname)
 
-        layout_fname = f"layout_s{sample_index:03d}_img{idx}.png"
-        safe_save_image(canvas_img, os.path.join(layout_dir, layout_fname))
-        layout_filenames.append(layout_fname)
+                c_scale = min(420 / crop_img.width, 360 / crop_img.height, 1.0)
+                cw_scaled = max(10, int(round(crop_img.width * c_scale)))
+                ch_scaled = max(10, int(round(crop_img.height * c_scale)))
+                downscaled_crop = crop_img.resize((cw_scaled, ch_scaled), Image.Resampling.LANCZOS)
 
-        # Scale layout image for composite panel display (max 680x480)
-        s_scale = min(680 / annotated_layout.width, 480 / annotated_layout.height)
-        lw = max(10, int(round(annotated_layout.width * s_scale)))
-        lh = max(10, int(round(annotated_layout.height * s_scale)))
-        downscaled_layout = annotated_layout.resize((lw, lh), Image.Resampling.BILINEAR)
-
-        stage6_layouts.append({
-            "img_idx": idx,
-            "image": downscaled_layout,
-            "raw_size": canvas_img.size,
-            "num_patches": len(raw_boxes),
-            "is_evidence": idx in evidence_images,
-            "is_target": item["is_target"]
-        })
+                stage6_layouts.append({
+                    "type": "crop",
+                    "img_idx": src_idx,
+                    "image": downscaled_crop,
+                    "raw_size": crop_img.size,
+                    "num_patches": 1,
+                    "is_evidence": src_idx in evidence_images,
+                    "is_target": pool_items[src_idx]["is_target"],
+                    "box": b_coords,
+                    "score": b_info.get("score", 0.0),
+                    "crop_rank": c_idx + 1
+                })
 
     # 4. Prepare Row 3: Detail Zoom Insets from evidence regions
     zoom_crops = []
@@ -605,13 +700,19 @@ def visualize_sample(
 
         curr_x += pw + margin
 
-    # 3. Section 2: Stage 6 Input Layout Row (Exact Canvas Fed to Reader VLM)
+    # 3. Section 2: Stage 6 Input Row (Exact Canvas Fed to Reader VLM)
     next_y = curr_y + panels_h + 16
     if stage6_layouts:
+        row2_title = (
+            "Row 2: Exact Layout Fed to Stage 6 Reader (Spatial Compressed Canvas — Cross-Object Mode)"
+            if is_cross_object else
+            "Row 2: Exact Crops Fed to Stage 6 Reader (Native Resolution Crops Only — Single-Object Mode)"
+        )
+        row2_col = PALETTE["accent_gold"] if is_cross_object else PALETTE["correct_green"]
         draw.text(
             (margin, next_y),
-            "Row 2: Exact Layout Fed to Stage 6 Reader (Spatial Compressed Canvas / Direct Crop)",
-            fill=PALETTE["accent_gold"],
+            row2_title,
+            fill=row2_col,
             font=font_sec
         )
         s6_y = next_y + 32
@@ -625,18 +726,35 @@ def visualize_sample(
             draw.rounded_rectangle(s6_card, radius=8, fill=PALETTE["card_bg"], outline=PALETTE["card_border"], width=1)
 
             # Badge & Header
-            draw.rounded_rectangle([lx + 10, s6_y + 8, lx + 120, s6_y + 30], radius=4, fill=PALETTE["stage6_badge"])
-            draw.text((lx + 16, s6_y + 11), "STAGE 6 VLM FEED", fill=PALETTE["text_main"], font=get_font(11, bold=True))
+            is_canvas = (s6.get("type", "canvas") == "canvas")
+            badge_text = "STAGE 6 VLM FEED: CANVAS" if is_canvas else f"STAGE 6 CROP #{s6.get('crop_rank', 1)}"
+            badge_w = 150 if is_canvas else 125
+            draw.rounded_rectangle([lx + 10, s6_y + 8, lx + badge_w, s6_y + 30], radius=4, fill=PALETTE["stage6_badge"])
+            draw.text((lx + 14, s6_y + 11), badge_text, fill=PALETTE["text_main"], font=get_font(11, bold=True))
 
             role_str = "TARGET" if s6["is_target"] else "DISTRACTOR"
             role_col = PALETTE["correct_green"] if s6["is_target"] else PALETTE["text_muted"]
-            draw.text((lx + 130, s6_y + 10), f"Image {s6['img_idx']} ({role_str})", fill=role_col, font=font_panel_title)
+            title_text = f"Image {s6['img_idx']} ({role_str})"
+            title_x = lx + badge_w + 10
+            draw.text((title_x, s6_y + 10), title_text, fill=role_col, font=font_panel_title)
 
-            meta_str = f"Canvas: {s6['raw_size'][0]}x{s6['raw_size'][1]} | {s6['num_patches']} patches compressed (28px gutters)"
-            draw.text((lx + 270, s6_y + 12), meta_str, fill=PALETTE["text_muted"], font=font_panel_sub)
+            # Avoid text overlap: calculate title width dynamically
+            try:
+                t_bbox = font_panel_title.getbbox(title_text)
+                title_w = t_bbox[2] - t_bbox[0]
+            except Exception:
+                title_w = len(title_text) * 9
+            meta_x = title_x + title_w + 12
+
+            if is_canvas:
+                meta_str = f"Canvas: {s6['raw_size'][0]}x{s6['raw_size'][1]} | {s6['num_patches']} patches compressed (28px gutters)"
+            else:
+                meta_str = f"Native Crop: {s6['raw_size'][0]}x{s6['raw_size'][1]} | s={s6.get('score', 1.0):.1f}"
+            draw.text((meta_x, s6_y + 12), meta_str, fill=PALETTE["text_muted"], font=font_panel_sub)
 
             canvas.paste(l_img, (lx + 8, s6_y + 40))
-            draw.rectangle([lx + 7, s6_y + 39, lx + 8 + lw, s6_y + 40 + lh], outline=PALETTE["box_gold"], width=2)
+            border_col = PALETTE["box_gold"] if is_canvas else PALETTE["accent_cyan"]
+            draw.rectangle([lx + 7, s6_y + 39, lx + 8 + lw, s6_y + 40 + lh], outline=border_col, width=2)
 
             lx += lw + margin
 
@@ -714,7 +832,8 @@ def generate_html_gallery(
             "route": r.get("route_selected", ""),
             "latency": round(r.get("latency_sec", 0.0), 2),
             "image": img_file,
-            "layouts": layouts
+            "layouts": layouts,
+            "is_cross_object": is_sample_cross_object(r),
         })
 
     json_data = json.dumps(html_records)
@@ -891,6 +1010,8 @@ def generate_html_gallery(
     <button class="btn active" onclick="setFilter('all')">All ({total})</button>
     <button class="btn" onclick="setFilter('correct')">Correct ({correct_count})</button>
     <button class="btn" onclick="setFilter('incorrect')">Incorrect ({total - correct_count})</button>
+    <button class="btn" onclick="setFilter('cross')">Cross-Object</button>
+    <button class="btn" onclick="setFilter('single')">Single-Object</button>
     <input type="text" id="searchInput" placeholder="Search question, sample #, or answer..." oninput="renderGallery()">
   </div>
 
@@ -920,6 +1041,8 @@ def generate_html_gallery(
       const filtered = data.filter(d => {{
         if (currentFilter === 'correct' && !d.is_correct) return false;
         if (currentFilter === 'incorrect' && d.is_correct) return false;
+        if (currentFilter === 'cross' && !d.is_cross_object) return false;
+        if (currentFilter === 'single' && d.is_cross_object) return false;
         if (query) {{
           const matchIdx = d.index.toString().includes(query);
           const matchQ = d.question.toLowerCase().includes(query);
@@ -937,9 +1060,11 @@ def generate_html_gallery(
 
         let layoutBadges = '';
         if (d.layouts && d.layouts.length > 0) {{
-          layoutBadges = '<span style="color:var(--muted)">Stage 6 Layouts:</span> ';
+          const feedLabel = d.is_cross_object ? 'Stage 6 Canvas Layouts:' : 'Stage 6 Native Crops:';
+          layoutBadges = `<span style="color:var(--muted)">${{feedLabel}}</span> `;
           d.layouts.forEach((l, i) => {{
-            layoutBadges += `<span class="badge layout" onclick="event.stopPropagation(); openModal('stage6_layouts/${{l}}')">Layout #${{i}}</span> `;
+            const bName = d.is_cross_object ? `Layout #${{i}}` : `Crop #${{i}}`;
+            layoutBadges += `<span class="badge layout" onclick="event.stopPropagation(); openModal('stage6_layouts/${{l}}')">${{bName}}</span> `;
           }});
         }}
 

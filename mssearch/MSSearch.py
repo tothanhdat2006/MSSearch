@@ -217,6 +217,9 @@ class MultiSourceSearchEngine:
                         for idx in harvested_evidence_images
                     ]
                     telemetry["final_crop_boxes_before_aggregate"] = pre_agg_boxes
+                    telemetry["is_cross_object"] = False
+                    telemetry["is_relational"] = False
+                    telemetry["stage5_mode"] = "direct_answer"
                     telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
 
                     from .stages.stage6_foveated_reader import split_attribute_answer
@@ -237,6 +240,9 @@ class MultiSourceSearchEngine:
                         "evidence_images": harvested_evidence_images,
                         "stage6_patch_boxes": harvested_patch_boxes,
                         "final_crop_boxes_before_aggregate": pre_agg_boxes,
+                        "is_cross_object": False,
+                        "is_relational": False,
+                        "stage5_mode": "direct_answer",
                         "extractions": harvested_extractions,
                         "telemetry": telemetry
                     }
@@ -335,6 +341,9 @@ class MultiSourceSearchEngine:
                     for idx in harvested_evidence_images
                 ]
                 telemetry["final_crop_boxes_before_aggregate"] = pre_agg_boxes
+                telemetry["is_cross_object"] = False
+                telemetry["is_relational"] = False
+                telemetry["stage5_mode"] = "fast_path"
                 telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
 
                 from .stages.stage6_foveated_reader import split_attribute_answer
@@ -355,6 +364,9 @@ class MultiSourceSearchEngine:
                     "evidence_images": harvested_evidence_images,
                     "stage6_patch_boxes": harvested_patch_boxes,
                     "final_crop_boxes_before_aggregate": pre_agg_boxes,
+                    "is_cross_object": False,
+                    "is_relational": False,
+                    "stage5_mode": "fast_path",
                     "extractions": harvested_extractions,
                     "telemetry": telemetry
                 }
@@ -505,9 +517,12 @@ class MultiSourceSearchEngine:
         telemetry["num_unified_crops"] = len(unified_pool)
         telemetry["branch_a_count"] = sum(1 for c in unified_pool if "Branch A" in c.source_branch)
         telemetry["branch_b_count"] = sum(1 for c in unified_pool if "Branch B" in c.source_branch)
-        telemetry["is_relational"] = is_relational
+        is_cross_obj = bool(getattr(unified_pool, "is_cross_object", is_relational if is_relational is not None else False))
+        telemetry["is_relational"] = is_cross_obj
+        telemetry["is_cross_object"] = is_cross_obj
         has_compressed_canvas = any(getattr(c, "is_compressed_canvas", False) for c in unified_pool)
-        telemetry["stage5_mode"] = "layout" if has_compressed_canvas else "crops_only"
+        stage5_mode_val = "layout" if has_compressed_canvas else "crops_only"
+        telemetry["stage5_mode"] = stage5_mode_val
         pre_agg_boxes = getattr(unified_pool, "pre_aggregation_boxes", [])
         telemetry["final_crop_boxes_before_aggregate"] = pre_agg_boxes
         telemetry["stages_executed"].append("stage5_screening")
@@ -605,6 +620,9 @@ class MultiSourceSearchEngine:
             "evidence_images": harvested_evidence_images,
             "stage6_patch_boxes": harvested_patch_boxes,
             "final_crop_boxes_before_aggregate": pre_agg_boxes,
+            "is_cross_object": is_cross_obj,
+            "is_relational": is_cross_obj,
+            "stage5_mode": stage5_mode_val,
             "extractions": harvested_extractions,
             "telemetry": telemetry
         }

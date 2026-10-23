@@ -38,11 +38,21 @@ class CandidatePool(list):
     """
     List container for unified CandidateCrop instances.
     Subclasses list so all indexing, iteration, and len() calls operate natively,
-    while holding pre_aggregation_boxes metadata for downstream visualization.
+    while holding pre_aggregation_boxes metadata and relational intent flags for downstream visualization.
     """
-    def __init__(self, iterable=None, pre_aggregation_boxes: Optional[List[Dict[str, Any]]] = None):
+    def __init__(
+        self,
+        iterable=None,
+        pre_aggregation_boxes: Optional[List[Dict[str, Any]]] = None,
+        is_cross_object: bool = False,
+        is_relational: bool = False,
+        stage5_mode: str = "crops_only"
+    ):
         super().__init__(iterable or [])
         self.pre_aggregation_boxes: List[Dict[str, Any]] = pre_aggregation_boxes or []
+        self.is_cross_object: bool = bool(is_cross_object)
+        self.is_relational: bool = bool(is_relational)
+        self.stage5_mode: str = str(stage5_mode)
 
 
 
@@ -638,10 +648,16 @@ def run_resolution_screening(
         if verbose:
             print(f"[Stage 5][Crops Only] Single-object question (relational=False): Bypassed canvas layout, prepared {len(unified_pool)} native-resolution crops.")
 
-    pool = CandidatePool(unified_pool, pre_aggregation_boxes=pre_aggregation_boxes)
+    pool = CandidatePool(
+        unified_pool,
+        pre_aggregation_boxes=pre_aggregation_boxes,
+        is_cross_object=bool(is_relational),
+        is_relational=bool(is_relational),
+        stage5_mode="layout" if use_layout else "crops_only"
+    )
 
     if verbose:
-        print(f"[Stage 5] Unified Candidate Pool P aggregated: {len(pool)} total items ready for foveated VLM reading.")
+        print(f"[Stage 5] Unified Candidate Pool P aggregated: {len(pool)} total items ready for foveated VLM reading (mode={pool.stage5_mode}, is_cross_object={pool.is_cross_object}).")
 
     return pool
 

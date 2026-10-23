@@ -233,6 +233,9 @@ class TestRelationalLayoutConditioning(unittest.TestCase):
         for crop in pool:
             self.assertFalse(crop.is_compressed_canvas)
             self.assertEqual(crop.source_branch, "Direct")
+        self.assertFalse(pool.is_cross_object)
+        self.assertFalse(pool.is_relational)
+        self.assertEqual(pool.stage5_mode, "crops_only")
 
     def test_cross_object_uses_layout(self):
         from mssearch.stages.stage5_screening import run_resolution_screening
@@ -257,6 +260,9 @@ class TestRelationalLayoutConditioning(unittest.TestCase):
         self.assertEqual(len(pool), 1)
         self.assertTrue(pool[0].is_compressed_canvas)
         self.assertEqual(pool[0].source_branch, "SpatialCompressedCanvas")
+        self.assertTrue(pool.is_cross_object)
+        self.assertTrue(pool.is_relational)
+        self.assertEqual(pool.stage5_mode, "layout")
 
     def test_is_relational_question_detection(self):
         from mssearch.stages.stage5_screening import is_relational_question, check_is_cross_object_llm
@@ -282,6 +288,21 @@ class TestRelationalLayoutConditioning(unittest.TestCase):
         # 5. is_relational_question delegating to LLM
         self.assertTrue(is_relational_question(["jacket", "logo", "text"], "What is the text written above the logo?", zoom_model=mock_vlm))
         self.assertFalse(is_relational_question(["boat"], "What is the registration number of the boat?", zoom_model=mock_vlm))
+
+    def test_visualizer_cross_object_detection(self):
+        from pilot.visualize_results import is_sample_cross_object
+
+        # Explicit saved flags take precedence
+        self.assertTrue(is_sample_cross_object({"is_cross_object": True}))
+        self.assertFalse(is_sample_cross_object({"is_cross_object": False}))
+        self.assertTrue(is_sample_cross_object({"stage5_mode": "layout"}))
+        self.assertFalse(is_sample_cross_object({"stage5_mode": "crops_only"}))
+
+        # Legacy questions without flags
+        self.assertFalse(is_sample_cross_object({"question": "What is the phone number listed on the building in the foreground?"}))
+        self.assertFalse(is_sample_cross_object({"question": "What is the registration number of the boat?"}))
+        self.assertTrue(is_sample_cross_object({"question": "Which side of the car is the person sitting on?"}))
+        self.assertTrue(is_sample_cross_object({"question": "What is the object to the left of the red car?"}))
 
 
 if __name__ == "__main__":
