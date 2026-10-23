@@ -48,8 +48,8 @@ class MSSearchConfig:
     max_plateau_size: int = 1536                 # Physical ceiling in saliency_plateau mode: patches > this dimension must split (VRAM safety)
     saliency_plateau_gain_threshold: float = 0.04 # Saliency gain (max_child - parent) required to justify deeper split
     saliency_target_threshold: float = 0.35      # High confidence target threshold where marginal gain halts zoom
-    max_partition_depth: int = 3                 # Maximum recursion depth before direct tiling
-    max_patches_per_image: int = 100             # Maximum bounded patches budget per image
+    max_partition_depth: int = 4                 # Maximum recursion depth before direct tiling
+    max_patches_per_image: int = 150             # Maximum bounded patches budget per image
     stage3_budget_mode: str = "siglip_similarity" # "siglip_similarity", "entropy_descending", "uniform_stride"
     siglip_budget_batch_size: int = 32           # Batch size for SigLIP crop scoring
     reuse_stage2_features: bool = True           # Reuse SAM3 vision features extracted in Stage 2
@@ -70,21 +70,21 @@ class MSSearchConfig:
     existence_confidence_threshold: float = 0.0  # Minimum VLM existence confidence [-1, 1] to confirm detection
     existence_prompt_template: str = "Is there a '{}' in the image? Answer Yes or No."
     bypass_vlm_for_confirmed_groups: bool = True # Skip VLM existence check if SAM3 det >= threshold or SigLIP >= 0.45
-    max_latent_evals: int = 8                    # Cap speculative VLM latent checks to top K groups (surfaced parameter)
+    max_latent_evals: int = 20                   # Cap speculative VLM latent checks to top K groups (surfaced parameter)
     enable_prioritized_sam3_scanning: bool = True # Scan only high-priority candidate patches / centroids with SAM3
-    max_sam3_eval_patches: int = 16              # Upper bound on expensive SAM3 patch scans in Stage 4 (drops 270s -> 35s)
+    max_sam3_eval_patches: int = 150             # Upper bound on expensive SAM3 patch scans in Stage 4
     # Group Retention Granularity & Global Hard Cap
     enable_group_retention_caps: bool = True     # Cap number of member patches retained per group
-    max_patches_per_latent_group: int = 1        # Max patches kept for latent-retained groups (1 = centroid only)
-    max_patches_per_detected_group: int = 4      # Max patches kept for confirmed SAM3 detection groups
+    max_patches_per_latent_group: int = 2        # Max patches kept for latent-retained groups
+    max_patches_per_detected_group: int = 8      # Max patches kept for confirmed SAM3 detection groups
     enable_retention_hard_cap: bool = True       # Cap total retained patches across all groups before Stage 5/6
-    max_retained_patches: int = 32               # Global upper bound on candidate patches pool
+    max_retained_patches: int = 20               # Global upper bound on candidate patches pool
     retention_ranking_metric: str = "confidence_hybrid"  # "confidence_hybrid", "entropy", "detection_first"
     sam3_batch_size: int = 4                     # Batch size for batched SAM3 patch inference
     vlm_gating_batch_size: int = 4               # Batch size for vectorized VLM existence and latent gating
     enable_latent_repartition: bool = True       # Re-partition high-latent patches (c_latent >= threshold) locally in Stage 3 at 100% native resolution
-    max_latent_repartition_depth: int = 1        # Max recursion levels for latent re-partitioning
-    max_latent_repartition_patches_per_image: int = 2 # Max high-latent patches per image to re-partition
+    max_latent_repartition_depth: int = 2        # Max recursion levels for latent re-partitioning
+    max_latent_repartition_patches_per_image: int = 4 # Max high-latent patches per image to re-partition
     latent_repartition_threshold: float = 0.70   # Minimum latent confidence to trigger Stage 3 re-partitioning
 
     # -------------------------------------------------------------------------
@@ -99,6 +99,14 @@ class MSSearchConfig:
     enable_spatial_compressed_canvas: bool = True # Excise empty rows/cols to form spatial compressed canvas for all samples
     spatial_compression_gutter_px: int = 28      # Visual separator gap (px) between non-contiguous compressed intervals
     spatial_canvas_relational_only: bool = True  # If True, synthesizes spatial compressed canvas layout ONLY for cross-object relational questions; uses individual crops for single-object questions
+    max_canvas_dimension_px: int = 1024          # Hard upper bound on synthesized canvas width and height (prevents VLM downsampling blur)
+    enable_joint_interaction_crop: bool = True   # Pillar 1: Extract single un-split crop for adjacent entities
+    jic_proximity_threshold_px: float = 400.0    # Maximum edge distance to consider entities interacting
+    jic_max_dimension_px: int = 1024             # Maximum union dimension for Joint Interaction Crops
+    enable_dynamic_gutters: bool = True          # Pillar 3: Condition gutter width on original scene continuity (0px for touching tiles)
+    spatial_continuity_threshold_px: int = 2     # Coordinate tolerance for 0px seamless stitching
+    enable_water_filling_allocation: bool = True # Pillar 2: Water-filling resolution allocation protecting targets
+    target_max_native_dim_px: int = 512          # Micro-targets <= this size strictly locked at 1.0 native scale
 
     # -------------------------------------------------------------------------
     # Stage 6: Foveated VLM Reading, Dual-Scale & Collision-Free Consensus
@@ -106,7 +114,7 @@ class MSSearchConfig:
     vlm_batch_size: int = 4                      # Batched VLM forward passes (4 or 8) across patches and logit probes
     bbox_expansion_factor: float = 1.25          # Independent 25% padding per patch
     max_vlm_tokens: int = 128                    # Response token budget (allows complete answers without truncation)
-    enable_early_consensus_exit: bool = True     # Stop evaluating crops once 2 identical/near-identical answers are extracted
+    enable_early_consensus_exit: bool = False    # Stop evaluating crops once 2 identical/near-identical answers are extracted
     early_consensus_count: int = 2               # Minimum consensus extractions to trigger early exit
     early_consensus_threshold: float = 0.75      # String similarity threshold on extracted core answers
     prompt_directed_final_answer: bool = True    # Instruct VLM to conclude with 'Final Answer: <concise answer>'
@@ -116,7 +124,7 @@ class MSSearchConfig:
     # Multiple-Choice & Options Prompting Flag (e.g. HRBench)
     # -------------------------------------------------------------------------
     include_options_in_prompt: bool = False      # If True, appends candidate options block to reading prompt (like CVSearch option_single); if False, operates in open-ended free_form mode
-    answer_type: str = "free_form"               # "free_form" (default) or "option_single" / "option_list" / "multiple_choice"
+    answer_type: str = "option_list"             # "free_form" (default) or "option_single" / "option_list" / "multiple_choice"
 
     # -------------------------------------------------------------------------
     # Multi-Source / Multi-Answer Configuration (Annotation Charter Standard)

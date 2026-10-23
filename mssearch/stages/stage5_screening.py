@@ -71,24 +71,209 @@ def merge_intervals(intervals: List[Tuple[int, int]], min_gap: int = 0) -> List[
     return merged
 
 
+def solve_water_filling_allocation(
+    lengths: List[int],
+    roles: List[str],
+    total_budget: int,
+    target_max_dim: int = 512
+) -> List[float]:
+    """
+    Computes scale factors s_k for each interval under hard upper bound:
+    sum(round(lengths[k] * s_k)) <= total_budget.
+
+    Roles: 'target', 'anchor', 'neutral'.
+    Target intervals <= target_max_dim are locked at s_k = 1.0.
+    Anchor/neutral intervals absorb compression via water-filling cap C*.
+    If target intervals alone exceed total_budget (Option 3A), scales all intervals proportionally.
+    """
+    n = len(lengths)
+    if n == 0 or total_budget <= 0:
+        return [1.0] * n
+
+    sum_len = sum(lengths)
+    if sum_len <= total_budget:
+        return [1.0] * n
+
+    # Step 1: Identify targets vs anchors
+    is_target = [
+        r == "target" or (r != "anchor" and l <= target_max_dim)
+        for r, l in zip(roles, lengths)
+    ]
+    target_sum = sum(l for t, l in zip(is_target, lengths) if t)
+    anchor_indices = [i for i, t in enumerate(is_target) if not t]
+
+    # Step 2: Handle target overflow (Option 3A)
+    if target_sum >= total_budget or not anchor_indices:
+        global_scale = min(1.0, float(total_budget) / float(max(1, sum_len)))
+        return [global_scale] * n
+
+    # Step 3: Targets locked at 1.0, water-fill remaining budget to anchors
+    rem_budget = total_budget - target_sum
+    anchor_lengths = [lengths[i] for i in anchor_indices]
+
+    low, high = 1.0, float(max(anchor_lengths))
+    best_cap = low
+    for _ in range(32):
+        mid = (low + high) / 2.0
+        allocated = sum(min(float(l), mid) for l in anchor_lengths)
+        if allocated <= rem_budget:
+            best_cap = mid
+            low = mid
+        else:
+            high = mid
+
+    scales = [1.0] * n
+    for i in anchor_indices:
+        l = lengths[i]
+        allocated = min(float(l), best_cap)
+        scales[i] = min(1.0, allocated / float(max(1, l)))
+
+    return scales
+
+
+def extract_joint_interaction_crops(
+    img_patches: List[BoundedPatch],
+    image_shape: Tuple[int, int],
+    prox_threshold: float = 400.0,
+    max_dim: int = 1024,
+    padding_factor: float = 1.15
+) -> Tuple[List[BoundedPatch], bool]:
+    """
+    Pillar 1: Proximity-Graph Joint Interaction Crop (PG-JIC).
+    Groups spatially proximate patches (d_edge <= prox_threshold) into connected components.
+    If all patches form a single connected component with union <= max_dim,
+    returns a single unified patch with is_all_one_jic = True (bypassing canvas synthesis).
+    Otherwise merges individual clusters whose union <= max_dim to reduce canvas fragmentation.
+    """
+    if not img_patches or len(img_patches) <= 1:
+        return img_patches, False
+
+    img_w, img_h = image_shape
+    n = len(img_patches)
+    adj = {i: [] for i in range(n)}
+    for i in range(n):
+        for j in range(i + 1, n):
+            dist = compute_box_distance(img_patches[i].box, img_patches[j].box)
+            if dist <= prox_threshold:
+                adj[i].append(j)
+                adj[j].append(i)
+
+    visited = [False] * n
+    components: List[List[int]] = []
+    for i in range(n):
+        if not visited[i]:
+            comp: List[int] = []
+            queue = [i]
+            visited[i] = True
+            while queue:
+                curr = queue.pop(0)
+                comp.append(curr)
+                for neighbor in adj[curr]:
+                    if not visited[neighbor]:
+                        visited[neighbor] = True
+                        queue.append(neighbor)
+            components.append(comp)
+
+    def _pad_union_box(indices: List[int]) -> Tuple[int, int, int, int]:
+        bx1 = min(img_patches[idx].box[0] for idx in indices)
+        by1 = min(img_patches[idx].box[1] for idx in indices)
+        bx2 = max(img_patches[idx].box[2] for idx in indices)
+        by2 = max(img_patches[idx].box[3] for idx in indices)
+        bw = bx2 - bx1
+        bh = by2 - by1
+        cx = (bx1 + bx2) / 2.0
+        cy = (by1 + by2) / 2.0
+        pw = bw * padding_factor
+        ph = bh * padding_factor
+        px1 = max(0, int(round(cx - pw / 2.0)))
+        py1 = max(0, int(round(cy - ph / 2.0)))
+        px2 = min(img_w, int(round(cx + pw / 2.0)))
+        py2 = min(img_h, int(round(cy + ph / 2.0)))
+        return (px1, py1, px2, py2)
+
+    # If all patches form exactly 1 connected component fitting in max_dim:
+    if len(components) == 1:
+        u_box = _pad_union_box(components[0])
+        uw = u_box[2] - u_box[0]
+        uh = u_box[3] - u_box[1]
+        if max(uw, uh) <= max_dim:
+            max_score = max((p.confidence_score or 1.0) for p in img_patches)
+            max_siglip = max((p.siglip_score or 0.0) for p in img_patches)
+            max_ent = max(p.entropy for p in img_patches)
+            jic_patch = BoundedPatch(
+                img_idx=img_patches[0].img_idx,
+                box=u_box,
+                feature_vector=img_patches[0].feature_vector,
+                entropy=max_ent,
+                confidence_score=max_score,
+                siglip_score=max_siglip,
+                semantic_role="jic_cluster"
+            )
+            return [jic_patch], True
+
+    # Otherwise, merge clusters that individually fit in max_dim
+    merged_patches: List[BoundedPatch] = []
+    for comp in components:
+        if len(comp) > 1:
+            u_box = _pad_union_box(comp)
+            uw = u_box[2] - u_box[0]
+            uh = u_box[3] - u_box[1]
+            if max(uw, uh) <= max_dim:
+                max_score = max((img_patches[idx].confidence_score or 1.0) for idx in comp)
+                max_siglip = max((img_patches[idx].siglip_score or 0.0) for idx in comp)
+                max_ent = max(img_patches[idx].entropy for idx in comp)
+                roles = [getattr(img_patches[idx], "semantic_role", None) for idx in comp]
+                comp_role = "target" if "target" in roles else ("anchor" if "anchor" in roles else None)
+                merged_patches.append(
+                    BoundedPatch(
+                        img_idx=img_patches[comp[0]].img_idx,
+                        box=u_box,
+                        feature_vector=img_patches[comp[0]].feature_vector,
+                        entropy=max_ent,
+                        confidence_score=max_score,
+                        siglip_score=max_siglip,
+                        semantic_role=comp_role
+                    )
+                )
+                continue
+        for idx in comp:
+            merged_patches.append(img_patches[idx])
+
+    return merged_patches, False
+
+
 def create_spatial_compressed_canvas(
     image: Image.Image,
     boxes: List[Tuple[int, int, int, int]],
-    gutter_px: int = 8,
-    bg_color: Tuple[int, int, int] = (18, 18, 18)
+    gutter_px: int = 28,
+    bg_color: Tuple[int, int, int] = (18, 18, 18),
+    box_roles: Optional[List[str]] = None,
+    max_canvas_dim: int = 1024,
+    enable_dynamic_gutters: bool = True,
+    continuity_thresh: int = 2,
+    enable_water_filling: bool = True,
+    target_max_native_dim: int = 512
 ) -> Tuple[Image.Image, List[Tuple[int, int, int, int]]]:
     """
     Synthesizes a spatial-awareness compressed canvas from retained patch bounding boxes:
-    1. Pastes only retained patches onto a blank canvas at their original pixel coordinates.
-    2. Removes all completely empty rows and columns devoid of image content.
-    3. Inserts thin visual gutters between non-contiguous spatial spans to prevent false adjacency.
-    4. Computes exact remapped bounding box coordinates on the compressed canvas for prompt rendering.
+    1. Pastes only retained patches onto a blank canvas with water-filling resolution allocation.
+    2. Enforces hard canvas dimension bound: max(W, H) <= max_canvas_dim (1024px) to prevent VLM blur.
+    3. Dynamic Gutters (Pillar 3): 0px seamless stitch for physically connected tiles (gap <= 2px),
+       28px neutral visual gutter for excised voids.
+    4. Adaptive Water-Filling (Pillar 2): Locks micro-targets <= 512px at 1:1 native resolution;
+       anchor landmarks absorb compression down to budget.
     """
     if not boxes:
         return image, []
     if len(boxes) == 1:
         box = boxes[0]
         crop = image.crop(box)
+        if max(crop.width, crop.height) > max_canvas_dim:
+            scale = float(max_canvas_dim) / float(max(crop.width, crop.height))
+            nw = max(1, int(round(crop.width * scale)))
+            nh = max(1, int(round(crop.height * scale)))
+            crop = crop.resize((nw, nh), Image.Resampling.BILINEAR)
+            return crop, [(0, 0, nw, nh)]
         return crop, [(0, 0, crop.width, crop.height)]
 
     w, h = image.size
@@ -96,56 +281,142 @@ def create_spatial_compressed_canvas(
     x_ivs = [(max(0, b[0]), min(w, b[2])) for b in boxes if b[2] > b[0]]
     y_ivs = [(max(0, b[1]), min(h, b[3])) for b in boxes if b[3] > b[1]]
 
-    merged_x = merge_intervals(x_ivs, min_gap=gutter_px)
-    merged_y = merge_intervals(y_ivs, min_gap=gutter_px)
+    merged_x = merge_intervals(x_ivs, min_gap=continuity_thresh)
+    merged_y = merge_intervals(y_ivs, min_gap=continuity_thresh)
 
-    # Compute coordinate mappings
-    x_map_start: Dict[Tuple[int, int], int] = {}
+    # Dynamic Gutters along X
+    g_x: List[int] = []
+    for k in range(len(merged_x) - 1):
+        gap = merged_x[k + 1][0] - merged_x[k][1]
+        g_x.append(0 if (enable_dynamic_gutters and gap <= continuity_thresh) else gutter_px)
+    tot_gx = sum(g_x)
+
+    # Dynamic Gutters along Y
+    g_y: List[int] = []
+    for m in range(len(merged_y) - 1):
+        gap = merged_y[m + 1][0] - merged_y[m][1]
+        g_y.append(0 if (enable_dynamic_gutters and gap <= continuity_thresh) else gutter_px)
+    tot_gy = sum(g_y)
+
+    # Content budgets
+    bx = max(1, max_canvas_dim - tot_gx)
+    by = max(1, max_canvas_dim - tot_gy)
+
+    # Map intervals to roles
+    roles_x: List[str] = []
+    for (x1, x2) in merged_x:
+        int_role = "neutral"
+        for b_idx, b in enumerate(boxes):
+            if max(b[0], x1) < min(b[2], x2):
+                r = box_roles[b_idx] if box_roles and b_idx < len(box_roles) else None
+                if r == "target":
+                    int_role = "target"
+                    break
+                elif r == "anchor" and int_role != "target":
+                    int_role = "anchor"
+        roles_x.append(int_role)
+
+    roles_y: List[str] = []
+    for (y1, y2) in merged_y:
+        int_role = "neutral"
+        for b_idx, b in enumerate(boxes):
+            if max(b[1], y1) < min(b[3], y2):
+                r = box_roles[b_idx] if box_roles and b_idx < len(box_roles) else None
+                if r == "target":
+                    int_role = "target"
+                    break
+                elif r == "anchor" and int_role != "target":
+                    int_role = "anchor"
+        roles_y.append(int_role)
+
+    # Solve scales
+    lengths_x = [x2 - x1 for (x1, x2) in merged_x]
+    lengths_y = [y2 - y1 for (y1, y2) in merged_y]
+
+    if enable_water_filling:
+        scales_x = solve_water_filling_allocation(lengths_x, roles_x, bx, target_max_dim=target_max_native_dim)
+        scales_y = solve_water_filling_allocation(lengths_y, roles_y, by, target_max_dim=target_max_native_dim)
+    else:
+        sx = min(1.0, float(bx) / float(max(1, sum(lengths_x))))
+        sy = min(1.0, float(by) / float(max(1, sum(lengths_y))))
+        scales_x = [sx] * len(lengths_x)
+        scales_y = [sy] * len(lengths_y)
+
+    # Scaled interval lengths
+    w_primes = [max(1, int(round(l * s))) for l, s in zip(lengths_x, scales_x)]
+    h_primes = [max(1, int(round(l * s))) for l, s in zip(lengths_y, scales_y)]
+
+    # Compute coordinate offsets
+    x_offsets: List[int] = []
     curr_x = 0
-    for idx, (x1, x2) in enumerate(merged_x):
-        x_map_start[(x1, x2)] = curr_x
-        curr_x += (x2 - x1)
-        if idx < len(merged_x) - 1:
-            curr_x += gutter_px
+    for k, wp in enumerate(w_primes):
+        x_offsets.append(curr_x)
+        curr_x += wp
+        if k < len(g_x):
+            curr_x += g_x[k]
     canvas_w = max(1, curr_x)
 
-    y_map_start: Dict[Tuple[int, int], int] = {}
+    y_offsets: List[int] = []
     curr_y = 0
-    for idx, (y1, y2) in enumerate(merged_y):
-        y_map_start[(y1, y2)] = curr_y
-        curr_y += (y2 - y1)
-        if idx < len(merged_y) - 1:
-            curr_y += gutter_px
+    for m, hp in enumerate(h_primes):
+        y_offsets.append(curr_y)
+        curr_y += hp
+        if m < len(g_y):
+            curr_y += g_y[m]
     canvas_h = max(1, curr_y)
 
     canvas = Image.new("RGB", (canvas_w, canvas_h), bg_color)
 
-    def remap_coord(val: int, intervals: List[Tuple[int, int]], map_start: Dict[Tuple[int, int], int]) -> int:
-        for (v1, v2) in intervals:
+    def remap_coord_x(val: int) -> int:
+        for k, (v1, v2) in enumerate(merged_x):
             if v1 <= val <= v2:
-                return map_start[(v1, v2)] + (val - v1)
+                return x_offsets[k] + int(round((val - v1) * scales_x[k]))
             elif val < v1:
-                return map_start[(v1, v2)]
-        if intervals:
-            last = intervals[-1]
-            return map_start[last] + (last[1] - last[0])
+                return x_offsets[k]
+        if merged_x:
+            last_k = len(merged_x) - 1
+            last = merged_x[last_k]
+            return x_offsets[last_k] + int(round((last[1] - last[0]) * scales_x[last_k]))
         return 0
 
-    # Paste patch crops onto canvas
-    for box in boxes:
-        crop = image.crop(box)
-        nx1 = remap_coord(box[0], merged_x, x_map_start)
-        ny1 = remap_coord(box[1], merged_y, y_map_start)
-        canvas.paste(crop, (nx1, ny1))
+    def remap_coord_y(val: int) -> int:
+        for m, (v1, v2) in enumerate(merged_y):
+            if v1 <= val <= v2:
+                return y_offsets[m] + int(round((val - v1) * scales_y[m]))
+            elif val < v1:
+                return y_offsets[m]
+        if merged_y:
+            last_m = len(merged_y) - 1
+            last = merged_y[last_m]
+            return y_offsets[last_m] + int(round((last[1] - last[0]) * scales_y[last_m]))
+        return 0
+
+    # Render cell patches onto canvas
+    for k in range(len(merged_x)):
+        for m in range(len(merged_y)):
+            cell_x1, cell_x2 = merged_x[k]
+            cell_y1, cell_y2 = merged_y[m]
+            # Check if any original box intersects this cell
+            overlaps = any(
+                max(b[0], cell_x1) < min(b[2], cell_x2) and max(b[1], cell_y1) < min(b[3], cell_y2)
+                for b in boxes
+            )
+            if overlaps:
+                crop = image.crop((cell_x1, cell_y1, cell_x2, cell_y2))
+                dw = w_primes[k]
+                dh = h_primes[m]
+                if crop.size != (dw, dh):
+                    crop = crop.resize((dw, dh), Image.Resampling.BILINEAR)
+                canvas.paste(crop, (x_offsets[k], y_offsets[m]))
 
     # Remap bounding boxes
     remapped_boxes: List[Tuple[int, int, int, int]] = []
     for box in boxes:
-        nx1 = remap_coord(box[0], merged_x, x_map_start)
-        ny1 = remap_coord(box[1], merged_y, y_map_start)
-        nx2 = remap_coord(box[2], merged_x, x_map_start)
-        ny2 = remap_coord(box[3], merged_y, y_map_start)
-        remapped_boxes.append((nx1, ny1, nx2, ny2))
+        rx1 = remap_coord_x(box[0])
+        ry1 = remap_coord_y(box[1])
+        rx2 = remap_coord_x(box[2])
+        ry2 = remap_coord_y(box[3])
+        remapped_boxes.append((rx1, ry1, max(rx1 + 1, rx2), max(ry1 + 1, ry2)))
 
     return canvas, remapped_boxes
 
@@ -539,6 +810,14 @@ def run_resolution_screening(
         use_layout = enable_compressed_canvas
 
     gutter_px = getattr(config, "spatial_compression_gutter_px", 28) if config else 28
+    max_canvas_dim = getattr(config, "max_canvas_dimension_px", 1024) if config else 1024
+    enable_jic = getattr(config, "enable_joint_interaction_crop", True) if config else True
+    jic_prox = getattr(config, "jic_proximity_threshold_px", 400.0) if config else 400.0
+    jic_max_dim = getattr(config, "jic_max_dimension_px", 1024) if config else 1024
+    enable_dynamic_gutters = getattr(config, "enable_dynamic_gutters", True) if config else True
+    continuity_thresh = getattr(config, "spatial_continuity_threshold_px", 2) if config else 2
+    enable_water_filling = getattr(config, "enable_water_filling_allocation", True) if config else True
+    target_max_native_dim = getattr(config, "target_max_native_dim_px", 512) if config else 512
 
     # Extract final crop bounding boxes before aggregation for re-visualization
     pre_aggregation_boxes: List[Dict[str, Any]] = [
@@ -556,17 +835,49 @@ def run_resolution_screening(
 
     if use_layout:
         if verbose:
-            print(f"[Stage 5][Layout Mode] Cross-object question (relational=True): Synthesizing spatial compressed canvas layout.")
+            print(f"[Stage 5][Layout Mode] Cross-object question (relational=True): Synthesizing Tri-Pillar spatial canvas layout.")
         # Group patches by source candidate image
         by_img: Dict[int, List[BoundedPatch]] = {}
         for p in effective_patches:
             by_img.setdefault(p.img_idx, []).append(p)
 
         for img_idx, img_patches in by_img.items():
-            if len(img_patches) == 1:
+            img_pil = candidate_images[img_idx]
+            # Pillar 1: Proximity-Graph Joint Interaction Crop (PG-JIC)
+            is_all_one_jic = False
+            if enable_jic and len(img_patches) > 1:
+                img_patches, is_all_one_jic = extract_joint_interaction_crops(
+                    img_patches,
+                    img_pil.size,
+                    prox_threshold=jic_prox,
+                    max_dim=jic_max_dim
+                )
+
+            if is_all_one_jic and len(img_patches) == 1:
                 p = img_patches[0]
                 box_ints = tuple(int(round(float(c))) for c in p.box)
-                crop = candidate_images[img_idx].crop(box_ints)
+                crop = img_pil.crop(box_ints)
+                unified_pool.append(
+                    CandidateCrop(
+                        img_idx=img_idx,
+                        box=box_ints,
+                        crop_image=crop,
+                        score=p.confidence_score if p.confidence_score is not None else 1.0,
+                        source_branch="JointInteractionCrop",
+                        is_compressed_canvas=False,
+                        remapped_boxes=[(0, 0, crop.width, crop.height)],
+                        original_boxes=[box_ints]
+                    )
+                )
+                if verbose:
+                    print(
+                        f"[Stage 5][PG-JIC Passthrough] Image {img_idx}: Proximate components merged into single "
+                        f"{crop.width}x{crop.height} un-split crop (bypassed canvas synthesis, 0px seam cuts)."
+                    )
+            elif len(img_patches) == 1:
+                p = img_patches[0]
+                box_ints = tuple(int(round(float(c))) for c in p.box)
+                crop = img_pil.crop(box_ints)
                 if crop.width >= 4 and crop.height >= 4:
                     unified_pool.append(
                         CandidateCrop(
@@ -581,12 +892,19 @@ def run_resolution_screening(
                         )
                     )
             else:
-                # Synthesize Spatial Compressed Canvas excising empty rows and columns
+                # Pillars 2 & 3: Water-Filling Resolution Allocation & Dynamic Gutters
                 boxes = [tuple(int(round(float(c))) for c in p.box) for p in img_patches]
+                box_roles = [getattr(p, "semantic_role", None) for p in img_patches]
                 canvas_img, remapped_boxes = create_spatial_compressed_canvas(
-                    candidate_images[img_idx],
+                    img_pil,
                     boxes,
-                    gutter_px=gutter_px
+                    gutter_px=gutter_px,
+                    box_roles=box_roles,
+                    max_canvas_dim=max_canvas_dim,
+                    enable_dynamic_gutters=enable_dynamic_gutters,
+                    continuity_thresh=continuity_thresh,
+                    enable_water_filling=enable_water_filling,
+                    target_max_native_dim=target_max_native_dim
                 )
                 union_box = (
                     min(b[0] for b in boxes),
@@ -612,8 +930,8 @@ def run_resolution_screening(
                 )
                 if verbose:
                     print(
-                        f"[Stage 5][Compressed Canvas] Image {img_idx}: Compressed {len(img_patches)} patches into "
-                        f"{canvas_img.size[0]}x{canvas_img.size[1]} canvas (excised empty rows/cols, gutter={gutter_px}px)."
+                        f"[Stage 5][Tri-Pillar Canvas] Image {img_idx}: Compressed {len(img_patches)} patches into "
+                        f"{canvas_img.size[0]}x{canvas_img.size[1]} canvas (WF-ARA & Dynamic Gutters, max_dim<={max_canvas_dim})."
                     )
     else:
         # Sort effective_patches by confidence score descending
@@ -628,7 +946,18 @@ def run_resolution_screening(
         )
         for patch in sorted_patches:
             box_ints = tuple(int(round(float(c))) for c in patch.box)
-            crop = candidate_images[patch.img_idx].crop(box_ints)
+            bx1, by1, bx2, by2 = box_ints
+            bw, bh = bx2 - bx1, by2 - by1
+            cx, cy = (bx1 + bx2) / 2.0, (by1 + by2) / 2.0
+            pw, ph = bw * 1.25, bh * 1.25
+            img_w, img_h = candidate_images[patch.img_idx].size
+            px1 = max(0, int(round(cx - pw / 2.0)))
+            py1 = max(0, int(round(cy - ph / 2.0)))
+            px2 = min(img_w, int(round(cx + pw / 2.0)))
+            py2 = min(img_h, int(round(cy + ph / 2.0)))
+            padded_box = (px1, py1, px2, py2)
+
+            crop = candidate_images[patch.img_idx].crop(padded_box)
             cw, ch = crop.size
             if cw < 4 or ch < 4:
                 continue
@@ -636,7 +965,7 @@ def run_resolution_screening(
             unified_pool.append(
                 CandidateCrop(
                     img_idx=patch.img_idx,
-                    box=box_ints,
+                    box=padded_box,
                     crop_image=crop,
                     score=patch.confidence_score if patch.confidence_score is not None else 1.0,
                     source_branch="Direct",
@@ -646,7 +975,7 @@ def run_resolution_screening(
                 )
             )
         if verbose:
-            print(f"[Stage 5][Crops Only] Single-object question (relational=False): Bypassed canvas layout, prepared {len(unified_pool)} native-resolution crops.")
+            print(f"[Stage 5][Crops Only] Single-object question (relational=False): Bypassed canvas layout, prepared {len(unified_pool)} native-resolution crops with 1.25x padding.")
 
     pool = CandidatePool(
         unified_pool,

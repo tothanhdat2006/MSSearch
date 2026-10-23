@@ -708,9 +708,27 @@ def run_feature_grouping_and_gating(
             else:
                 chosen_indices = member_indices
 
+            target_ent = getattr(active_objects, "target_entity", None)
+            anchor_ent = getattr(active_objects, "anchor_entity", None)
             for i in chosen_indices:
                 p = bounded_patches[i]
                 p.confidence_score = group_score
+
+                # Assign matched_label and semantic_role from detections
+                cur_dets = [d for d in group_detected_objects if d.get("patch_idx") == i]
+                if not cur_dets:
+                    cur_dets = patch_detections.get(i, [])
+                if cur_dets:
+                    best_d = max(cur_dets, key=lambda d: d.get("score", 0.0))
+                    p.matched_label = str(best_d.get("label", ""))
+
+                if p.matched_label:
+                    lbl_lower = p.matched_label.lower()
+                    if target_ent and (target_ent.lower() in lbl_lower or lbl_lower in target_ent.lower()):
+                        p.semantic_role = "target"
+                    elif anchor_ent and (anchor_ent.lower() in lbl_lower or lbl_lower in anchor_ent.lower()):
+                        p.semantic_role = "anchor"
+
                 remaining_patches.append(p)
 
             if config.verbose:

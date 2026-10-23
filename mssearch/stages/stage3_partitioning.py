@@ -47,6 +47,8 @@ class BoundedPatch:
     siglip_score: Optional[float] = None     # Zero-shot SigLIP alignment score (max over active objects)
     is_fine_grain: bool = False              # Flag indicating detection anchor or high-resolution zoom
     is_recursive_child: bool = False         # Flag indicating child patch from Stage 4 -> Stage 3 local re-partition
+    matched_label: Optional[str] = None      # Target or anchor entity label matched during Stage 2/4
+    semantic_role: Optional[str] = None      # "target" or "anchor" for Stage 5 asymmetric resolution allocation
 
 
 def compute_spatial_entropy(

@@ -1,12 +1,14 @@
 {
-  "max_patches_per_image": 150,
-  "max_partition_depth": 4,
-  "max_sam3_eval_patches": 64,
-  "max_latent_evals": 20,
-  "max_patches_per_detected_group": 8,
-  "max_patches_per_latent_group": 2,
-  "max_retained_patches": 80,
-  "enable_early_consensus_exit": false,
-  "max_latent_repartition_patches_per_image": 4,
-  "max_latent_repartition_depth": 2
+    "max_patches_per_image": 150,
+    "max_partition_depth": 4,
+    "max_sam3_eval_patches": 150,
+    "max_latent_evals": 20,
+    "max_patches_per_detected_group": 8,
+    "max_patches_per_latent_group": 2,
+    "max_retained_patches": 20,
+    "enable_early_consensus_exit": false,
+    "max_latent_repartition_patches_per_image": 4,
+    "max_latent_repartition_depth": 2,
+    "latent_repartition_threshold": 0.0,
+    "answer_type": "option_list"
 }

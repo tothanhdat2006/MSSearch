@@ -28,7 +28,9 @@ class ParsedQuestion(list):
         strategy: str = "",
         raw_response: str = "",
         anchors: Optional[List[str]] = None,
-        target_element: str = ""
+        target_element: str = "",
+        target_entity: Optional[str] = None,
+        anchor_entity: Optional[str] = None
     ):
         super().__init__(active_objects)
         self.active_objects = list(active_objects)
@@ -36,14 +38,18 @@ class ParsedQuestion(list):
         self.is_relational = bool(is_relational)
         self.strategy = str(strategy)
         self.raw_response = str(raw_response)
-        self.anchors = list(anchors) if anchors else []
-        self.target_element = str(target_element)
+        self.target_entity = target_entity or target_element or (active_objects[0] if active_objects else None)
+        self.anchor_entity = anchor_entity or (anchors[0] if anchors else None)
+        self.anchors = list(anchors) if anchors else ([self.anchor_entity] if self.anchor_entity else [])
+        self.target_element = str(self.target_entity or "")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "active_objects": self.active_objects,
             "question_type": self.question_type,
             "is_relational": self.is_relational,
+            "target_entity": self.target_entity,
+            "anchor_entity": self.anchor_entity,
             "strategy": self.strategy,
             "raw_response": self.raw_response
         }
@@ -51,7 +57,8 @@ class ParsedQuestion(list):
     def __repr__(self) -> str:
         return (
             f"ParsedQuestion(active_objects={self.active_objects}, "
-            f"question_type='{self.question_type}', is_relational={self.is_relational})"
+            f"question_type='{self.question_type}', is_relational={self.is_relational}, "
+            f"target='{self.target_entity}', anchor='{self.anchor_entity}')"
         )
 
 
@@ -119,6 +126,8 @@ def parse_question_to_active_objects(
         )
     parsed_question_type = "general"
     parsed_is_relational = False
+    parsed_target_entity = None
+    parsed_anchor_entity = None
     raw_targets = []
     raw_text = ""
     extraction_strategy = "Strategy 3: Syntactic Clause Extraction (Fallback)"
@@ -148,6 +157,8 @@ def parse_question_to_active_objects(
                         "text": (
                             "You are an expert visual search parser. Given a question, extract search targets and return a JSON object with:\n"
                             "- \"active_objects\": list of key visual search entities or text needed to answer the question\n"
+                            "- \"target_entity\": the primary object being inspected, counted, or located (or null)\n"
+                            "- \"anchor_entity\": the reference landmark object used for relative bearing/position (or null if none)\n"
                             "- \"question_type\": one of ['cross_object_relation', 'single_object_attribute', 'counting', 'text_reading', 'general']\n"
                             "- \"is_relational\": boolean (true for cross-object questions asking about spatial relationships or relative positioning between multiple objects; false for single-object questions asking about one object's attributes, text, color, or identity)\n"
                             "Return ONLY valid JSON."
@@ -156,11 +167,19 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "Question: \"What is the text written above the logo on the jacket's sleeve?\""}]
+                    "content": [{"type": "text", "text": "Question: \"Is the mailbox on the left or right side of the woman?\""}]
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"active_objects": ["jacket", "sleeve", "logo", "text"], "question_type": "cross_object_relation", "is_relational": true}'}]
+                    "content": [{"type": "text", "text": '{"active_objects": ["mailbox", "woman"], "target_entity": "mailbox", "anchor_entity": "woman", "question_type": "cross_object_relation", "is_relational": true}'}]
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Question: \"Where is the small stone cairn located relative to the waterfall?\""}]
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": '{"active_objects": ["stone cairn", "waterfall"], "target_entity": "stone cairn", "anchor_entity": "waterfall", "question_type": "cross_object_relation", "is_relational": true}'}]
                 },
                 {
                     "role": "user",
@@ -168,7 +187,7 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"active_objects": ["boat"], "question_type": "single_object_attribute", "is_relational": false}'}]
+                    "content": [{"type": "text", "text": '{"active_objects": ["boat"], "target_entity": "boat", "anchor_entity": null, "question_type": "single_object_attribute", "is_relational": false}'}]
                 },
                 {
                     "role": "user",
@@ -176,7 +195,7 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"active_objects": ["mailbox"], "question_type": "single_object_attribute", "is_relational": false}'}]
+                    "content": [{"type": "text", "text": '{"active_objects": ["mailbox"], "target_entity": "mailbox", "anchor_entity": null, "question_type": "single_object_attribute", "is_relational": false}'}]
                 },
                 {
                     "role": "user",
@@ -184,7 +203,7 @@ def parse_question_to_active_objects(
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": '{"active_objects": ["brick building", "window"], "question_type": "counting", "is_relational": false}'}]
+                    "content": [{"type": "text", "text": '{"active_objects": ["brick building", "window"], "target_entity": "window", "anchor_entity": "brick building", "question_type": "counting", "is_relational": false}'}]
                 },
                 {
                     "role": "user",
@@ -193,16 +212,19 @@ def parse_question_to_active_objects(
             ]
 
             few_shot_prompt = (
-                "You are an expert visual search parser. Given a question, return a JSON object with 'active_objects', 'question_type', and 'is_relational'.\n\n"
-                "Example 1 (Cross-Object):\n"
-                "Question: \"What is the text written above the logo on the jacket's sleeve?\"\n"
-                "JSON: {\"active_objects\": [\"jacket\", \"sleeve\", \"logo\", \"text\"], \"question_type\": \"cross_object_relation\", \"is_relational\": true}\n\n"
-                "Example 2 (Single-Object):\n"
+                "You are an expert visual search parser. Given a question, return a JSON object with 'active_objects', 'target_entity', 'anchor_entity', 'question_type', and 'is_relational'.\n\n"
+                "Example 1 (Cross-Object Relational):\n"
+                "Question: \"Is the mailbox on the left or right side of the woman?\"\n"
+                "JSON: {\"active_objects\": [\"mailbox\", \"woman\"], \"target_entity\": \"mailbox\", \"anchor_entity\": \"woman\", \"question_type\": \"cross_object_relation\", \"is_relational\": true}\n\n"
+                "Example 2 (Cross-Object Relational):\n"
+                "Question: \"Where is the small stone cairn located relative to the waterfall?\"\n"
+                "JSON: {\"active_objects\": [\"stone cairn\", \"waterfall\"], \"target_entity\": \"stone cairn\", \"anchor_entity\": \"waterfall\", \"question_type\": \"cross_object_relation\", \"is_relational\": true}\n\n"
+                "Example 3 (Single-Object Attribute):\n"
                 "Question: \"What is the registration number of the boat?\"\n"
-                "JSON: {\"active_objects\": [\"boat\"], \"question_type\": \"single_object_attribute\", \"is_relational\": false}\n\n"
-                "Example 3 (Single-Object):\n"
+                "JSON: {\"active_objects\": [\"boat\"], \"target_entity\": \"boat\", \"anchor_entity\": null, \"question_type\": \"single_object_attribute\", \"is_relational\": false}\n\n"
+                "Example 4 (Single-Object Attribute):\n"
                 "Question: \"What is the color of the mailbox?\"\n"
-                "JSON: {\"active_objects\": [\"mailbox\"], \"question_type\": \"single_object_attribute\", \"is_relational\": false}\n\n"
+                "JSON: {\"active_objects\": [\"mailbox\"], \"target_entity\": \"mailbox\", \"anchor_entity\": null, \"question_type\": \"single_object_attribute\", \"is_relational\": false}\n\n"
                 f"Question: \"{question}\"\nJSON:"
             )
 
@@ -233,6 +255,14 @@ def parse_question_to_active_objects(
                     objs = data.get("active_objects", [])
                     if isinstance(objs, list) and objs:
                         raw_targets = [str(o).strip().lower() for o in objs if str(o).strip()]
+
+                    parsed_target_entity = data.get("target_entity")
+                    if parsed_target_entity:
+                        parsed_target_entity = str(parsed_target_entity).strip().lower()
+
+                    parsed_anchor_entity = data.get("anchor_entity")
+                    if parsed_anchor_entity:
+                        parsed_anchor_entity = str(parsed_anchor_entity).strip().lower()
 
                     parsed_question_type = str(data.get("question_type", "general")).strip().lower()
                     parsed_is_relational = bool(data.get("is_relational", False))
@@ -367,19 +397,29 @@ def parse_question_to_active_objects(
     # Strict invariant: single target is definitionally non-relational
     if len(clean_targets) <= 1:
         parsed_is_relational = False
+        parsed_anchor_entity = None
+
+    if not parsed_target_entity and clean_targets:
+        parsed_target_entity = clean_targets[0]
+    if not parsed_anchor_entity and len(clean_targets) > 1 and parsed_is_relational:
+        parsed_anchor_entity = clean_targets[1]
 
     parsed_question = ParsedQuestion(
         active_objects=clean_targets,
         question_type=parsed_question_type,
         is_relational=parsed_is_relational,
         strategy=extraction_strategy,
-        raw_response=raw_text
+        raw_response=raw_text,
+        target_entity=parsed_target_entity,
+        anchor_entity=parsed_anchor_entity
     )
 
     if verbose:
         print(f"[Stage 1] Question Parsing Complete via {extraction_strategy}:")
         print(f"  • Question Type  : {parsed_question.question_type}")
         print(f"  • Relational Flag: {parsed_question.is_relational}")
+        print(f"  • Target Entity  : {parsed_question.target_entity}")
+        print(f"  • Anchor Entity  : {parsed_question.anchor_entity}")
         print(f"  • Active Targets : {parsed_question.active_objects}")
 
     if return_strategy:
