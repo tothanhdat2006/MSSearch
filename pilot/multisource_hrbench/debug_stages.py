@@ -20,10 +20,15 @@ import random
 import argparse
 import warnings
 import logging
+import contextlib
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any, Set, Union
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
+
 from PIL import Image
 
 # Suppress harmless upstream deprecation warnings and checkpoint config token ID warnings
@@ -41,10 +46,48 @@ if MSSEARCH_ROOT not in sys.path:
 
 # MSSearch Imports
 from mssearch.config import MSSearchConfig
-from mssearch.models.modeling_sam3 import sam3_inference
-from mssearch.models.modeling_siglip import SigLIPScorer
-from mssearch.models.modeling_qwenvl import ModelQwenVL
-from mssearch.MSSearch import get_mssearch_response
+try:
+    from mssearch.models.modeling_sam3 import sam3_inference
+except (ImportError, ModuleNotFoundError):
+    sam3_inference = None
+
+try:
+    from mssearch.models.modeling_siglip import SigLIPScorer
+except (ImportError, ModuleNotFoundError):
+    SigLIPScorer = None
+
+try:
+    from mssearch.models.modeling_qwenvl import ModelQwenVL
+except (ImportError, ModuleNotFoundError):
+    ModelQwenVL = None
+
+try:
+    from mssearch.MSSearch import get_mssearch_response
+except (ImportError, ModuleNotFoundError):
+    get_mssearch_response = None
+
+try:
+    from mssearch.stages.stage1_parser import format_options
+except (ImportError, ModuleNotFoundError):
+    def format_options(options: Any, cycle_idx: int = 0) -> str:
+        """Fallback option block formatting when stages module is unavailable."""
+        if not options:
+            return ""
+        if isinstance(options, dict):
+            return "\n".join(f"{k}. {v}" if not str(v).startswith(f"{k}.") else str(v) for k, v in options.items())
+        if isinstance(options, list):
+            if not options:
+                return ""
+            if all(isinstance(opt, str) for opt in options):
+                if any("\n" in opt for opt in options):
+                    chosen_block = options[cycle_idx] if 0 <= cycle_idx < len(options) else options[0]
+                    return chosen_block.strip()
+                return "\n".join(f"{chr(65 + i)}. {opt}" for i, opt in enumerate(options))
+            chosen_block = options[cycle_idx] if 0 <= cycle_idx < len(options) else options[0]
+            if isinstance(chosen_block, dict):
+                return "\n".join(f"{k}. {v}" for k, v in chosen_block.items())
+            return str(chosen_block).strip()
+        return str(options).strip()
 
 
 # ==============================================================================
@@ -286,6 +329,217 @@ def execute_single_sample(
 
 
 # ==============================================================================
+# DIRECT ANSWER BASELINE EXECUTION (VANILLA VLM WITHOUT VISUAL SEARCH)
+# ==============================================================================
+
+def run_direct_vlm_inference(
+    qwen_engine: Any,
+    images: List[Image.Image],
+    prompt: str,
+    max_new_tokens: int = 128,
+) -> str:
+    """Executes direct VLM inference over candidate images for baseline evaluation."""
+    # 1. Clamp candidate images to safe max resolution (1024px)
+    safe_images = []
+    for img in images:
+        if max(img.width, img.height) > 1024:
+            scale = 1024.0 / max(img.width, img.height)
+            safe_images.append(
+                img.resize(
+                    (int(round(img.width * scale)), int(round(img.height * scale))),
+                    Image.Resampling.BILINEAR,
+                )
+            )
+        else:
+            safe_images.append(img)
+
+    # 2. Single-image route (N=1)
+    if len(safe_images) == 1:
+        if hasattr(qwen_engine, "generate_response"):
+            return qwen_engine.generate_response(
+                image_pil=safe_images[0],
+                question=prompt,
+                max_new_tokens=max_new_tokens,
+            )
+        elif hasattr(qwen_engine, "free_form_using_nodes"):
+            return qwen_engine.free_form_using_nodes(
+                image_pil=safe_images[0],
+                question=prompt,
+                searched_nodes=[],
+                max_new_tokens=max_new_tokens,
+            )
+
+    # 3. Multi-image route (N > 1): interleaved multi-image prompt
+    if (
+        hasattr(qwen_engine, "processor")
+        and hasattr(qwen_engine, "model")
+        and hasattr(qwen_engine, "get_prompt_from_qs")
+    ):
+        qs_parts = []
+        for idx in range(len(safe_images)):
+            qs_parts.append(f"Candidate Image {idx + 1}:\n<image>\n")
+        qs_parts.append(f"\n{prompt}")
+        qs_full = "".join(qs_parts)
+
+        prompt_text = qwen_engine.get_prompt_from_qs(qs_full)
+        model_inputs = qwen_engine.processor(
+            text=[prompt_text],
+            images=safe_images,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+        ).to(qwen_engine.device)
+
+        if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
+            if not (model_inputs.attention_mask == 0).any():
+                model_inputs.pop("attention_mask", None)
+
+        infer_ctx = torch.inference_mode() if torch is not None else contextlib.nullcontext()
+        with infer_ctx:
+            generated_ids = qwen_engine.model.generate(
+                **model_inputs,
+                use_cache=True,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+            )
+        trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
+        decoded = qwen_engine.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+        return decoded[0].strip()
+
+    # Fallback for generic VLM
+    if hasattr(qwen_engine, "generate_response"):
+        return qwen_engine.generate_response(image_pil=safe_images[0], question=prompt, max_new_tokens=max_new_tokens)
+    return str(qwen_engine(image_pil=safe_images, question=prompt))
+
+
+def execute_single_sample_direct(
+    sample_index: int,
+    hrbench_data: List[Dict[str, Any]],
+    hrbench_base_dir: str,
+    qwen_engine: Any,
+    config: MSSearchConfig,
+    num_candidate_images: int = 3,
+    window_size: int = 5,
+    random_seed: int = 42,
+    target_only: bool = False,
+) -> Dict[str, Any]:
+    """
+    Direct answer baseline evaluation: queries the VLM directly without visual search.
+    Supports single-image (target_only=True or N=1) and multi-image candidate pools (N>1).
+    """
+    target_sample = hrbench_data[sample_index]
+    real_question = target_sample.get("question", "")
+    cycle_idx = target_sample.get("cycle_category", 0)
+    gt_answer = target_sample.get("answer", "")
+    gt_letter = resolve_gt_letter(gt_answer, cycle_idx)
+    raw_options = target_sample.get("options", {})
+
+    # 1. Load Target Image
+    target_img_rel = target_sample.get("input_image", "")
+    target_img_path = os.path.join(hrbench_base_dir, target_img_rel)
+    if not os.path.exists(target_img_path):
+        target_img_path = target_img_rel
+    if not os.path.exists(target_img_path):
+        raise FileNotFoundError(f"Target image not found at: {target_img_path}")
+    target_canvas = Image.open(target_img_path).convert("RGB")
+
+    # 2. Build candidate pool
+    if target_only or num_candidate_images <= 1:
+        candidate_images = [target_canvas]
+        target_pool_idx = 0
+    else:
+        total_samples = len(hrbench_data)
+        min_win = max(0, sample_index - window_size)
+        max_win = min(total_samples - 1, sample_index + window_size)
+
+        candidate_distractor_indices = [idx for idx in range(min_win, max_win + 1) if idx != sample_index]
+        if len(candidate_distractor_indices) < (num_candidate_images - 1):
+            candidate_distractor_indices = [idx for idx in range(total_samples) if idx != sample_index]
+
+        rng = random.Random(random_seed + sample_index)
+        sampled_distractor_indices = rng.sample(candidate_distractor_indices, max(0, num_candidate_images - 1))
+
+        pool_items = [
+            {"is_target": True, "sample_idx": sample_index, "image": target_canvas, "path": target_img_rel}
+        ]
+        for d_idx in sampled_distractor_indices:
+            d_sample = hrbench_data[d_idx]
+            d_rel = d_sample.get("input_image", "")
+            d_path = os.path.join(hrbench_base_dir, d_rel)
+            if not os.path.exists(d_path):
+                d_path = d_rel
+            d_img = Image.open(d_path).convert("RGB")
+            pool_items.append({"is_target": False, "sample_idx": d_idx, "image": d_img, "path": d_rel})
+
+        rng.shuffle(pool_items)
+        candidate_images = [item["image"] for item in pool_items]
+        target_pool_idx = next(i for i, item in enumerate(pool_items) if item["is_target"])
+
+    print(f"\n" + "-" * 75)
+    print(f"[Direct Baseline][Sample #{sample_index}] Question: '{real_question}'")
+    print(f"[Direct Baseline][Sample #{sample_index}] Ground Truth: '{gt_letter}' | Candidate Images: N={len(candidate_images)} (Target Index: {target_pool_idx})")
+
+    # 3. Format prompt with candidate options if present
+    opt_str = format_options(raw_options, cycle_idx=cycle_idx)
+    if "Options:" not in real_question and opt_str:
+        prompt_text = (
+            f"{real_question}\n\n"
+            f"Options:\n{opt_str}\n\n"
+            "Select the best option from the choices above that answers the question based on the visual information.\n"
+            "Format your answer as:\n"
+            "Final Answer: [Option Letter]"
+        )
+    elif "Options:" in real_question:
+        prompt_text = (
+            f"{real_question}\n\n"
+            "Select the best option from the choices above that answers the question based on the visual information.\n"
+            "Format your answer as:\n"
+            "Final Answer: [Option Letter]"
+        )
+    else:
+        prompt_text = f"{real_question}\n\nAnswer the question concisely based on the visual information."
+
+    # 4. Direct VLM Query
+    t0 = time.perf_counter()
+    max_tokens = getattr(config, "max_vlm_tokens", 128)
+    raw_response = run_direct_vlm_inference(
+        qwen_engine=qwen_engine,
+        images=candidate_images,
+        prompt=prompt_text,
+        max_new_tokens=max_tokens,
+    )
+    total_latency = round(time.perf_counter() - t0, 3)
+
+    pred_letter = extract_predicted_option(raw_response, raw_options)
+    is_correct = (pred_letter == gt_letter) if pred_letter and gt_letter else False
+    res_tag = "[CORRECT]" if is_correct else "[INCORRECT]"
+
+    print(f"[Direct Baseline Result] Predicted: '{pred_letter}' vs GT: '{gt_letter}' -> {res_tag} | Primary: '{raw_response}' | Route: direct_baseline | Latency: {total_latency}s")
+
+    record = {
+        "sample_index": sample_index,
+        "question": real_question,
+        "cycle_idx": cycle_idx,
+        "gt_letter": gt_letter,
+        "predicted_letter": pred_letter,
+        "is_correct": is_correct,
+        "primary_answer": raw_response,
+        "raw_vlm_response": raw_response,
+        "target_pool_idx": target_pool_idx,
+        "evidence_images": [target_pool_idx] if is_correct else [],
+        "route_selected": "direct_baseline",
+        "latency_sec": total_latency,
+        "timings": {"direct_baseline": total_latency},
+        "is_cross_object": False,
+        "is_relational": False,
+        "stage5_mode": "none",
+        "final_crop_boxes_before_aggregate": [],
+        "stage6_patch_boxes": [],
+    }
+    return record
+
+
+# ==============================================================================
 # MAIN ENTRY POINT & CONFIG MANAGEMENT
 # ==============================================================================
 
@@ -350,7 +604,18 @@ def main():
     parser.add_argument("--random_seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--resume", action="store_true", help="Skip already evaluated samples and continue appending to results file.")
     parser.add_argument("--resume_from", type=str, default=None, help="Specific previous results JSONL path to resume from (defaults to latest results_*.jsonl in output_dir).")
-    parser.add_argument("--mode", type=str, default="e2e", help="Execution mode (default: e2e).")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="e2e",
+        choices=["e2e", "direct", "direct_answer", "baseline"],
+        help="Execution mode: 'e2e' (full MSSearch pipeline) or 'direct'/'direct_answer'/'baseline' (direct VLM baseline evaluation).",
+    )
+    parser.add_argument(
+        "--direct_target_only",
+        action="store_true",
+        help="In direct answer mode, evaluate only the target image (N=1), ignoring distractor images.",
+    )
     parser.add_argument("--save_visuals", nargs="*", default=None, help="Visual artifact controls (kept for backward compatibility).")
 
 
@@ -479,6 +744,9 @@ def main():
     if args.resume_from:
         args.resume = True
 
+    is_direct_mode = args.mode in ("direct", "direct_answer", "baseline")
+    prefix = "results_baseline" if is_direct_mode else "results"
+
     # 4a. Resolve results JSONL path and resume tracking
     if args.output_file:
         results_log_path = os.path.abspath(args.output_file)
@@ -497,9 +765,9 @@ def main():
                 for f in os.listdir(args.output_dir):
                     if f.endswith(".jsonl"):
                         fp = os.path.join(args.output_dir, f)
-                        if f.startswith("results_"):
+                        if f.startswith(f"{prefix}_"):
                             timestamped_candidates.append((os.path.getmtime(fp), fp))
-                        elif f == "results.jsonl":
+                        elif f == f"{prefix}.jsonl" or f == "results.jsonl":
                             other_candidates.append((os.path.getmtime(fp), fp))
             candidates = timestamped_candidates or other_candidates
             if candidates:
@@ -507,10 +775,10 @@ def main():
                 results_log_path = candidates[0][1]
                 print(f"[Resume] Auto-detected most recent results file to resume: {results_log_path}")
             else:
-                results_log_path = os.path.abspath(os.path.join(args.output_dir, f"results_{timestamp_str}.jsonl"))
+                results_log_path = os.path.abspath(os.path.join(args.output_dir, f"{prefix}_{timestamp_str}.jsonl"))
                 print(f"[Resume] No existing results file found in '{args.output_dir}'. Starting new log: {results_log_path}")
     else:
-        results_log_path = os.path.abspath(os.path.join(args.output_dir, f"results_{timestamp_str}.jsonl"))
+        results_log_path = os.path.abspath(os.path.join(args.output_dir, f"{prefix}_{timestamp_str}.jsonl"))
         print(f"[Results] Telemetry will be logged to timestamped file: {results_log_path}")
 
     # Config file snapshot (timestamped + canonical pointer)
@@ -562,27 +830,46 @@ def main():
     print(f"[Queue] Ready to evaluate {len(target_indices)} sample(s).")
 
     # 7. Model Allocation & Initialization
+    if torch is None:
+        raise ImportError("PyTorch is required for benchmark execution.")
+
     num_gpus = torch.cuda.device_count()
     sam3_device = "cuda:1" if num_gpus > 1 else ("cuda:0" if num_gpus > 0 else "cpu")
     siglip_device = "cuda:0" if num_gpus > 0 else "cpu"
     qwen_device = "cuda:0" if num_gpus > 0 else "cpu"
 
     print("=" * 80)
-    print(f"HARDWARE TOPOLOGY: {num_gpus} CUDA GPUs Available")
-    print(f"  - SAM3 Engine      : {sam3_device}")
-    print(f"  - SigLIP Engine    : {siglip_device}")
+    print(f"HARDWARE TOPOLOGY: {num_gpus} CUDA GPUs Available | Mode: {args.mode}")
+    if not is_direct_mode:
+        print(f"  - SAM3 Engine      : {sam3_device}")
+        print(f"  - SigLIP Engine    : {siglip_device}")
     print(f"  - Qwen2.5-VL Engine: {qwen_device}")
     print("=" * 80)
 
-    print(f"[Loading] SAM3 from '{args.sam3_path}' on {sam3_device}...")
-    sam3_engine = sam3_inference(model_path=args.sam3_path, device=sam3_device)
+    if not is_direct_mode:
+        if sam3_inference is None:
+            raise ImportError("SAM3 dependencies not installed; required for mode='e2e'.")
+        if SigLIPScorer is None:
+            raise ImportError("SigLIP dependencies not installed; required for mode='e2e'.")
+        if get_mssearch_response is None:
+            raise ImportError("MSSearch pipeline not installed; required for mode='e2e'.")
 
-    print(f"[Loading] SigLIP '{args.siglip_name}' on {siglip_device}...")
-    siglip_engine = SigLIPScorer(
-        model_name=args.siglip_name,
-        device=siglip_device,
-        torch_dtype=torch.float16 if "cuda" in siglip_device else torch.float32,
-    )
+        print(f"[Loading] SAM3 from '{args.sam3_path}' on {sam3_device}...")
+        sam3_engine = sam3_inference(model_path=args.sam3_path, device=sam3_device)
+
+        print(f"[Loading] SigLIP '{args.siglip_name}' on {siglip_device}...")
+        siglip_engine = SigLIPScorer(
+            model_name=args.siglip_name,
+            device=siglip_device,
+            torch_dtype=torch.float16 if "cuda" in siglip_device else torch.float32,
+        )
+    else:
+        print(f"[Mode: {args.mode}] Direct answer baseline mode active - bypassing SAM3 and SigLIP initialization.")
+        sam3_engine = None
+        siglip_engine = None
+
+    if ModelQwenVL is None:
+        raise ImportError("ModelQwenVL dependencies not installed; required for VLM evaluation.")
 
     print(f"[Loading] Qwen2.5-VL from '{args.qwen_path}' on {qwen_device}...")
     qwen_engine = ModelQwenVL(
@@ -593,7 +880,7 @@ def main():
     )
 
     nlp_parser = None
-    if args.nlp_model:
+    if not is_direct_mode and args.nlp_model:
         try:
             import spacy
             nlp_parser = spacy.load(args.nlp_model) if os.path.exists(args.nlp_model) else spacy.load("en_core_web_sm")
@@ -613,19 +900,32 @@ def main():
             continue
 
         try:
-            rec = execute_single_sample(
-                sample_index=s_idx,
-                hrbench_data=hrbench_data,
-                hrbench_base_dir=hrbench_base_dir,
-                sam3_engine=sam3_engine,
-                siglip_engine=siglip_engine,
-                qwen_engine=qwen_engine,
-                nlp_parser=nlp_parser,
-                config=config,
-                num_candidate_images=args.num_candidate_images,
-                window_size=args.window_size,
-                random_seed=args.random_seed,
-            )
+            if is_direct_mode:
+                rec = execute_single_sample_direct(
+                    sample_index=s_idx,
+                    hrbench_data=hrbench_data,
+                    hrbench_base_dir=hrbench_base_dir,
+                    qwen_engine=qwen_engine,
+                    config=config,
+                    num_candidate_images=args.num_candidate_images,
+                    window_size=args.window_size,
+                    random_seed=args.random_seed,
+                    target_only=args.direct_target_only,
+                )
+            else:
+                rec = execute_single_sample(
+                    sample_index=s_idx,
+                    hrbench_data=hrbench_data,
+                    hrbench_base_dir=hrbench_base_dir,
+                    sam3_engine=sam3_engine,
+                    siglip_engine=siglip_engine,
+                    qwen_engine=qwen_engine,
+                    nlp_parser=nlp_parser,
+                    config=config,
+                    num_candidate_images=args.num_candidate_images,
+                    window_size=args.window_size,
+                    random_seed=args.random_seed,
+                )
             all_records.append(rec)
             evaluated_count += 1
             if rec.get("is_correct"):
@@ -637,8 +937,8 @@ def main():
             with open(results_log_path, "a", encoding="utf-8") as f_out:
                 f_out.write(json.dumps(rec) + "\n")
 
-            # Mirror to canonical results.jsonl in output_dir
-            canonical_results_path = os.path.join(args.output_dir, "results.jsonl")
+            # Mirror to canonical results.jsonl (or results_baseline.jsonl) in output_dir
+            canonical_results_path = os.path.join(args.output_dir, f"{prefix}.jsonl")
             if os.path.abspath(canonical_results_path) != os.path.abspath(results_log_path):
                 with open(canonical_results_path, "a", encoding="utf-8") as f_canon:
                     f_canon.write(json.dumps(rec) + "\n")
@@ -714,11 +1014,12 @@ def main():
             "config_used_path": config_out_path,
         }
 
-    summary_path = os.path.join(args.output_dir, f"summary_{timestamp_str}.json")
+    sum_prefix = "summary_baseline" if is_direct_mode else "summary"
+    summary_path = os.path.join(args.output_dir, f"{sum_prefix}_{timestamp_str}.json")
     with open(summary_path, "w", encoding="utf-8") as f_sum:
         json.dump(summary_data, f_sum, indent=2)
 
-    canonical_summary_path = os.path.join(args.output_dir, "summary.json")
+    canonical_summary_path = os.path.join(args.output_dir, f"{sum_prefix}.json")
     with open(canonical_summary_path, "w", encoding="utf-8") as f_canon_sum:
         json.dump(summary_data, f_canon_sum, indent=2)
 
