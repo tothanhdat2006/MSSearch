@@ -67,7 +67,7 @@ except (ImportError, ModuleNotFoundError):
     get_mssearch_response = None
 
 try:
-    from mssearch.stages.stage1_parser import format_options
+    from mssearch.stages.stage1_parser import format_options, format_question_with_options
 except (ImportError, ModuleNotFoundError):
     def format_options(options: Any, cycle_idx: int = 0) -> str:
         """Fallback option block formatting when stages module is unavailable."""
@@ -88,6 +88,20 @@ except (ImportError, ModuleNotFoundError):
                 return "\n".join(f"{k}. {v}" for k, v in chosen_block.items())
             return str(chosen_block).strip()
         return str(options).strip()
+
+    def format_question_with_options(question: str, options: Any = None, cycle_idx: int = 0) -> str:
+        """Fallback question + option block formatting when stages module is unavailable."""
+        if not options:
+            return question
+        opt_str = format_options(options, cycle_idx=cycle_idx)
+        if not opt_str:
+            return question
+        return (
+            f"{question}\n\n"
+            f"Options:\n{opt_str}\n\n"
+            f"Select the best answer to the above multiple-choice question based on the image. "
+            f"Respond with the option letter and concise answer text."
+        )
 
 
 # ==============================================================================
@@ -178,6 +192,17 @@ def extract_predicted_option(pred_str: Optional[str], options_raw: Any = None) -
     clean_pred = pred_str.strip()
     if not clean_pred or clean_pred.lower() in ("no answer found", "none", "n/a", "[error: image not found]"):
         return None
+
+    # 0. XML tag extraction <answer>...</answer> (exact match with Stage 6 XML format directive)
+    xml_m = re.search(r"<answer>(.*?)</answer>", clean_pred, re.DOTALL | re.IGNORECASE)
+    if xml_m:
+        inside = xml_m.group(1).strip()
+        if inside.lower() in ("none", "no answer found", "n/a"):
+            return None
+        m = re.search(r"\b([A-Da-d])\b", inside)
+        if m:
+            return m.group(1).upper()
+        clean_pred = inside
 
     # 1. Regex check for leading letter (e.g. 'A. 27B', '(A)', 'A: ')
     m = re.match(r"^[\(\[\"']*([A-Da-d])[\)\]\.\:\s]", clean_pred)
@@ -479,25 +504,33 @@ def execute_single_sample_direct(
     print(f"[Direct Baseline][Sample #{sample_index}] Question: '{real_question}'")
     print(f"[Direct Baseline][Sample #{sample_index}] Ground Truth: '{gt_letter}' | Candidate Images: N={len(candidate_images)} (Target Index: {target_pool_idx})")
 
-    # 3. Format prompt with candidate options if present
+    # 3. Format prompt with candidate options if present (exact same prompt as run_all.sh / Stage 6)
     opt_str = format_options(raw_options, cycle_idx=cycle_idx)
     if "Options:" not in real_question and opt_str:
+        base_question = format_question_with_options(real_question, raw_options, cycle_idx=cycle_idx)
+    else:
+        base_question = real_question
+
+    if opt_str or "Options:" in real_question:
         prompt_text = (
-            f"{real_question}\n\n"
-            f"Options:\n{opt_str}\n\n"
-            "Select the best option from the choices above that answers the question based on the visual information.\n"
-            "Format your answer as:\n"
-            "Final Answer: [Option Letter]"
-        )
-    elif "Options:" in real_question:
-        prompt_text = (
-            f"{real_question}\n\n"
-            "Select the best option from the choices above that answers the question based on the visual information.\n"
-            "Format your answer as:\n"
-            "Final Answer: [Option Letter]"
+            f"{base_question}\n\n"
+            "Select the best option from the choices above that answers the question.\n"
+            "State ONLY the option letter and concise choice (e.g. <answer>(A)</answer> or <answer>A. choice text</answer>).\n"
+            "Do NOT write conversational filler, reasoning, or explanations.\n"
+            "If the target object or requested information is NOT clearly visible, output strictly:\n"
+            "<answer>None</answer>\n\n"
+            "Otherwise, output the option letter inside <answer>...</answer> tags:\n"
+            "<answer>(A)</answer>"
         )
     else:
-        prompt_text = f"{real_question}\n\nAnswer the question concisely based on the visual information."
+        prompt_text = (
+            f"{real_question}\n\n"
+            "State ONLY the direct factual answer (1 to 5 words). Do NOT write conversational filler or explanations.\n"
+            "If the target object or requested text/information is NOT clearly visible, output strictly:\n"
+            "<answer>None</answer>\n\n"
+            "Otherwise, output the concise answer inside <answer>...</answer> tags:\n"
+            "<answer>concise answer</answer>"
+        )
 
     # 4. Direct VLM Query
     t0 = time.perf_counter()
