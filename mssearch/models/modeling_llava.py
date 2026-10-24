@@ -1,3 +1,4 @@
+import copy
 import torch
 from torch.nn import CrossEntropyLoss
 from abc import ABC, abstractmethod
@@ -276,38 +277,95 @@ class Model(ABC):
         prompt = self.get_prompt_from_qs(qs)
         image_tensor, image_sizes = self.process_image_list_to_tensor(image_list)
 
-        question_input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX,return_tensors='pt').unsqueeze(0).to(self.device)
-
-        output_question = self.model(
-            question_input_ids,
-            use_cache=True,
-            images=image_tensor,
-            image_sizes=image_sizes)
-
-        question_logits = output_question.logits
-        question_past_key_values = output_question.past_key_values
+        question_input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.device)
 
         loss_list = []
+        try:
+            output_question = self.model(
+                question_input_ids,
+                use_cache=True,
+                images=image_tensor,
+                image_sizes=image_sizes,
+                modalities=["image"] * len(question_input_ids),
+            )
+            question_logits = output_question.logits
+            question_past_key_values = output_question.past_key_values
+            orig_cache_len = (
+                question_past_key_values.get_seq_length()
+                if hasattr(question_past_key_values, "get_seq_length")
+                else None
+            )
+            use_cached_eval = True
+        except Exception:
+            use_cached_eval = False
 
         for option in options:
             full_prompt = self.get_prompt_from_qs(qs, option)
-            full_input_ids = tokenizer_image_token(full_prompt, self.tokenizer, IMAGE_TOKEN_INDEX,return_tensors='pt').unsqueeze(0).to(self.device)
+            full_input_ids = tokenizer_image_token(full_prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.device)
             option_answer_input_ids = full_input_ids[:, question_input_ids.shape[1]:]
-            output_option = self.model(input_ids=option_answer_input_ids,
-                                       use_cache=True,
-                                       attention_mask=torch.ones(1, question_logits.shape[1] +
-                                                                 option_answer_input_ids.shape[1],
-                                                                 device=full_input_ids.device),
-                                       past_key_values=question_past_key_values)
 
-            logits = torch.cat([question_logits[:, -1:], output_option.logits[:, :-1]], 1)
+            if option_answer_input_ids.shape[1] == 0:
+                loss_list.append(torch.tensor(float("inf"), device=self.device))
+                continue
+
+            if use_cached_eval:
+                if hasattr(question_past_key_values, "crop") and orig_cache_len is not None:
+                    question_past_key_values.crop(orig_cache_len)
+                    cur_past_kv = question_past_key_values
+                else:
+                    try:
+                        cur_past_kv = copy.deepcopy(question_past_key_values)
+                    except Exception:
+                        cur_past_kv = question_past_key_values
+
+                past_len = (
+                    cur_past_kv.get_seq_length()
+                    if hasattr(cur_past_kv, "get_seq_length")
+                    else question_logits.shape[1]
+                )
+                attn_mask = torch.ones(
+                    1,
+                    past_len + option_answer_input_ids.shape[1],
+                    device=full_input_ids.device,
+                    dtype=torch.long,
+                )
+
+                try:
+                    output_option = self.model(
+                        input_ids=option_answer_input_ids,
+                        use_cache=True,
+                        attention_mask=attn_mask,
+                        past_key_values=cur_past_kv,
+                    )
+                    logits = torch.cat([question_logits[:, -1:], output_option.logits[:, :-1]], 1)
+                except Exception:
+                    output_option = self.model(
+                        full_input_ids,
+                        images=image_tensor,
+                        image_sizes=image_sizes,
+                        modalities=["image"] * len(full_input_ids),
+                    )
+                    logits = output_option.logits[:, question_logits.shape[1] - 1 : -1]
+
+                if hasattr(question_past_key_values, "crop") and orig_cache_len is not None:
+                    question_past_key_values.crop(orig_cache_len)
+            else:
+                output_option = self.model(
+                    full_input_ids,
+                    images=image_tensor,
+                    image_sizes=image_sizes,
+                    modalities=["image"] * len(full_input_ids),
+                )
+                logits = output_option.logits[:, -option_answer_input_ids.shape[1] - 1 : -1]
 
             loss_fct = CrossEntropyLoss()
-            logits = logits.view(-1, self.model.config.vocab_size)
-            labels = option_answer_input_ids.view(-1)
+            logits = logits.reshape(-1, self.model.config.vocab_size)
+            labels = option_answer_input_ids.reshape(-1)
             loss = loss_fct(logits, labels)
             loss_list.append(loss)
 
+        if not loss_list:
+            return 0
         option_chosen = torch.stack(loss_list).argmin()
 
         return option_chosen.cpu().item()
@@ -704,38 +762,95 @@ class ModelGlobalLocal(Model):
         prompt = self.get_prompt_from_qs(qs)
         image_tensor, image_sizes = self.process_image_list_to_tensor(image_input)
 
-        question_input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX,return_tensors='pt').unsqueeze(0).to(self.device)
-        output_question = self.model(
-            question_input_ids,
-            use_cache=True,
-            images=image_tensor,
-            image_sizes=image_sizes)
-
-        question_logits = output_question.logits
-        question_past_key_values = output_question.past_key_values
+        question_input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.device)
 
         loss_list = []
+        try:
+            output_question = self.model(
+                question_input_ids,
+                use_cache=True,
+                images=image_tensor,
+                image_sizes=image_sizes,
+                modalities=["image"] * len(question_input_ids),
+            )
+            question_logits = output_question.logits
+            question_past_key_values = output_question.past_key_values
+            orig_cache_len = (
+                question_past_key_values.get_seq_length()
+                if hasattr(question_past_key_values, "get_seq_length")
+                else None
+            )
+            use_cached_eval = True
+        except Exception:
+            use_cached_eval = False
 
         for option in options:
             full_prompt = self.get_prompt_from_qs(qs, option)
-            full_input_ids = tokenizer_image_token(full_prompt, self.tokenizer, IMAGE_TOKEN_INDEX,return_tensors='pt').unsqueeze(0).to(self.device)
+            full_input_ids = tokenizer_image_token(full_prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.device)
             option_answer_input_ids = full_input_ids[:, question_input_ids.shape[1]:]
 
-            output_option = self.model(input_ids=option_answer_input_ids,
-                                       use_cache=True,
-                                       attention_mask=torch.ones(1, question_logits.shape[1] +
-                                                                 option_answer_input_ids.shape[1],
-                                                                 device=full_input_ids.device),
-                                       past_key_values=question_past_key_values)
+            if option_answer_input_ids.shape[1] == 0:
+                loss_list.append(torch.tensor(float("inf"), device=self.device))
+                continue
 
-            logits = torch.cat([question_logits[:, -1:], output_option.logits[:, :-1]], 1)
+            if use_cached_eval:
+                if hasattr(question_past_key_values, "crop") and orig_cache_len is not None:
+                    question_past_key_values.crop(orig_cache_len)
+                    cur_past_kv = question_past_key_values
+                else:
+                    try:
+                        cur_past_kv = copy.deepcopy(question_past_key_values)
+                    except Exception:
+                        cur_past_kv = question_past_key_values
+
+                past_len = (
+                    cur_past_kv.get_seq_length()
+                    if hasattr(cur_past_kv, "get_seq_length")
+                    else question_logits.shape[1]
+                )
+                attn_mask = torch.ones(
+                    1,
+                    past_len + option_answer_input_ids.shape[1],
+                    device=full_input_ids.device,
+                    dtype=torch.long,
+                )
+
+                try:
+                    output_option = self.model(
+                        input_ids=option_answer_input_ids,
+                        use_cache=True,
+                        attention_mask=attn_mask,
+                        past_key_values=cur_past_kv,
+                    )
+                    logits = torch.cat([question_logits[:, -1:], output_option.logits[:, :-1]], 1)
+                except Exception:
+                    output_option = self.model(
+                        full_input_ids,
+                        images=image_tensor,
+                        image_sizes=image_sizes,
+                        modalities=["image"] * len(full_input_ids),
+                    )
+                    logits = output_option.logits[:, question_logits.shape[1] - 1 : -1]
+
+                if hasattr(question_past_key_values, "crop") and orig_cache_len is not None:
+                    question_past_key_values.crop(orig_cache_len)
+            else:
+                output_option = self.model(
+                    full_input_ids,
+                    images=image_tensor,
+                    image_sizes=image_sizes,
+                    modalities=["image"] * len(full_input_ids),
+                )
+                logits = output_option.logits[:, -option_answer_input_ids.shape[1] - 1 : -1]
 
             loss_fct = CrossEntropyLoss()
-            logits = logits.view(-1, self.model.config.vocab_size)
-            labels = option_answer_input_ids.view(-1)
+            logits = logits.reshape(-1, self.model.config.vocab_size)
+            labels = option_answer_input_ids.reshape(-1)
             loss = loss_fct(logits, labels)
             loss_list.append(loss)
 
+        if not loss_list:
+            return 0
         option_chosen = torch.stack(loss_list).argmin()
 
         return option_chosen.cpu().item()

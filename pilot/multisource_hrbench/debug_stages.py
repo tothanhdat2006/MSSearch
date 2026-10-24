@@ -914,22 +914,28 @@ def execute_single_sample_direct(
     print(f"[Direct Baseline][Sample #{sample_index}] Ground Truth: '{gt_letter}' (index: {gt_idx}){test_type_str} | Candidate Images: N={len(candidate_images)} (Target Index: {target_pool_idx})")
 
     # 3. Direct evaluation: Check logits_match first (V* standard protocol)
+    logits_match_success = False
     if is_logits_match and hasattr(qwen_engine, "multiple_choices_inference") and raw_options:
         opt_list = raw_options if isinstance(raw_options, list) else list(raw_options.values())
         query_image = candidate_images[target_pool_idx] if (target_only or len(candidate_images) == 1) else _create_composite_canvas(candidate_images)
         t0 = time.perf_counter()
-        chosen_idx = qwen_engine.multiple_choices_inference(
-            image_pil=query_image,
-            question=real_question,
-            options=opt_list,
-            searched_nodes=[],
-        )
-        total_latency = round(time.perf_counter() - t0, 3)
-        chosen_idx = int(chosen_idx)
-        pred_letter = chr(65 + chosen_idx) if 0 <= chosen_idx < 26 else str(chosen_idx)
-        chosen_text = opt_list[chosen_idx] if 0 <= chosen_idx < len(opt_list) else ""
-        raw_response = f"Option {pred_letter} ({chosen_idx}): {chosen_text}"
-    else:
+        try:
+            chosen_idx = qwen_engine.multiple_choices_inference(
+                image_pil=query_image,
+                question=real_question,
+                options=opt_list,
+                searched_nodes=[],
+            )
+            total_latency = round(time.perf_counter() - t0, 3)
+            chosen_idx = int(chosen_idx)
+            pred_letter = chr(65 + chosen_idx) if 0 <= chosen_idx < 26 else str(chosen_idx)
+            chosen_text = opt_list[chosen_idx] if 0 <= chosen_idx < len(opt_list) else ""
+            raw_response = f"Option {pred_letter} ({chosen_idx}): {chosen_text}"
+            logits_match_success = True
+        except Exception as e_mc:
+            print(f"[Warning] multiple_choices_inference failed ({e_mc}); falling back to text generation.")
+
+    if not logits_match_success:
         # 3b. Format prompt with candidate options if present
         if "text" in target_sample and target_sample["text"]:
             base_question = target_sample["text"]
