@@ -320,7 +320,7 @@ def run_direct_global_assessment(
 
 def run_tool_based_fast_path(
     candidate_images: List[Image.Image],
-    active_objects: List[str],
+    active_objects: Any,
     question: str,
     sam_model,
     zoom_model,
@@ -340,6 +340,21 @@ def run_tool_based_fast_path(
         raise RuntimeError("[Stage 2 Error] sam_model (SAM3) is None. Tool Fast Path requires a loaded SAM3 model; fallback execution is strictly disabled.")
     if zoom_model is None:
         raise RuntimeError("[Stage 2 Error] zoom_model (Qwen2.5-VL) is None. Tool Fast Path requires a loaded VLM model; fallback execution is strictly disabled.")
+
+    # Normalize active_objects if a bridge object or container was provided
+    if hasattr(active_objects, "active_objects"):
+        active_objects = list(active_objects.active_objects)
+    elif hasattr(active_objects, "atomic_visual_anchors"):
+        active_objects = list(active_objects.atomic_visual_anchors)
+    elif isinstance(active_objects, (list, tuple)):
+        active_objects = list(active_objects)
+    elif isinstance(active_objects, str):
+        active_objects = [active_objects]
+    else:
+        try:
+            active_objects = list(active_objects)
+        except TypeError:
+            active_objects = [str(active_objects)]
 
     target_indices = active_img_indices if active_img_indices is not None else list(range(len(candidate_images)))
     if config.verbose:

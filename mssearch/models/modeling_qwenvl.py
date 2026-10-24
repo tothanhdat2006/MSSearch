@@ -648,7 +648,23 @@ class ModelQwenVL:
         return [self.resize_image(original_image_with_color_bbox), croped_view, zoomed_view]
 
     @torch.no_grad()
-    def get_confidence_value(self, node: Optional[List[NodeA]] = None, image_pil: Image.Image = None, confidence_type: str = 'existence', input_ele: str = '', root_anyres: bool = True, node_list: Optional[List[NodeA]] = None):
+    def get_confidence_value(
+        self,
+        node: Optional[List[NodeA]] = None,
+        image_pil: Image.Image = None,
+        confidence_type: str = 'existence',
+        input_ele: str = '',
+        root_anyres: bool = True,
+        node_list: Optional[List[NodeA]] = None,
+        image: Optional[Image.Image] = None,
+        active_object: Optional[str] = None,
+        **kwargs
+    ):
+        if image is not None and image_pil is None:
+            image_pil = image
+        if active_object is not None and not input_ele:
+            input_ele = active_object
+
         assert confidence_type in ['existence', 'latent', 'answering']
         actual_nodes = node if node is not None else node_list
         image_list = self.process_nodes_to_image_list(actual_nodes, image_pil, root_anyres=root_anyres)

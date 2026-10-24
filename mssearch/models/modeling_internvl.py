@@ -312,7 +312,21 @@ class ModelInternvl:
         return [square_image.resize(self.input_size), croped_view, zoomed_view]
 
     @torch.no_grad()
-    def get_confidence_value(self, node: List[Node], image_pil: Image.Image, confidence_type: str, input_ele,root_anyres=True):
+    def get_confidence_value(
+        self,
+        node: Optional[List[Node]] = None,
+        image_pil: Image.Image = None,
+        confidence_type: str = 'existence',
+        input_ele: str = '',
+        root_anyres: bool = True,
+        image: Optional[Image.Image] = None,
+        active_object: Optional[str] = None,
+        **kwargs
+    ):
+        if image is not None and image_pil is None:
+            image_pil = image
+        if active_object is not None and not input_ele:
+            input_ele = active_object
 
         assert confidence_type in ['existence', 'latent', 'answering']
         image_list = self.process_nodes_to_image_list(node, image_pil, root_anyres=root_anyres)
