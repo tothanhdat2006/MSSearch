@@ -94,30 +94,46 @@ class ModelQwenVL:
 
         self.model.eval()
         self.device = self.model.device
+        self.model_path = model_path
+
+        # Sync or assign chat_template across processor and tokenizer
+        if hasattr(self, "processor") and hasattr(self, "tokenizer"):
+            p_tmpl = getattr(self.processor, "chat_template", None)
+            t_tmpl = getattr(self.tokenizer, "chat_template", None)
+            if p_tmpl is None and t_tmpl is not None:
+                self.processor.chat_template = t_tmpl
+            elif p_tmpl is not None and t_tmpl is None:
+                self.tokenizer.chat_template = p_tmpl
 
         # Visual pixel budget:
         # - min_pixels: 3136 (corresponds to 56 x 56 minimum patch resolution).
         # - max_pixels: Default 12,845,056 (~12.8M pixels, roughly 3584 x 3584).
         #   Overridden to 4,194,304 (~4.2M pixels, 2048 x 2048) for 32B checkpoints to prevent OOM.
         min_pixels = kwargs.get("min_pixels", 3136)
-        default_max_pixels = 4194304 if "32b" in str(model_path).lower() else 12845056
+        default_max_pixels = 4194304 if ("32b" in str(model_path).lower() or "72b" in str(model_path).lower()) else 12845056
         max_pixels = kwargs.get("max_pixels", default_max_pixels)
         print("[ModelQwenVL] max_pixels capped at:", max_pixels)
         print("[ModelQwenVL] min_pixels:", min_pixels)
-        self.processor.image_processor.max_pixels = max_pixels
-        self.processor.image_processor.min_pixels = min_pixels
+        if hasattr(self.processor, "image_processor"):
+            if hasattr(self.processor.image_processor, "max_pixels"):
+                self.processor.image_processor.max_pixels = max_pixels
+            if hasattr(self.processor.image_processor, "min_pixels"):
+                self.processor.image_processor.min_pixels = min_pixels
 
         self.bias_value = kwargs.get("bias_value", 0.6)
         print("bias_value:", self.bias_value)
 
-        # We hard code the input size to 448x448 for QwenVL
+        # Standard input size for patch scaling
         self.input_size = (448, 448)
         print("input size:", self.input_size)
 
         self.view_size = 336 ### crop size
         self.scale_size = 672
 
-        self.background_color = tuple(int(x * 255) for x in self.processor.image_processor.image_mean)
+        if hasattr(self.processor, "image_processor") and hasattr(self.processor.image_processor, "image_mean"):
+            self.background_color = tuple(int(x * 255) for x in self.processor.image_processor.image_mean)
+        else:
+            self.background_color = (128, 128, 128)
         print("background color:", self.background_color)
 
         self.patch_scale = kwargs.get("patch_scale", None)
@@ -127,15 +143,16 @@ class ModelQwenVL:
         self.init_index_yes_no()
 
     def init_index_yes_no(self):
-        print("Yes:", self.tokenizer("Yes").input_ids)
-        print("No:", self.tokenizer("No").input_ids)
-        if len(self.tokenizer("Yes").input_ids) == 1 and len(self.tokenizer("No").input_ids) == 1:
-            self.index_yes = self.tokenizer("Yes").input_ids[0]
-            self.index_no = self.tokenizer("No").input_ids[0]
-        else:
-            assert len(self.tokenizer("Yes").input_ids) == 2 and len(self.tokenizer("No").input_ids) == 2
-            self.index_yes = self.tokenizer("Yes").input_ids[1]
-            self.index_no = self.tokenizer("No").input_ids[1]
+        try:
+            yes_ids = self.tokenizer("Yes", add_special_tokens=False).input_ids
+            no_ids = self.tokenizer("No", add_special_tokens=False).input_ids
+            self.index_yes = yes_ids[-1] if len(yes_ids) > 0 else self.tokenizer("Yes").input_ids[-1]
+            self.index_no = no_ids[-1] if len(no_ids) > 0 else self.tokenizer("No").input_ids[-1]
+        except Exception:
+            yes_full = self.tokenizer("Yes").input_ids
+            no_full = self.tokenizer("No").input_ids
+            self.index_yes = yes_full[-1] if len(yes_full) > 0 else 0
+            self.index_no = no_full[-1] if len(no_full) > 0 else 0
         print("index_yes:", self.index_yes)
         print("index_no:", self.index_no)
 
@@ -231,13 +248,89 @@ class ModelQwenVL:
             else:
                 message[0]["content"].append({"type": "text", "text": qs[:index]})
                 qs = qs[index:]
+        while "<image>" in qs:
+            index = qs.find("<image>")
+            if index == 0:
+                message[0]["content"].append({"type": "image"})
+                qs = qs[len("<image>"):]
+            else:
+                message[0]["content"].append({"type": "text", "text": qs[:index]})
+                qs = qs[index:]
         if len(qs) > 0:
             message[0]["content"].append({"type": "text", "text": qs})
         if response is not None:
             message.append({"role": "assistant", "content": [{"type": "text", "text": response}]})
-        texts = [self.processor.apply_chat_template(message, tokenize=False,add_generation_prompt=True if response is None else False)]
 
-        return texts[0]
+        # Tier 1: processor.apply_chat_template
+        prompt_text = None
+        if hasattr(self, "processor") and hasattr(self.processor, "apply_chat_template"):
+            try:
+                texts = [self.processor.apply_chat_template(
+                    message,
+                    tokenize=False,
+                    add_generation_prompt=True if response is None else False,
+                )]
+                prompt_text = texts[0]
+            except Exception:
+                prompt_text = None
+
+        # Tier 2: tokenizer.apply_chat_template
+        if prompt_text is None and hasattr(self, "tokenizer") and hasattr(self.tokenizer, "apply_chat_template"):
+            try:
+                simple_msg = []
+                for m in message:
+                    txt_parts = []
+                    for c in m.get("content", []):
+                        if isinstance(c, dict):
+                            if c.get("type") == "image":
+                                txt_parts.append("<image>\n")
+                            elif c.get("type") == "text":
+                                txt_parts.append(c.get("text", ""))
+                        elif isinstance(c, str):
+                            txt_parts.append(c)
+                    simple_msg.append({"role": m["role"], "content": "".join(txt_parts)})
+                prompt_text = self.tokenizer.apply_chat_template(
+                    simple_msg,
+                    tokenize=False,
+                    add_generation_prompt=True if response is None else False,
+                )
+            except Exception:
+                prompt_text = None
+
+        # Tier 3: Model-aware direct fallback format (LLaVA-OneVision, InternVL, Qwen2)
+        if prompt_text is None:
+            prompt_text = self._format_fallback_chat_prompt(message, response=response)
+
+        return prompt_text
+
+    def _format_fallback_chat_prompt(self, message, response=None):
+        user_parts = []
+        for m in message:
+            if m.get("role") == "user":
+                for c in m.get("content", []):
+                    if isinstance(c, dict):
+                        if c.get("type") == "image":
+                            user_parts.append("<image>\n")
+                        elif c.get("type") == "text":
+                            user_parts.append(c.get("text", ""))
+                    elif isinstance(c, str):
+                        user_parts.append(c)
+        user_str = "".join(user_parts)
+        m_str = str(getattr(self, "model_path", "")).lower()
+
+        if "internvl" in m_str:
+            if response is not None:
+                return f"<|im_start|>user\n{user_str}<|im_end|>\n<|im_start|>assistant\n{response}<|im_end|>"
+            return f"<|im_start|>user\n{user_str}<|im_end|>\n<|im_start|>assistant\n"
+        elif "llava" in m_str and "onevision" not in m_str and "qwen" not in m_str:
+            if response is not None:
+                return f"USER: {user_str}\nASSISTANT: {response}"
+            return f"USER: {user_str}\nASSISTANT:"
+        else:
+            # Default ChatML format (Qwen2, LLaVA-OneVision, etc.)
+            if response is not None:
+                return f"<|im_start|>user\n{user_str}<|im_end|>\n<|im_start|>assistant\n{response}<|im_end|>"
+            return f"<|im_start|>user\n{user_str}<|im_end|>\n<|im_start|>assistant\n"
 
     def resize_image(self, image_pil):
         img = deepcopy(image_pil)
@@ -648,7 +741,32 @@ class ModelQwenVL:
             messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
         else:
             messages = prompt
-        text_prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+        text_prompt = None
+        if hasattr(self, "processor") and hasattr(self.processor, "apply_chat_template"):
+            try:
+                text_prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            except Exception:
+                text_prompt = None
+
+        if text_prompt is None and hasattr(self, "tokenizer") and hasattr(self.tokenizer, "apply_chat_template"):
+            try:
+                simple_msg = []
+                for m in messages:
+                    txt = ""
+                    for c in m.get("content", []):
+                        if isinstance(c, dict):
+                            txt += c.get("text", "")
+                        elif isinstance(c, str):
+                            txt += c
+                    simple_msg.append({"role": m["role"], "content": txt})
+                text_prompt = self.tokenizer.apply_chat_template(simple_msg, tokenize=False, add_generation_prompt=True)
+            except Exception:
+                text_prompt = None
+
+        if text_prompt is None:
+            text_prompt = self._format_fallback_chat_prompt(messages)
+
         inputs = self.processor(
             text=[text_prompt],
             images=None,

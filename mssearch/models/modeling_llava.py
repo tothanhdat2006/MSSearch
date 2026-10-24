@@ -166,6 +166,39 @@ class Model(ABC):
         return outputs
 
     @torch.inference_mode()
+    def generate_response(self, image_pil, question: str, max_new_tokens: int = 128, **kwargs) -> str:
+        """Direct free-form response generation for LLaVA."""
+        img = image_pil[0] if isinstance(image_pil, (list, tuple)) else image_pil
+        return self.free_form_using_nodes(
+            image_pil=img,
+            question=question,
+            searched_nodes=[],
+            return_zoomed_view=False,
+            max_new_tokens=max_new_tokens,
+        )
+
+    @torch.inference_mode()
+    def generate_text(self, prompt, max_new_tokens: int = 64) -> str:
+        """Pure text generation interface for LLaVA."""
+        if isinstance(prompt, list):
+            parts = []
+            for m in prompt:
+                if isinstance(m, dict):
+                    parts.append(str(m.get("content", "")))
+            prompt_str = "\n".join(parts)
+        else:
+            prompt_str = str(prompt)
+        input_ids = self.tokenizer(prompt_str, return_tensors='pt').input_ids.to(self.device)
+        output_ids = self.model.generate(
+            input_ids,
+            images=None,
+            do_sample=False,
+            temperature=0,
+            max_new_tokens=max_new_tokens,
+        )
+        return self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+
+    @torch.inference_mode()
     def multiple_choices_inference(self, image_pil, question, options, searched_nodes: List[Node] = None):
         image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
         prompt_tag = self.get_prompt_tag(image_list)

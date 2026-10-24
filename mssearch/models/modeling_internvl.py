@@ -1,4 +1,5 @@
 import torch
+from typing import Union, List, Dict, Any, Optional
 from torch.nn import CrossEntropyLoss
 import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
@@ -511,6 +512,32 @@ class ModelInternvl:
         option_chosen = torch.stack(loss_list).argmin()
 
         return option_chosen.cpu().item()
+
+    @torch.inference_mode()
+    def generate_response(self, image_pil: Union[Image.Image, List[Image.Image]], question: str, max_new_tokens: int = 128, **kwargs) -> str:
+        """Direct free-form response generation for InternVL (single image or dual-scale list)."""
+        img = image_pil[0] if isinstance(image_pil, (list, tuple)) else image_pil
+        return self.free_form_using_nodes(
+            image_pil=img,
+            question=question,
+            searched_nodes=[],
+            return_zoomed_view=False,
+            max_new_tokens=max_new_tokens,
+        )
+
+    @torch.inference_mode()
+    def generate_text(self, prompt: Union[str, List[Dict[str, Any]]], max_new_tokens: int = 64) -> str:
+        """Pure text generation interface for InternVL without image inputs."""
+        if isinstance(prompt, list):
+            parts = []
+            for m in prompt:
+                if isinstance(m, dict):
+                    parts.append(str(m.get("content", "")))
+            qs = "\n".join(parts)
+        else:
+            qs = str(prompt)
+        gen_cfg = dict(max_new_tokens=max_new_tokens, do_sample=False)
+        return self.model.chat(self.tokenizer, None, qs, gen_cfg).strip()
 
 
 def load_image(image: Image.Image, input_size: int = 448, max_num: int = 12, use_anyres: bool = True):

@@ -383,7 +383,46 @@ def run_direct_vlm_inference(
         else:
             safe_images.append(img)
 
-    # 2. Single-image route (N=1)
+    # 2. InternVL Route (supports both N=1 and N>1 multi-image pools via .chat)
+    if hasattr(qwen_engine, "model") and hasattr(qwen_engine, "tokenizer") and hasattr(getattr(qwen_engine, "model", None), "chat"):
+        if len(safe_images) == 1 and hasattr(qwen_engine, "free_form_using_nodes"):
+            return qwen_engine.free_form_using_nodes(
+                image_pil=safe_images[0],
+                question=prompt,
+                searched_nodes=[],
+                max_new_tokens=max_new_tokens,
+            )
+        try:
+            from mssearch.models.modeling_internvl import load_image, IMG_START_TOKEN, IMG_END_TOKEN, IMG_CONTEXT_TOKEN
+            full_pixel_values = []
+            num_patches_list = []
+            for img in safe_images:
+                pv = load_image(img, input_size=getattr(qwen_engine, "input_size", (448, 448))[0], max_num=getattr(qwen_engine, "anyres_num", 12))
+                full_pixel_values.append(pv.to(qwen_engine.dtype))
+                num_patches_list.append(pv.shape[0])
+            full_pixel_values = torch.cat(full_pixel_values, dim=0).to(qwen_engine.device)
+
+            qs_parts = []
+            for idx in range(len(safe_images)):
+                qs_parts.append(f"Candidate Image {idx + 1}:\n<image>\n")
+            qs_parts.append(f"\n{prompt}")
+            chat_prompt = "".join(qs_parts)
+
+            image_idx = 0
+            for num_patches in num_patches_list:
+                while "<image>" in chat_prompt:
+                    num_patches = num_patches_list[image_idx]
+                    image_tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * qwen_engine.model.num_image_token * num_patches + IMG_END_TOKEN
+                    chat_prompt = chat_prompt.replace("<image>", image_tokens, 1)
+                    image_idx += 1
+
+            gen_cfg = dict(max_new_tokens=max_new_tokens, do_sample=False)
+            response = qwen_engine.model.chat(qwen_engine.tokenizer, full_pixel_values, chat_prompt, gen_cfg)
+            return response.strip()
+        except Exception as e_ivl_chat:
+            print(f"[Notice] InternVL multi-image direct inference exception: {e_ivl_chat}")
+
+    # 3. Single-image route (N=1) for other models
     if len(safe_images) == 1:
         if hasattr(qwen_engine, "generate_response"):
             return qwen_engine.generate_response(
@@ -399,7 +438,7 @@ def run_direct_vlm_inference(
                 max_new_tokens=max_new_tokens,
             )
 
-    # 3. Multi-image route (N > 1): interleaved multi-image prompt
+    # 4. Multi-image route (N > 1) via HuggingFace processor (Qwen2-VL, LLaVA-OneVision, etc.)
     if (
         hasattr(qwen_engine, "processor")
         and hasattr(qwen_engine, "model")
@@ -412,13 +451,24 @@ def run_direct_vlm_inference(
         qs_full = "".join(qs_parts)
 
         prompt_text = qwen_engine.get_prompt_from_qs(qs_full)
-        model_inputs = qwen_engine.processor(
-            text=[prompt_text],
-            images=safe_images,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-        ).to(qwen_engine.device)
+
+        try:
+            model_inputs = qwen_engine.processor(
+                text=[prompt_text],
+                images=safe_images,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+            ).to(qwen_engine.device)
+        except (ValueError, TypeError):
+            # Fallback for processors expecting nested image lists for a single sample (e.g. LlavaOnevisionProcessor)
+            model_inputs = qwen_engine.processor(
+                text=[prompt_text],
+                images=[safe_images],
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+            ).to(qwen_engine.device)
 
         if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
             if not (model_inputs.attention_mask == 0).any():
@@ -439,6 +489,8 @@ def run_direct_vlm_inference(
     # Fallback for generic VLM
     if hasattr(qwen_engine, "generate_response"):
         return qwen_engine.generate_response(image_pil=safe_images[0], question=prompt, max_new_tokens=max_new_tokens)
+    if hasattr(qwen_engine, "free_form_using_nodes"):
+        return qwen_engine.free_form_using_nodes(image_pil=safe_images[0], question=prompt, searched_nodes=[], max_new_tokens=max_new_tokens)
     return str(qwen_engine(image_pil=safe_images, question=prompt))
 
 
@@ -960,17 +1012,50 @@ def main():
     else:
         resolved_max_pixels = 12845056
 
-    print(f"[Loading] Local VLM from '{args.qwen_path}' on {qwen_device}...")
-    guard_msg = "Large Model OOM-guard" if resolved_max_pixels == 4194304 else "full-scale"
-    print(f"  • Pixel Budget: min_pixels={args.min_pixels} (56x56) | max_pixels={resolved_max_pixels} ({guard_msg})")
-    qwen_engine = ModelQwenVL(
-        model_path=args.qwen_path,
-        device=qwen_device,
-        torch_dtype=torch.float16 if "cuda" in qwen_device else torch.float32,
-        patch_scale=1.2,
-        min_pixels=args.min_pixels,
-        max_pixels=resolved_max_pixels,
-    )
+    model_path_str = str(args.qwen_path).lower()
+    cfg_data = {}
+    cfg_path = os.path.join(args.qwen_path, "config.json")
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg_data = json.load(f)
+        except Exception:
+            pass
+    archs = [a.lower() for a in cfg_data.get("architectures", [])]
+    model_type = cfg_data.get("model_type", "").lower()
+
+    if "internvl" in model_path_str or any("internvl" in a for a in archs) or "internvl" in model_type:
+        try:
+            from mssearch.models.modeling_internvl import ModelInternvl
+            print(f"[Loading] InternVL Engine from '{args.qwen_path}' on {qwen_device}...")
+            qwen_engine = ModelInternvl(
+                model_path=args.qwen_path,
+                device=qwen_device,
+                torch_dtype=torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16,
+                patch_scale=1.2,
+            )
+        except Exception as e_ivl:
+            print(f"[Notice] ModelInternvl failed to initialize ({e_ivl}), falling back to ModelQwenVL unified loader.")
+            qwen_engine = ModelQwenVL(
+                model_path=args.qwen_path,
+                device=qwen_device,
+                torch_dtype=torch.float16 if "cuda" in qwen_device else torch.float32,
+                patch_scale=1.2,
+                min_pixels=args.min_pixels,
+                max_pixels=resolved_max_pixels,
+            )
+    else:
+        print(f"[Loading] Local VLM from '{args.qwen_path}' on {qwen_device}...")
+        guard_msg = "Large Model OOM-guard" if resolved_max_pixels == 4194304 else "full-scale"
+        print(f"  • Pixel Budget: min_pixels={args.min_pixels} (56x56) | max_pixels={resolved_max_pixels} ({guard_msg})")
+        qwen_engine = ModelQwenVL(
+            model_path=args.qwen_path,
+            device=qwen_device,
+            torch_dtype=torch.float16 if "cuda" in qwen_device else torch.float32,
+            patch_scale=1.2,
+            min_pixels=args.min_pixels,
+            max_pixels=resolved_max_pixels,
+        )
 
     nlp_parser = None
     if not is_direct_mode and args.nlp_model:
