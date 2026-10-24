@@ -252,10 +252,8 @@ Qwen2.5-VL native resolution is governed by `min_pixels` and `max_pixels`:
 - **`max_pixels: 4,194,304` (~4.2M pixels, $2048 \times 2048$)**: Automatically overridden for 32B checkpoints (`Qwen2.5-VL-32B-Instruct`) to prevent CUDA OOM from excessive SDPA self-attention memory allocations during multi-image forward passes.
 
 ### Budget Presets (`--budget`)
-Control throughput vs accuracy trade-offs:
-- **`--budget small`**: Fastest throughput (`max_sam3_eval_patches=16`, `max_latent_evals=6`, `max_retained_patches=24`).
-- **`--budget medium`**: Recommended balanced sweet spot (`max_sam3_eval_patches=32`, `max_latent_evals=12`, `max_retained_patches=48`).
-- **`--budget large`**: Maximum visual search depth (`max_sam3_eval_patches=64`, `max_latent_evals=20`, `max_retained_patches=80`).
+Control visual search depth:
+- **`--budget large` (Default)**: Comprehensive visual search (`max_sam3_eval_patches=150`, `max_latent_evals=20`, `max_retained_patches=20`, `max_latent_repartition_patches_per_image=4`, `latent_repartition_threshold=0.0`, `answer_type="option_list"`).
 
 ---
 

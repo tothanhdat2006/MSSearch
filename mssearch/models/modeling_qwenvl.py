@@ -37,7 +37,11 @@ class ModelQwenVL:
         print(f"[ModelQwenVL] Multi-GPU device_map: {device_map} | max_memory: {max_memory}")
         print(f"[ModelQwenVL] Attention Backend: {actual_attn_implementation} | Precision: {self.dtype}")
 
-        self.processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(
+            model_path,
+            trust_remote_code=True,
+            local_files_only=True,
+        )
         self.tokenizer = self.processor.tokenizer
         try:
             self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -47,18 +51,47 @@ class ModelQwenVL:
                 device_map=device_map,
                 max_memory=max_memory,
                 low_cpu_mem_usage=True,
-                trust_remote_code=True
+                trust_remote_code=True,
+                local_files_only=True,
             )
-        except TypeError:
-            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model_path,
-                torch_dtype=self.dtype,
-                attn_implementation=actual_attn_implementation,
-                device_map=device_map,
-                max_memory=max_memory,
-                low_cpu_mem_usage=True,
-                trust_remote_code=True
-            )
+        except (TypeError, ValueError, AttributeError, Exception):
+            try:
+                self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                    model_path,
+                    torch_dtype=self.dtype,
+                    attn_implementation=actual_attn_implementation,
+                    device_map=device_map,
+                    max_memory=max_memory,
+                    low_cpu_mem_usage=True,
+                    trust_remote_code=True,
+                    local_files_only=True,
+                )
+            except Exception:
+                try:
+                    from transformers import AutoModelForImageTextToText
+                    self.model = AutoModelForImageTextToText.from_pretrained(
+                        model_path,
+                        torch_dtype=self.dtype,
+                        attn_implementation=actual_attn_implementation,
+                        device_map=device_map,
+                        max_memory=max_memory,
+                        low_cpu_mem_usage=True,
+                        trust_remote_code=True,
+                        local_files_only=True,
+                    )
+                except Exception:
+                    from transformers import AutoModelForVision2Seq
+                    self.model = AutoModelForVision2Seq.from_pretrained(
+                        model_path,
+                        torch_dtype=self.dtype,
+                        attn_implementation=actual_attn_implementation,
+                        device_map=device_map,
+                        max_memory=max_memory,
+                        low_cpu_mem_usage=True,
+                        trust_remote_code=True,
+                        local_files_only=True,
+                    )
+
         self.model.eval()
         self.device = self.model.device
 

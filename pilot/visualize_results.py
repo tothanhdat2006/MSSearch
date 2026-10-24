@@ -14,6 +14,7 @@ High-resolution, publication-grade visualization engine for MSSearch results.
 import os
 import sys
 import json
+import re
 import random
 import argparse
 from typing import List, Dict, Tuple, Optional, Any
@@ -192,8 +193,16 @@ def create_spatial_compressed_canvas(
 # HRBENCH AUTO-DISCOVERY & DATASET HELPERS
 # ==============================================================================
 
-def discover_hrbench_dir(preferred_path: Optional[str] = None) -> Tuple[str, str]:
+def discover_hrbench_dir(
+    preferred_path: Optional[str] = None,
+    preferred_annotation: Optional[str] = None
+) -> Tuple[str, str]:
     """Discovers HRBench directory and annotation file across Windows & Linux environments."""
+    if preferred_annotation and os.path.exists(preferred_annotation):
+        resolved_annot = os.path.abspath(preferred_annotation)
+        resolved_base = preferred_path if (preferred_path and os.path.exists(preferred_path)) else os.path.dirname(resolved_annot)
+        return resolved_base, resolved_annot
+
     search_dirs = []
     if preferred_path:
         search_dirs.append(preferred_path)
@@ -233,6 +242,66 @@ def discover_hrbench_dir(preferred_path: Optional[str] = None) -> Tuple[str, str
         )
 
     return resolved_base, annotation_path
+
+
+def parse_sample_options_map(options_raw: Any, cycle_idx: int = 0) -> Dict[str, str]:
+    """Parses options block into a mapping { 'A': 'option text', 'B': 'option text', ... }."""
+    opt_dict: Dict[str, str] = {}
+    if not options_raw:
+        return opt_dict
+
+    if isinstance(options_raw, list):
+        if not options_raw:
+            return opt_dict
+        if 0 <= cycle_idx < len(options_raw):
+            chosen = options_raw[cycle_idx]
+        else:
+            chosen = options_raw[0]
+    else:
+        chosen = options_raw
+
+    if isinstance(chosen, dict):
+        for k, v in chosen.items():
+            opt_dict[str(k).strip().upper()] = str(v).strip()
+    elif isinstance(chosen, str):
+        for line in chosen.splitlines():
+            line_str = line.strip()
+            if not line_str:
+                continue
+            m = re.match(r"^[\(\[\"']*([A-Da-d])[\)\]\.\:\s]+(.*)$", line_str)
+            if m:
+                opt_dict[m.group(1).upper()] = m.group(2).strip()
+
+    return opt_dict
+
+
+def get_sample_gt_details(
+    sample_index: int,
+    cycle_idx: int,
+    hrbench_data: List[Dict[str, Any]]
+) -> Tuple[str, str, Dict[str, str]]:
+    """
+    Extracts authoritative ground truth letter, full ground truth text, and options map
+    directly from HRBench annotation JSON.
+    Returns: (gt_letter, gt_text, options_map)
+    """
+    if sample_index < 0 or sample_index >= len(hrbench_data):
+        return ("N/A", "N/A", {})
+
+    sample = hrbench_data[sample_index]
+    ans_obj = sample.get("answer", "")
+    gt_letter = "N/A"
+    if isinstance(ans_obj, list):
+        if 0 <= cycle_idx < len(ans_obj):
+            gt_letter = str(ans_obj[cycle_idx]).strip().upper()
+        elif len(ans_obj) > 0:
+            gt_letter = str(ans_obj[0]).strip().upper()
+    elif ans_obj:
+        gt_letter = str(ans_obj).strip().upper()
+
+    options_map = parse_sample_options_map(sample.get("options", {}), cycle_idx=cycle_idx)
+    gt_text = options_map.get(gt_letter, "")
+    return (gt_letter, gt_text, options_map)
 
 
 def is_sample_cross_object(rec: Dict[str, Any]) -> bool:
@@ -341,7 +410,8 @@ def draw_header_card(
     draw: ImageDraw.ImageDraw,
     rec: Dict[str, Any],
     width: int,
-    start_y: int
+    start_y: int,
+    hrbench_data: Optional[List[Dict[str, Any]]] = None
 ) -> int:
     """Draws structured header banner with status badges, question, answers, and latency chips."""
     font_title = get_font(22, bold=True)
@@ -379,9 +449,25 @@ def draw_header_card(
     curr_y += 28
 
     # Ground Truth vs Prediction
-    gt = rec.get("gt_letter", "N/A")
+    sample_index = rec.get("sample_index", 0)
+    cycle_idx = rec.get("cycle_idx", 0)
+    gt_letter = rec.get("gt_letter", "N/A")
+    gt_text = ""
+    options_map: Dict[str, str] = {}
+    if hrbench_data and 0 <= sample_index < len(hrbench_data):
+        annot_gt_letter, annot_gt_text, options_map = get_sample_gt_details(sample_index, cycle_idx, hrbench_data)
+        if annot_gt_letter != "N/A":
+            gt_letter = annot_gt_letter
+        gt_text = annot_gt_text
+
+    gt_display = f"[{gt_letter}] {gt_text}".strip() if gt_text else f"[{gt_letter}]"
+
     pred = rec.get("predicted_letter", "None") or "None"
     primary_ans = rec.get("primary_answer", "N/A")
+    pred_display = f"[{pred}]"
+    if pred != "None" and pred in options_map:
+        pred_display += f" {options_map[pred]}"
+
     ev_imgs = rec.get("evidence_images", [])
 
     is_cross = is_sample_cross_object(rec)
@@ -389,11 +475,29 @@ def draw_header_card(
     mode_col = PALETTE["accent_gold"] if is_cross else PALETTE["correct_green"]
 
     pred_color = PALETTE["correct_green"] if is_correct else PALETTE["incorrect_red"]
-    draw.text((pad_x, curr_y), f"Ground Truth: [{gt}]", fill=PALETTE["text_muted"], font=font_main)
-    draw.text((pad_x + 180, curr_y), f"Predicted: [{pred}]", fill=pred_color, font=font_bold)
-    draw.text((pad_x + 360, curr_y), f"Primary Answer: '{primary_ans}'", fill=PALETTE["text_main"], font=font_main)
-    draw.text((pad_x + 800, curr_y), f"Evidence Images: {ev_imgs}", fill=PALETTE["accent_cyan"], font=font_main)
-    draw.text((pad_x + 1040, curr_y), f"[{mode_text}]", fill=mode_col, font=font_bold)
+
+    # Render Ground Truth with Emerald Highlight
+    draw.text((pad_x, curr_y), "Ground Truth: ", fill=PALETTE["text_muted"], font=font_main)
+    try:
+        gt_label_w = font_main.getbbox("Ground Truth: ")[2]
+    except Exception:
+        gt_label_w = 110
+    draw.text((pad_x + gt_label_w, curr_y), gt_display, fill=PALETTE["correct_green"], font=font_bold)
+
+    # Offset for Predicted & Model Answer
+    pred_x = max(pad_x + 400, pad_x + gt_label_w + len(gt_display) * 9 + 28)
+    draw.text((pred_x, curr_y), "Predicted: ", fill=PALETTE["text_muted"], font=font_main)
+    try:
+        pred_label_w = font_main.getbbox("Predicted: ")[2]
+    except Exception:
+        pred_label_w = 85
+    draw.text((pred_x + pred_label_w, curr_y), pred_display, fill=pred_color, font=font_bold)
+
+    raw_ans_x = max(pred_x + 220, pred_x + pred_label_w + len(pred_display) * 9 + 28)
+    draw.text((raw_ans_x, curr_y), f"Model Output: '{primary_ans}'", fill=PALETTE["text_main"], font=font_main)
+
+    draw.text((width - 520, curr_y), f"Evidence Images: {ev_imgs}", fill=PALETTE["accent_cyan"], font=font_main)
+    draw.text((width - 260, curr_y), f"[{mode_text}]", fill=mode_col, font=font_bold)
     curr_y += 28
 
     # Stage Timings Chips
@@ -656,7 +760,7 @@ def visualize_sample(
         outline=PALETTE["card_border"],
         width=1
     )
-    draw_header_card(draw, rec, total_w, margin)
+    draw_header_card(draw, rec, total_w, margin, hrbench_data=hrbench_data)
 
     # Section 1 Title: Candidate Pool Overview
     font_sec = get_font(18, bold=True)
@@ -802,7 +906,8 @@ def generate_html_gallery(
     records: List[Dict[str, Any]],
     output_dir: str,
     vis_filenames: Dict[int, str],
-    layout_map: Dict[int, List[str]]
+    layout_map: Dict[int, List[str]],
+    hrbench_data: Optional[List[Dict[str, Any]]] = None
 ) -> str:
     """
     Generates a standalone, dark-themed offline HTML dashboard (vis/index.html)
@@ -822,11 +927,29 @@ def generate_html_gallery(
         idx = r.get("sample_index", 0)
         img_file = vis_filenames.get(idx, "")
         layouts = layout_map.get(idx, [])
+
+        cycle_idx = r.get("cycle_idx", 0)
+        gt_letter = r.get("gt_letter", "N/A")
+        gt_text = ""
+        options_map: Dict[str, str] = {}
+        if hrbench_data and 0 <= idx < len(hrbench_data):
+            annot_gt_letter, annot_gt_text, options_map = get_sample_gt_details(idx, cycle_idx, hrbench_data)
+            if annot_gt_letter != "N/A":
+                gt_letter = annot_gt_letter
+            gt_text = annot_gt_text
+
+        pred_letter = r.get("predicted_letter", "None") or "None"
+        pred_text = options_map.get(pred_letter, "") if pred_letter != "None" else ""
+
         html_records.append({
             "index": idx,
             "question": r.get("question", ""),
-            "gt": r.get("gt_letter", "N/A"),
-            "pred": r.get("predicted_letter", "None") or "None",
+            "gt": gt_letter,
+            "gt_text": gt_text,
+            "gt_display": f"[{gt_letter}] {gt_text}".strip() if gt_text else f"[{gt_letter}]",
+            "pred": pred_letter,
+            "pred_text": pred_text,
+            "pred_display": f"[{pred_letter}] {pred_text}".strip() if pred_text else f"[{pred_letter}]",
             "is_correct": r.get("is_correct", False),
             "primary": r.get("primary_answer", ""),
             "route": r.get("route_selected", ""),
@@ -1075,12 +1198,11 @@ def generate_html_gallery(
           </div>
           <div class="card-body">
             <div class="card-q">${{d.question}}</div>
-            <div class="card-meta">
-              <span>GT: <strong style="color:var(--cyan)">${{d.gt}}</strong></span>
-              <span>Pred: <strong style="color:${{d.is_correct ? 'var(--green)' : 'var(--red)'}}">${{d.pred}}</strong></span>
-              <span>Latency: <strong>${{d.latency}}s</strong></span>
+            <div class="card-meta" style="flex-direction:column; gap:4px; margin-bottom:8px;">
+              <div>GT: <strong style="color:var(--green)">${{d.gt_display}}</strong></div>
+              <div>Pred: <strong style="color:${{d.is_correct ? 'var(--green)' : 'var(--red)'}}">${{d.pred_display}}</strong> &nbsp;|&nbsp; Latency: <strong>${{d.latency}}s</strong></div>
             </div>
-            <div style="font-size:12px; color:var(--gold); margin-bottom:6px;">Ans: '${{d.primary}}'</div>
+            <div style="font-size:12px; color:var(--gold); margin-bottom:6px;">Model Output: '${{d.primary}}'</div>
             <div class="layout-links">${{layoutBadges}}</div>
             <div style="font-size:11px; color:var(--muted)">Route: ${{d.route}}</div>
           </div>
@@ -1197,6 +1319,12 @@ def main():
         help="Root path to HRBench dataset."
     )
     parser.add_argument(
+        "--annotation_file",
+        type=str,
+        default="D:/Research/VisualSearch/hr-bench_8k/annotation_hr-bench_8k.json",
+        help="Path to HRBench annotation JSON file (defaults to D:/Research/VisualSearch/hr-bench_8k/annotation_hr-bench_8k.json if present)."
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
         default="vis",
@@ -1234,7 +1362,10 @@ def main():
     print(f"[Visualizer] Loaded {len(records)} result records.")
 
     # Discover HRBench
-    base_dir, annot_file = discover_hrbench_dir(args.hrbench_dir)
+    base_dir, annot_file = discover_hrbench_dir(
+        preferred_path=args.hrbench_dir,
+        preferred_annotation=args.annotation_file
+    )
     print(f"[Visualizer] Found HRBench directory: {base_dir}")
     print(f"[Visualizer] Loading annotations from: {annot_file}")
     with open(annot_file, "r", encoding="utf-8") as f:
@@ -1270,7 +1401,13 @@ def main():
 
     # Generate HTML gallery dashboard
     if not args.no_html:
-        html_path = generate_html_gallery(records, output_dir, vis_filenames, layout_map)
+        html_path = generate_html_gallery(
+            records=records,
+            output_dir=output_dir,
+            vis_filenames=vis_filenames,
+            layout_map=layout_map,
+            hrbench_data=hrbench_data
+        )
         print(f"[Visualizer] Interactive HTML dashboard generated: {html_path}")
 
     print(f"[Visualizer] Completed! All outputs saved to: {output_dir}")
