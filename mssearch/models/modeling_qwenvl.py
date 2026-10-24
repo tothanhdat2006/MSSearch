@@ -1,9 +1,11 @@
+import os
+import json
 import warnings
 import logging
 from typing import Optional, List, Dict, Any, Tuple, Union
 import torch
 from torch.nn import CrossEntropyLoss
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from transformers import AutoProcessor
 from .tree import Node, NodeA
 from .utils import *
 
@@ -43,54 +45,93 @@ class ModelQwenVL:
             local_files_only=True,
         )
         self.tokenizer = self.processor.tokenizer
-        try:
-            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model_path,
-                dtype=self.dtype,
-                attn_implementation=actual_attn_implementation,
-                device_map=device_map,
-                max_memory=max_memory,
-                low_cpu_mem_usage=True,
-                trust_remote_code=True,
-                local_files_only=True,
-            )
-        except (TypeError, ValueError, AttributeError, Exception):
+        # 1. Inspect config.json to identify the architecture family
+        cfg_path = os.path.join(model_path, "config.json")
+        archs = []
+        model_type = ""
+        if os.path.exists(cfg_path):
             try:
-                self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                    model_path,
-                    torch_dtype=self.dtype,
-                    attn_implementation=actual_attn_implementation,
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg_json = json.load(f)
+                    archs = cfg_json.get("architectures", [])
+                    model_type = str(cfg_json.get("model_type", "")).lower()
+            except Exception:
+                pass
+
+        import transformers
+        candidate_classes = []
+
+        # Priority 1: Exact architecture matching config.json architectures list
+        for arch_name in archs:
+            if hasattr(transformers, arch_name):
+                cls = getattr(transformers, arch_name)
+                if cls not in candidate_classes:
+                    candidate_classes.append(cls)
+
+        # Priority 2: Architecture family deduction from model_type or path
+        m_path_lower = str(model_path).lower()
+        if "llava_onevision" in model_type or "onevision" in m_path_lower:
+            for cls_name in ("LlavaOnevisionForConditionalGeneration", "AutoModelForImageTextToText", "AutoModelForVision2Seq"):
+                if hasattr(transformers, cls_name):
+                    cls = getattr(transformers, cls_name)
+                    if cls not in candidate_classes:
+                        candidate_classes.append(cls)
+        elif "llava" in model_type or "llava" in m_path_lower:
+            for cls_name in ("LlavaForConditionalGeneration", "LlavaNextForConditionalGeneration", "AutoModelForImageTextToText", "AutoModelForVision2Seq"):
+                if hasattr(transformers, cls_name):
+                    cls = getattr(transformers, cls_name)
+                    if cls not in candidate_classes:
+                        candidate_classes.append(cls)
+        elif "qwen" in model_type or "qwen" in m_path_lower:
+            for cls_name in ("Qwen2_5_VLForConditionalGeneration", "Qwen2VLForConditionalGeneration", "AutoModelForImageTextToText", "AutoModelForVision2Seq"):
+                if hasattr(transformers, cls_name):
+                    cls = getattr(transformers, cls_name)
+                    if cls not in candidate_classes:
+                        candidate_classes.append(cls)
+
+        # Priority 3: Universal AutoModel wrappers
+        for auto_name in ("AutoModelForImageTextToText", "AutoModelForVision2Seq", "AutoModel"):
+            if hasattr(transformers, auto_name):
+                cls = getattr(transformers, auto_name)
+                if cls not in candidate_classes:
+                    candidate_classes.append(cls)
+
+        # Priority 4: Fallback
+        if hasattr(transformers, "Qwen2_5_VLForConditionalGeneration"):
+            cls = getattr(transformers, "Qwen2_5_VLForConditionalGeneration")
+            if cls not in candidate_classes:
+                candidate_classes.append(cls)
+
+        # 2. Iterate and instantiate with failover
+        self.model = None
+        last_err = None
+        for cls in candidate_classes:
+            print(f"[ModelQwenVL] Attempting to load {cls.__name__} from '{model_path}'...")
+            for attn in (actual_attn_implementation, None):
+                kwargs_load = dict(
                     device_map=device_map,
                     max_memory=max_memory,
                     low_cpu_mem_usage=True,
                     trust_remote_code=True,
                     local_files_only=True,
                 )
-            except Exception:
+                if attn is not None:
+                    kwargs_load["attn_implementation"] = attn
                 try:
-                    from transformers import AutoModelForImageTextToText
-                    self.model = AutoModelForImageTextToText.from_pretrained(
-                        model_path,
-                        torch_dtype=self.dtype,
-                        attn_implementation=actual_attn_implementation,
-                        device_map=device_map,
-                        max_memory=max_memory,
-                        low_cpu_mem_usage=True,
-                        trust_remote_code=True,
-                        local_files_only=True,
-                    )
-                except Exception:
-                    from transformers import AutoModelForVision2Seq
-                    self.model = AutoModelForVision2Seq.from_pretrained(
-                        model_path,
-                        torch_dtype=self.dtype,
-                        attn_implementation=actual_attn_implementation,
-                        device_map=device_map,
-                        max_memory=max_memory,
-                        low_cpu_mem_usage=True,
-                        trust_remote_code=True,
-                        local_files_only=True,
-                    )
+                    try:
+                        self.model = cls.from_pretrained(model_path, dtype=self.dtype, **kwargs_load)
+                    except (TypeError, ValueError):
+                        self.model = cls.from_pretrained(model_path, torch_dtype=self.dtype, **kwargs_load)
+                    break
+                except Exception as e_load:
+                    last_err = e_load
+                    continue
+            if self.model is not None:
+                print(f"[ModelQwenVL] Successfully loaded model as {type(self.model).__name__}")
+                break
+
+        if self.model is None:
+            raise RuntimeError(f"Failed to load VLM model from '{model_path}'. Last error: {last_err}")
 
         self.model.eval()
         self.device = self.model.device
@@ -544,6 +585,10 @@ class ModelQwenVL:
             padding_side="left",
         )
         model_inputs = model_inputs.to(self.device)
+        if "pixel_values" in model_inputs and hasattr(model_inputs["pixel_values"], "dtype"):
+            p_dtype = getattr(self.model, "dtype", self.dtype)
+            if p_dtype in (torch.float16, torch.bfloat16):
+                model_inputs["pixel_values"] = model_inputs["pixel_values"].to(p_dtype)
         # Fused Causal SDPA: Strip redundant dense attention mask on batch_size=1 to avoid 27.73 GiB OOM
         if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
             if not (model_inputs.attention_mask == 0).any():
@@ -606,6 +651,10 @@ class ModelQwenVL:
                 padding_side="left",
             )
         model_inputs = model_inputs.to(self.device)
+        if "pixel_values" in model_inputs and hasattr(model_inputs["pixel_values"], "dtype"):
+            p_dtype = getattr(self.model, "dtype", self.dtype)
+            if p_dtype in (torch.float16, torch.bfloat16):
+                model_inputs["pixel_values"] = model_inputs["pixel_values"].to(p_dtype)
         if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
             if not (model_inputs.attention_mask == 0).any():
                 model_inputs.pop("attention_mask", None)

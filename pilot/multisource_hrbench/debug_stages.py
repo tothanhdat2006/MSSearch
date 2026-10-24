@@ -523,6 +523,11 @@ def run_direct_vlm_inference(
                     padding_side="left",
                 ).to(qwen_engine.device)
 
+                if "pixel_values" in model_inputs and hasattr(model_inputs["pixel_values"], "dtype"):
+                    m_dtype = getattr(qwen_engine.model, "dtype", getattr(qwen_engine, "dtype", None))
+                    if m_dtype in (torch.float16, torch.bfloat16):
+                        model_inputs["pixel_values"] = model_inputs["pixel_values"].to(m_dtype)
+
                 if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
                     if not (model_inputs.attention_mask == 0).any():
                         model_inputs.pop("attention_mask", None)
@@ -554,6 +559,11 @@ def run_direct_vlm_inference(
                 padding_side="left",
             ).to(qwen_engine.device)
 
+            if "pixel_values" in model_inputs and hasattr(model_inputs["pixel_values"], "dtype"):
+                m_dtype = getattr(qwen_engine.model, "dtype", getattr(qwen_engine, "dtype", None))
+                if m_dtype in (torch.float16, torch.bfloat16):
+                    model_inputs["pixel_values"] = model_inputs["pixel_values"].to(m_dtype)
+
             if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
                 if not (model_inputs.attention_mask == 0).any():
                     model_inputs.pop("attention_mask", None)
@@ -583,6 +593,11 @@ def run_direct_vlm_inference(
                 padding=True,
                 padding_side="left",
             ).to(qwen_engine.device)
+
+            if "pixel_values" in model_inputs and hasattr(model_inputs["pixel_values"], "dtype"):
+                m_dtype = getattr(qwen_engine.model, "dtype", getattr(qwen_engine, "dtype", None))
+                if m_dtype in (torch.float16, torch.bfloat16):
+                    model_inputs["pixel_values"] = model_inputs["pixel_values"].to(m_dtype)
 
             if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
                 if not (model_inputs.attention_mask == 0).any():
