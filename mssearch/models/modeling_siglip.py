@@ -367,22 +367,26 @@ class SigLIPScorer:
             inputs["pixel_values"] = inputs["pixel_values"].to(self.dtype)
 
         # 1. Text embedding extraction
+        text_kwargs = {"input_ids": inputs["input_ids"]}
+        if "attention_mask" in inputs and inputs["attention_mask"] is not None:
+            text_kwargs["attention_mask"] = inputs["attention_mask"]
+
         if self.is_siglip:
-            text_features = self.model.get_text_features(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask)
+            text_features = self.model.get_text_features(**text_kwargs)
         else:
-            text_features = self.model.get_text_features(inputs.input_ids)
+            text_features = self.model.get_text_features(**text_kwargs)
         text_features = _extract_embedding_tensor(text_features)
         text_features = F.normalize(text_features.float(), dim=-1)
 
         # 2. Vision forward
         vision_model = getattr(self.model, "vision_model", None)
         if vision_model is None:
-            img_feats = self.model.get_image_features(pixel_values=inputs.pixel_values)
+            img_feats = self.model.get_image_features(pixel_values=inputs["pixel_values"])
             img_feats = F.normalize(_extract_embedding_tensor(img_feats).float(), dim=-1)
             sim = torch.matmul(img_feats, text_features.t()).squeeze(0).max().item()
             return float(sim), float(sim), np.full((24, 24), sim, dtype=np.float32)
 
-        vis_out = vision_model(pixel_values=inputs.pixel_values, output_hidden_states=True)
+        vis_out = vision_model(pixel_values=inputs["pixel_values"], output_hidden_states=True)
         spatial_tokens = vis_out.last_hidden_state.float()
         if hasattr(self.model, "visual_projection") and self.model.visual_projection is not None:
             spatial_tokens = self.model.visual_projection(spatial_tokens)
@@ -390,7 +394,7 @@ class SigLIPScorer:
 
         # 3. Global pooled vector
         if hasattr(self.model, "get_image_features"):
-            pooled_vision = self.model.get_image_features(pixel_values=inputs.pixel_values)
+            pooled_vision = self.model.get_image_features(pixel_values=inputs["pixel_values"])
             pooled_vision = _extract_embedding_tensor(pooled_vision)
         else:
             pooled_vision = getattr(vis_out, "pooler_output", None)
