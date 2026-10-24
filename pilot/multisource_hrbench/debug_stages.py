@@ -362,6 +362,30 @@ def execute_single_sample(
 # DIRECT ANSWER BASELINE EXECUTION (VANILLA VLM WITHOUT VISUAL SEARCH)
 # ==============================================================================
 
+def _create_composite_canvas(images: List[Image.Image], max_side: int = 1024) -> Image.Image:
+    """Stitches candidate images into a single horizontal composite canvas for single-image models."""
+    if not images:
+        return Image.new("RGB", (224, 224), (128, 128, 128))
+    if len(images) == 1:
+        return images[0]
+    target_h = min(max(img.height for img in images), max_side // 2)
+    resized = []
+    for img in images:
+        scale = target_h / max(1, img.height)
+        new_w = max(1, int(round(img.width * scale)))
+        resized.append(img.resize((new_w, target_h), Image.Resampling.BILINEAR))
+    total_w = sum(img.width for img in resized)
+    composite = Image.new("RGB", (total_w, target_h), (255, 255, 255))
+    x_offset = 0
+    for img in resized:
+        composite.paste(img, (x_offset, 0))
+        x_offset += img.width
+    if composite.width > max_side:
+        scale = max_side / composite.width
+        composite = composite.resize((max_side, max(1, int(round(composite.height * scale)))), Image.Resampling.BILINEAR)
+    return composite
+
+
 def run_direct_vlm_inference(
     qwen_engine: Any,
     images: List[Image.Image],
@@ -444,6 +468,42 @@ def run_direct_vlm_inference(
         and hasattr(qwen_engine, "model")
         and hasattr(qwen_engine, "get_prompt_from_qs")
     ):
+        # Inoculate LlavaProcessor against TypeError: unsupported operand type(s) for //: 'int' and 'NoneType'
+        p_size = getattr(qwen_engine.processor, "patch_size", None)
+        if p_size is None:
+            if hasattr(qwen_engine, "model") and hasattr(qwen_engine.model, "config"):
+                cfg = qwen_engine.model.config
+                v_cfg = getattr(cfg, "vision_config", None)
+                if isinstance(v_cfg, dict):
+                    p_size = v_cfg.get("patch_size")
+                elif v_cfg is not None:
+                    p_size = getattr(v_cfg, "patch_size", None)
+                if p_size is None:
+                    p_size = getattr(cfg, "patch_size", None)
+            if p_size is None and hasattr(qwen_engine.processor, "image_processor"):
+                p_size = getattr(qwen_engine.processor.image_processor, "patch_size", None)
+            if p_size is None:
+                p_size = 14
+            qwen_engine.processor.patch_size = int(p_size)
+            if hasattr(qwen_engine.processor, "image_processor") and getattr(qwen_engine.processor.image_processor, "patch_size", None) is None:
+                qwen_engine.processor.image_processor.patch_size = int(p_size)
+
+        if getattr(qwen_engine.processor, "num_additional_image_tokens", None) is None:
+            qwen_engine.processor.num_additional_image_tokens = 0
+
+        if getattr(qwen_engine.processor, "vision_feature_select_strategy", None) is None:
+            strat = "default"
+            if hasattr(qwen_engine, "model") and hasattr(qwen_engine.model, "config"):
+                cfg = qwen_engine.model.config
+                v_cfg = getattr(cfg, "vision_config", None)
+                if isinstance(v_cfg, dict):
+                    strat = v_cfg.get("vision_feature_select_strategy", strat)
+                elif v_cfg is not None:
+                    strat = getattr(v_cfg, "vision_feature_select_strategy", strat)
+                if strat is None:
+                    strat = getattr(cfg, "vision_feature_select_strategy", "default")
+            qwen_engine.processor.vision_feature_select_strategy = strat or "default"
+
         qs_parts = []
         for idx in range(len(safe_images)):
             qs_parts.append(f"Candidate Image {idx + 1}:\n<image>\n")
@@ -452,39 +512,95 @@ def run_direct_vlm_inference(
 
         prompt_text = qwen_engine.get_prompt_from_qs(qs_full)
 
+        # Multi-image direct evaluation (Tier A: flat image list; Tier B: nested image list)
+        for images_arg in (safe_images, [safe_images]):
+            try:
+                model_inputs = qwen_engine.processor(
+                    text=[prompt_text],
+                    images=images_arg,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="left",
+                ).to(qwen_engine.device)
+
+                if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
+                    if not (model_inputs.attention_mask == 0).any():
+                        model_inputs.pop("attention_mask", None)
+
+                infer_ctx = torch.inference_mode() if torch is not None else contextlib.nullcontext()
+                with infer_ctx:
+                    generated_ids = qwen_engine.model.generate(
+                        **model_inputs,
+                        use_cache=True,
+                        max_new_tokens=max_new_tokens,
+                        do_sample=False,
+                    )
+                trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
+                decoded = qwen_engine.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                return decoded[0].strip()
+            except Exception:
+                pass
+
+        # Tier C: Composite Canvas fallback (stitching candidate images horizontally into a single canvas)
         try:
+            composite_canvas = _create_composite_canvas(safe_images)
+            single_prompt = f"<image>\n{prompt}"
+            single_prompt_text = qwen_engine.get_prompt_from_qs(single_prompt)
             model_inputs = qwen_engine.processor(
-                text=[prompt_text],
-                images=safe_images,
-                return_tensors="pt",
-                padding=True,
-                padding_side="left",
-            ).to(qwen_engine.device)
-        except (ValueError, TypeError):
-            # Fallback for processors expecting nested image lists for a single sample (e.g. LlavaOnevisionProcessor)
-            model_inputs = qwen_engine.processor(
-                text=[prompt_text],
-                images=[safe_images],
+                text=[single_prompt_text],
+                images=composite_canvas,
                 return_tensors="pt",
                 padding=True,
                 padding_side="left",
             ).to(qwen_engine.device)
 
-        if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
-            if not (model_inputs.attention_mask == 0).any():
-                model_inputs.pop("attention_mask", None)
+            if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
+                if not (model_inputs.attention_mask == 0).any():
+                    model_inputs.pop("attention_mask", None)
 
-        infer_ctx = torch.inference_mode() if torch is not None else contextlib.nullcontext()
-        with infer_ctx:
-            generated_ids = qwen_engine.model.generate(
-                **model_inputs,
-                use_cache=True,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-            )
-        trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
-        decoded = qwen_engine.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
-        return decoded[0].strip()
+            infer_ctx = torch.inference_mode() if torch is not None else contextlib.nullcontext()
+            with infer_ctx:
+                generated_ids = qwen_engine.model.generate(
+                    **model_inputs,
+                    use_cache=True,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                )
+            trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
+            decoded = qwen_engine.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            return decoded[0].strip()
+        except Exception:
+            pass
+
+        # Tier D: Target-only image fallback (safe_images[0])
+        try:
+            single_prompt = f"<image>\n{prompt}"
+            single_prompt_text = qwen_engine.get_prompt_from_qs(single_prompt)
+            model_inputs = qwen_engine.processor(
+                text=[single_prompt_text],
+                images=safe_images[0],
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+            ).to(qwen_engine.device)
+
+            if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
+                if not (model_inputs.attention_mask == 0).any():
+                    model_inputs.pop("attention_mask", None)
+
+            infer_ctx = torch.inference_mode() if torch is not None else contextlib.nullcontext()
+            with infer_ctx:
+                generated_ids = qwen_engine.model.generate(
+                    **model_inputs,
+                    use_cache=True,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                )
+            trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
+            decoded = qwen_engine.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            return decoded[0].strip()
+        except Exception:
+            pass
 
     # Fallback for generic VLM
     if hasattr(qwen_engine, "generate_response"):

@@ -105,6 +105,49 @@ class ModelQwenVL:
             elif p_tmpl is not None and t_tmpl is None:
                 self.tokenizer.chat_template = p_tmpl
 
+        # Ensure processor has patch_size, vision_feature_select_strategy, and num_additional_image_tokens
+        # (fixes LlavaProcessor TypeError: unsupported operand type(s) for //: 'int' and 'NoneType')
+        if hasattr(self, "processor"):
+            p_size = getattr(self.processor, "patch_size", None)
+            if p_size is None:
+                if hasattr(self, "model") and hasattr(self.model, "config"):
+                    cfg = self.model.config
+                    v_cfg = getattr(cfg, "vision_config", None)
+                    if isinstance(v_cfg, dict):
+                        p_size = v_cfg.get("patch_size")
+                    elif v_cfg is not None:
+                        p_size = getattr(v_cfg, "patch_size", None)
+                    if p_size is None:
+                        p_size = getattr(cfg, "patch_size", None)
+                if p_size is None and hasattr(self.processor, "image_processor"):
+                    p_size = getattr(self.processor.image_processor, "patch_size", None)
+                if p_size is None:
+                    p_size = 14
+                self.processor.patch_size = int(p_size)
+                print(f"[ModelQwenVL] Injected processor.patch_size = {p_size}")
+
+            if hasattr(self.processor, "image_processor") and getattr(self.processor.image_processor, "patch_size", None) is None:
+                self.processor.image_processor.patch_size = getattr(self.processor, "patch_size", 14)
+
+            if getattr(self.processor, "num_additional_image_tokens", None) is None:
+                add_tokens = 0
+                if hasattr(self, "model") and hasattr(self.model, "config"):
+                    add_tokens = getattr(self.model.config, "num_additional_image_tokens", 0)
+                self.processor.num_additional_image_tokens = add_tokens if add_tokens is not None else 0
+
+            if getattr(self.processor, "vision_feature_select_strategy", None) is None:
+                strat = "default"
+                if hasattr(self, "model") and hasattr(self.model, "config"):
+                    cfg = self.model.config
+                    v_cfg = getattr(cfg, "vision_config", None)
+                    if isinstance(v_cfg, dict):
+                        strat = v_cfg.get("vision_feature_select_strategy", strat)
+                    elif v_cfg is not None:
+                        strat = getattr(v_cfg, "vision_feature_select_strategy", strat)
+                    if strat is None:
+                        strat = getattr(cfg, "vision_feature_select_strategy", "default")
+                self.processor.vision_feature_select_strategy = strat or "default"
+
         # Visual pixel budget:
         # - min_pixels: 3136 (corresponds to 56 x 56 minimum patch resolution).
         # - max_pixels: Default 12,845,056 (~12.8M pixels, roughly 3584 x 3584).
@@ -537,13 +580,31 @@ class ModelQwenVL:
 
         qs = self.prompts[prompt_tag][pre_information] + question
         prompt = self.get_prompt_from_qs(qs)
-        model_inputs = self.processor(
-            text=[prompt],
-            images=image_input,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-        )
+        if getattr(self.processor, "patch_size", None) is None:
+            self.processor.patch_size = 14
+        if hasattr(self.processor, "image_processor") and getattr(self.processor.image_processor, "patch_size", None) is None:
+            self.processor.image_processor.patch_size = 14
+        if getattr(self.processor, "num_additional_image_tokens", None) is None:
+            self.processor.num_additional_image_tokens = 0
+        if getattr(self.processor, "vision_feature_select_strategy", None) is None:
+            self.processor.vision_feature_select_strategy = "default"
+
+        try:
+            model_inputs = self.processor(
+                text=[prompt],
+                images=image_input,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+            )
+        except (ValueError, TypeError):
+            model_inputs = self.processor(
+                text=[prompt],
+                images=[image_input],
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+            )
         model_inputs = model_inputs.to(self.device)
         if model_inputs.input_ids.shape[0] == 1 and "attention_mask" in model_inputs:
             if not (model_inputs.attention_mask == 0).any():
