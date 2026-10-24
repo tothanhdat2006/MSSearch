@@ -243,6 +243,32 @@ class Model(ABC):
         return self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
     @torch.inference_mode()
+    def get_response(
+        self,
+        *args,
+        prompt: Optional[str] = None,
+        image: Optional[Union[Image.Image, List[Image.Image]]] = None,
+        image_pil: Optional[Union[Image.Image, List[Image.Image]]] = None,
+        question: Optional[str] = None,
+        max_new_tokens: int = 128,
+        **kwargs
+    ) -> str:
+        """Universal dispatch interface matching multimodal and pure-text evaluation calls."""
+        img = image if image is not None else (image_pil if image_pil is not None else kwargs.pop("image_pil", None))
+        txt = prompt if prompt is not None else (question if question is not None else "")
+
+        for arg in args:
+            if isinstance(arg, (Image.Image, list)):
+                img = arg
+            elif isinstance(arg, str):
+                txt = arg
+
+        if img is None:
+            return self.generate_text(prompt=txt, max_new_tokens=max_new_tokens)
+        else:
+            return self.generate_response(image_pil=img, question=txt, max_new_tokens=max_new_tokens, **kwargs)
+
+    @torch.inference_mode()
     def multiple_choices_inference(self, image_pil, question, options, searched_nodes: List[Node] = None):
         image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
         prompt_tag = self.get_prompt_tag(image_list)

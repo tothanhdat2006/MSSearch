@@ -539,6 +539,32 @@ class ModelInternvl:
         gen_cfg = dict(max_new_tokens=max_new_tokens, do_sample=False)
         return self.model.chat(self.tokenizer, None, qs, gen_cfg).strip()
 
+    @torch.inference_mode()
+    def get_response(
+        self,
+        *args,
+        prompt: Optional[str] = None,
+        image: Optional[Union[Image.Image, List[Image.Image]]] = None,
+        image_pil: Optional[Union[Image.Image, List[Image.Image]]] = None,
+        question: Optional[str] = None,
+        max_new_tokens: int = 128,
+        **kwargs
+    ) -> str:
+        """Universal dispatch interface matching multimodal and pure-text evaluation calls."""
+        img = image if image is not None else (image_pil if image_pil is not None else kwargs.pop("image_pil", None))
+        txt = prompt if prompt is not None else (question if question is not None else "")
+
+        for arg in args:
+            if isinstance(arg, (Image.Image, list)):
+                img = arg
+            elif isinstance(arg, str):
+                txt = arg
+
+        if img is None:
+            return self.generate_text(prompt=txt, max_new_tokens=max_new_tokens)
+        else:
+            return self.generate_response(image_pil=img, question=txt, max_new_tokens=max_new_tokens, **kwargs)
+
 
 def load_image(image: Image.Image, input_size: int = 448, max_num: int = 12, use_anyres: bool = True):
     transform = build_transform(input_size=input_size)
