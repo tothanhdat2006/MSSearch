@@ -61,48 +61,75 @@ class ModelQwenVL:
         import transformers
         candidate_classes = []
 
-        # Priority 1: Exact architecture matching config.json architectures list
+        def add_class_if_generative(cls_or_name):
+            if isinstance(cls_or_name, str):
+                if hasattr(transformers, cls_or_name):
+                    cls_obj = getattr(transformers, cls_or_name)
+                else:
+                    return
+            else:
+                cls_obj = cls_or_name
+            if cls_obj is None or cls_obj in candidate_classes:
+                return
+            # Base models ending in 'Model' (like LlavaModel, AutoModel) lack .generate()
+            cls_name = getattr(cls_obj, "__name__", "")
+            if cls_name == "AutoModel" or (cls_name.endswith("Model") and not cls_name.endswith("PreTrainedModel")):
+                return
+            candidate_classes.append(cls_obj)
+
+        # Priority 1: Map architectures specified in config.json
         for arch_name in archs:
-            if hasattr(transformers, arch_name):
-                cls = getattr(transformers, arch_name)
-                if cls not in candidate_classes:
-                    candidate_classes.append(cls)
+            if arch_name == "LlavaModel":
+                add_class_if_generative("LlavaForConditionalGeneration")
+                add_class_if_generative("LlavaOnevisionForConditionalGeneration")
+                add_class_if_generative("LlavaNextForConditionalGeneration")
+            elif arch_name.endswith("Model"):
+                gen_name = arch_name[:-5] + "ForConditionalGeneration"
+                add_class_if_generative(gen_name)
+            else:
+                add_class_if_generative(arch_name)
 
         # Priority 2: Architecture family deduction from model_type or path
         m_path_lower = str(model_path).lower()
         if "llava_onevision" in model_type or "onevision" in m_path_lower:
-            for cls_name in ("LlavaOnevisionForConditionalGeneration", "AutoModelForImageTextToText", "AutoModelForVision2Seq"):
-                if hasattr(transformers, cls_name):
-                    cls = getattr(transformers, cls_name)
-                    if cls not in candidate_classes:
-                        candidate_classes.append(cls)
+            add_class_if_generative("LlavaOnevisionForConditionalGeneration")
+            add_class_if_generative("LlavaForConditionalGeneration")
+            add_class_if_generative("AutoModelForImageTextToText")
+            add_class_if_generative("AutoModelForVision2Seq")
+            add_class_if_generative("AutoModelForCausalLM")
         elif "llava" in model_type or "llava" in m_path_lower:
-            for cls_name in ("LlavaForConditionalGeneration", "LlavaNextForConditionalGeneration", "AutoModelForImageTextToText", "AutoModelForVision2Seq"):
-                if hasattr(transformers, cls_name):
-                    cls = getattr(transformers, cls_name)
-                    if cls not in candidate_classes:
-                        candidate_classes.append(cls)
+            add_class_if_generative("LlavaForConditionalGeneration")
+            add_class_if_generative("LlavaNextForConditionalGeneration")
+            add_class_if_generative("LlavaOnevisionForConditionalGeneration")
+            add_class_if_generative("AutoModelForImageTextToText")
+            add_class_if_generative("AutoModelForVision2Seq")
+            add_class_if_generative("AutoModelForCausalLM")
         elif "qwen" in model_type or "qwen" in m_path_lower:
-            for cls_name in ("Qwen2_5_VLForConditionalGeneration", "Qwen2VLForConditionalGeneration", "AutoModelForImageTextToText", "AutoModelForVision2Seq"):
-                if hasattr(transformers, cls_name):
-                    cls = getattr(transformers, cls_name)
-                    if cls not in candidate_classes:
-                        candidate_classes.append(cls)
+            add_class_if_generative("Qwen2_5_VLForConditionalGeneration")
+            add_class_if_generative("Qwen2VLForConditionalGeneration")
+            add_class_if_generative("AutoModelForImageTextToText")
+            add_class_if_generative("AutoModelForVision2Seq")
+            add_class_if_generative("AutoModelForCausalLM")
 
-        # Priority 3: Universal AutoModel wrappers
-        for auto_name in ("AutoModelForImageTextToText", "AutoModelForVision2Seq", "AutoModel"):
-            if hasattr(transformers, auto_name):
-                cls = getattr(transformers, auto_name)
-                if cls not in candidate_classes:
-                    candidate_classes.append(cls)
+        # Priority 3: Original llava package if installed
+        try:
+            from llava.model.language_model.llava_qwen import LlavaQwenForCausalLM
+            add_class_if_generative(LlavaQwenForCausalLM)
+        except ImportError:
+            pass
+        try:
+            from llava.model.language_model.llava_llama import LlavaLlamaForCausalLM
+            add_class_if_generative(LlavaLlamaForCausalLM)
+        except ImportError:
+            pass
 
-        # Priority 4: Fallback
-        if hasattr(transformers, "Qwen2_5_VLForConditionalGeneration"):
-            cls = getattr(transformers, "Qwen2_5_VLForConditionalGeneration")
-            if cls not in candidate_classes:
-                candidate_classes.append(cls)
+        # Priority 4: Universal generative AutoModel classes (never AutoModel)
+        add_class_if_generative("AutoModelForImageTextToText")
+        add_class_if_generative("AutoModelForVision2Seq")
+        add_class_if_generative("AutoModelForCausalLM")
+        add_class_if_generative("Qwen2_5_VLForConditionalGeneration")
 
-        # 2. Iterate and instantiate with failover
+        # 2. Iterate and instantiate with failover and .generate() validation
         self.model = None
         last_err = None
         for cls in candidate_classes:
@@ -119,9 +146,17 @@ class ModelQwenVL:
                     kwargs_load["attn_implementation"] = attn
                 try:
                     try:
-                        self.model = cls.from_pretrained(model_path, dtype=self.dtype, **kwargs_load)
+                        loaded_model = cls.from_pretrained(model_path, dtype=self.dtype, **kwargs_load)
                     except (TypeError, ValueError):
-                        self.model = cls.from_pretrained(model_path, torch_dtype=self.dtype, **kwargs_load)
+                        loaded_model = cls.from_pretrained(model_path, torch_dtype=self.dtype, **kwargs_load)
+
+                    # Strict validation: verify loaded instance has .generate()
+                    if not hasattr(loaded_model, "generate"):
+                        print(f"[ModelQwenVL] {cls.__name__} loaded but lacks .generate(); skipping.")
+                        del loaded_model
+                        continue
+
+                    self.model = loaded_model
                     break
                 except Exception as e_load:
                     last_err = e_load
