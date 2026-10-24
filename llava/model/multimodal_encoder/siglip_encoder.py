@@ -541,9 +541,21 @@ class SigLipVisionTower(nn.Module):
 
         self.is_loaded = False
 
-        self.config = SigLipVisionConfig()
+        target_path = vision_tower
+        for env_var in ["SIGLIP_MODEL_DIR", "CLIP_MODEL_DIR"]:
+            if not os.path.exists(target_path) and os.environ.get(env_var) and os.path.exists(os.environ.get(env_var)):
+                target_path = os.environ.get(env_var)
+                break
 
-        self.vision_tower_name = vision_tower
+        if os.path.exists(target_path):
+            try:
+                self.config = SigLipVisionConfig.from_pretrained(target_path)
+            except Exception:
+                self.config = SigLipVisionConfig()
+        else:
+            self.config = SigLipVisionConfig()
+
+        self.vision_tower_name = target_path
 
         self.image_processor = SigLipImageProcessor()
 
@@ -565,7 +577,20 @@ class SigLipVisionTower(nn.Module):
             rank0_print("{} is already loaded, `load_model` called again, skipping.".format(self.vision_tower_name))
             return
 
-        self.vision_tower = SigLipVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        is_meta = hasattr(torch, "get_default_device") and torch.get_default_device().type == "meta"
+        if is_meta:
+            self.vision_tower = SigLipVisionModel(self.config)
+        else:
+            target_path = self.vision_tower_name
+            for env_var in ["SIGLIP_MODEL_DIR", "CLIP_MODEL_DIR"]:
+                if not os.path.exists(target_path) and os.environ.get(env_var) and os.path.exists(os.environ.get(env_var)):
+                    target_path = os.environ.get(env_var)
+                    break
+            try:
+                self.vision_tower = SigLipVisionModel.from_pretrained(target_path, device_map=device_map)
+            except Exception as e:
+                rank0_print(f"Warning: Loading vision tower from pretrained failed ({e}), initializing from config.")
+                self.vision_tower = SigLipVisionModel(self.config)
 
         del self.vision_tower.vision_model.encoder.layers[-1:]
         self.vision_tower.vision_model.head = nn.Identity()

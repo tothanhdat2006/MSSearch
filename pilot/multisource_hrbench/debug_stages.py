@@ -1197,17 +1197,11 @@ def main():
                 torch_dtype=torch.float16 if "cuda" in qwen_device else torch.float32,
                 conv_type="qwen_1_5" if is_qwen else "llava_v1",
                 patch_scale=1.2,
+                bias_value=0.6,
             )
         except Exception as e_llava:
-            print(f"[Notice] ModelGlobalLocal failed to initialize ({e_llava}), falling back to ModelQwenVL.")
-            qwen_engine = ModelQwenVL(
-                model_path=args.qwen_path,
-                device=qwen_device,
-                torch_dtype=torch.float16 if "cuda" in qwen_device else torch.float32,
-                patch_scale=1.2,
-                min_pixels=args.min_pixels,
-                max_pixels=resolved_max_pixels,
-            )
+            print(f"[Error] ModelGlobalLocal failed to initialize: {e_llava}")
+            raise
     else:
         print(f"[Loading] Local VLM from '{args.qwen_path}' on {qwen_device}...")
         guard_msg = "Large Model OOM-guard" if resolved_max_pixels == 4194304 else "full-scale"

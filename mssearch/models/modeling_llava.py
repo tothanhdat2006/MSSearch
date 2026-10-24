@@ -35,7 +35,11 @@ class Model(ABC):
             try:
                 with open(os.path.join(model_path, "config.json"), "r", encoding="utf-8") as f:
                     _c = json.load(f)
-                    if any("qwen" in str(a).lower() for a in _c.get("architectures", [])):
+                    if (
+                        any("qwen" in str(a).lower() for a in _c.get("architectures", []))
+                        or "qwen" in _c.get("model_type", "").lower()
+                        or "qwen" in _c.get("_name_or_path", "").lower()
+                    ):
                         is_qwen = True
             except Exception:
                 pass
@@ -43,25 +47,28 @@ class Model(ABC):
         loaded = False
         last_err = None
         for attn in (attn_implementation, "sdpa", None):
-            try:
-                kwargs_load = dict(
-                    low_cpu_mem_usage=True,
-                    torch_dtype=self.dtype,
-                )
-                if attn is not None:
-                    kwargs_load["attn_implementation"] = attn
-                if is_qwen:
-                    self.model = LlavaQwenForCausalLM.from_pretrained(model_path, **kwargs_load)
-                else:
-                    llava_cfg = LlavaConfig.from_pretrained(model_path)
-                    if "v1.5" in model_path.lower():
-                        llava_cfg.delay_load = True
-                    self.model = LlavaLlamaForCausalLM.from_pretrained(model_path, config=llava_cfg, **kwargs_load)
-                loaded = True
+            if loaded:
                 break
-            except Exception as e_load:
-                last_err = e_load
-                continue
+            for low_cpu in (True, False):
+                try:
+                    kwargs_load = dict(
+                        low_cpu_mem_usage=low_cpu,
+                        torch_dtype=self.dtype,
+                    )
+                    if attn is not None:
+                        kwargs_load["attn_implementation"] = attn
+                    if is_qwen:
+                        self.model = LlavaQwenForCausalLM.from_pretrained(model_path, **kwargs_load)
+                    else:
+                        llava_cfg = LlavaConfig.from_pretrained(model_path)
+                        if "v1.5" in model_path.lower():
+                            llava_cfg.delay_load = True
+                        self.model = LlavaLlamaForCausalLM.from_pretrained(model_path, config=llava_cfg, **kwargs_load)
+                    loaded = True
+                    break
+                except Exception as e_load:
+                    last_err = e_load
+                    continue
 
         if not loaded:
             raise RuntimeError(f"Failed to load LLaVA model from '{model_path}': {last_err}")
@@ -165,7 +172,7 @@ class Model(ABC):
         return confidence
 
     @torch.inference_mode()
-    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[Node], return_zoomed_view=False):
+    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[Node], return_zoomed_view=False, max_new_tokens: int = 256):
         image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
         prompt_tag = self.get_prompt_tag(image_list)
         qs = self.prompts[prompt_tag]["pre_information"] + question
@@ -181,7 +188,7 @@ class Model(ABC):
             image_sizes=image_sizes,
             do_sample=False,
             temperature=0,
-            max_new_tokens=256,
+            max_new_tokens=max_new_tokens,
         )
         outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
 
@@ -450,6 +457,12 @@ class ModelGlobalLocal(Model):
                 "latent_prompt": "According to your common sense knowledge and the content of image, is it possible to find a {} by further zooming in the image? Answer Yes or No.",
                 "existence_prompt": "Is there a '{}' in the image? Answer Yes or No.",
                 "answering_prompt": "Question: '{}'\nCould you answer the question based on the available visual information? Answer Yes or No.",
+            },
+            "global": {
+                "pre_information": f"{DEFAULT_IMAGE_TOKEN}\n",
+            },
+            "zoom": {
+                "pre_information": f"{DEFAULT_IMAGE_TOKEN}\nThis is the main image, and the section enclosed by the {BOX_COLOR} rectangle is the focus region.\n{DEFAULT_IMAGE_TOKEN}\nThis is the zoomed-in view of the focus region.\n",
             },
         }
 
