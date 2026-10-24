@@ -50,7 +50,9 @@ class LlavaQwenMoeForCausalLM(Qwen2MoeForCausalLM, LlavaMetaForCausalLM):
         # super(Qwen2MoeForCausalLM, self).__init__(config)
         Qwen2MoeForCausalLM.__init__(self, config)
         config.model_type = "llava_qwen_moe"
-        config.rope_scaling = None
+        # config.rope_scaling = None
+        if hasattr(config, "rope_parameters") and config.rope_parameters is None:
+            config.rope_parameters = {"rope_type": "default", "rope_theta": getattr(config, "rope_theta", 10000.0)}
 
         self.model = LlavaQwenMoeModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)

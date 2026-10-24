@@ -46,6 +46,7 @@ class Model(ABC):
 
         loaded = False
         last_err = None
+        last_tb = ""
         for attn in (attn_implementation, "sdpa", None):
             if loaded:
                 break
@@ -58,7 +59,11 @@ class Model(ABC):
                     if attn is not None:
                         kwargs_load["attn_implementation"] = attn
                     if is_qwen:
-                        self.model = LlavaQwenForCausalLM.from_pretrained(model_path, **kwargs_load)
+                        from llava.model.language_model.llava_qwen import LlavaQwenConfig
+                        llava_cfg = LlavaQwenConfig.from_pretrained(model_path)
+                        if hasattr(llava_cfg, "rope_parameters") and llava_cfg.rope_parameters is None:
+                            llava_cfg.rope_parameters = {"rope_type": "default", "rope_theta": getattr(llava_cfg, "rope_theta", 10000.0)}
+                        self.model = LlavaQwenForCausalLM.from_pretrained(model_path, config=llava_cfg, **kwargs_load)
                     else:
                         llava_cfg = LlavaConfig.from_pretrained(model_path)
                         if "v1.5" in model_path.lower():
@@ -67,11 +72,13 @@ class Model(ABC):
                     loaded = True
                     break
                 except Exception as e_load:
+                    import traceback
                     last_err = e_load
+                    last_tb = traceback.format_exc()
                     continue
 
         if not loaded:
-            raise RuntimeError(f"Failed to load LLaVA model from '{model_path}': {last_err}")
+            raise RuntimeError(f"Failed to load LLaVA model from '{model_path}': {last_err}\nTraceback:\n{last_tb}")
         print("model:", type(self.model))
         self.model.config.tokenizer_padding_side = padding_side
         self.model.to(self.device)
