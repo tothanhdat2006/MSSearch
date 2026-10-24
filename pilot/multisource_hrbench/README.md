@@ -12,27 +12,36 @@ All runners auto-activate Conda environment `hrsearch`, set `PYTHONPATH`, and ha
 Executes end-to-end multi-stage visual search across all 999 samples with auto-resume:
 ```bash
 cd MSSearch/pilot/multisource_hrbench
+
+# Default model (Qwen2.5-VL-7B-Instruct)
 bash run_all.sh
+
+# Custom local model via positional argument
+bash run_all.sh /path/to/local/model
+
+# Custom local model via flag or environment variable
+bash run_all.sh --model_path /path/to/local/model
+MODEL_PATH=/path/to/local/model bash run_all.sh
 ```
 
 ### 1.2 Direct Vanilla VLM Baseline Evaluation (`run_baseline.sh`)
 Queries the raw VLM directly across candidate images without visual search or SAM3:
 ```bash
 cd MSSearch/pilot/multisource_hrbench
+
+# Default model (Qwen2.5-VL-7B-Instruct)
 bash run_baseline.sh
-```
-To evaluate strictly on the target image ($N=1$ vanilla single-image baseline), pass `--direct_target_only`:
-```bash
-bash run_baseline.sh --direct_target_only
+
+# Custom local model via positional argument or flag
+bash run_baseline.sh /path/to/local/model
+bash run_baseline.sh --model_path /path/to/local/model
+
+# Evaluate strictly on target image (N=1 vanilla single-image baseline)
+bash run_baseline.sh /path/to/local/model --direct_target_only
 ```
 
-### 1.3 Interactive Diagnostic Inspection (`run_debug.sh`)
-Runs step-by-step diagnostic telemetry on a specific sample or small subset:
-```bash
-cd MSSearch/pilot/multisource_hrbench
-bash run_debug.sh --sample_idx 0
-bash run_debug.sh --start_idx 0 --end_idx 10 --budget small
-```
+> **Offline Guarantee (Local Only)**: Both runners strictly enforce `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`, ensuring that all weights and processors are resolved strictly from local disk. If a non-existent or remote model path is provided, execution halts immediately without attempting any network connection. When evaluating custom models, results are automatically isolated into model-named output directories (e.g. `results_<model_name>/` or `results_baseline_<model_name>/`) to prevent cache or resume collisions.
+
 
 ---
 
@@ -91,20 +100,24 @@ python debug_stages.py --max_pixels 4194304 --min_pixels 3136
 
 ---
 
-## 4. Pipeline Budget Presets
-
-Choose budget profiles using `--budget {small, medium, large}`:
-
-| Hyperparameter | `budget_small.json` | `budget_medium.json` | `budget_large.json` | Description |
-| :--- | :---: | :---: | :---: | :--- |
-| `max_patches_per_image` | 64 | 100 | 150 | Stage 3 patch proposal budget per candidate image. |
-| `max_partition_depth` | 3 | 3 | 4 | Maximum recursive quadtree/SGAP depth. |
-| `max_sam3_eval_patches` | 16 | 32 | 64 | Stage 4 upper bound on expensive SAM3 patch scans. |
-| `max_latent_evals` | 6 | 12 | 20 | Stage 4 speculative VLM latent checks on centroids. |
-| `max_patches_per_detected_group` | 2 | 4 | 8 | Retained patches per confirmed SAM3 group. |
-| `max_patches_per_latent_group` | 1 | 1 | 2 | Retained patches per speculative latent group. |
-| `max_retained_patches` | 24 | 48 | 80 | Global candidate pool capacity before Stage 5/6. |
-| `enable_early_consensus_exit` | `false` | `false` | `false` | Deactivated for multi-source pool completeness. |
+## 4. Pipeline Budget Preset
+ 
+The default configuration is set to **`budget_large.json`** (`--budget large`):
+ 
+| Hyperparameter | Value | Description |
+| :--- | :---: | :--- |
+| `max_patches_per_image` | 150 | Stage 3 patch proposal budget per candidate image. |
+| `max_partition_depth` | 4 | Maximum recursive quadtree/SGAP depth. |
+| `max_sam3_eval_patches` | 150 | Stage 4 upper bound on expensive SAM3 patch scans. |
+| `max_latent_evals` | 20 | Stage 4 speculative VLM latent checks on centroids. |
+| `max_patches_per_detected_group` | 8 | Retained patches per confirmed SAM3 group. |
+| `max_patches_per_latent_group` | 2 | Retained patches per speculative latent group. |
+| `max_retained_patches` | 20 | Global candidate pool capacity before Stage 5/6. |
+| `enable_early_consensus_exit` | `false` | Deactivated for multi-source pool completeness. |
+| `max_latent_repartition_patches_per_image` | 4 | Max high-latent patches per image to re-partition in Stage 3. |
+| `max_latent_repartition_depth` | 2 | Max recursion levels for latent re-partitioning. |
+| `latent_repartition_threshold` | 0.0 | Minimum latent confidence to trigger Stage 3 re-partitioning. |
+| `answer_type` | `"option_list"` | Multiple-choice option format for HRBench evaluation. |
 
 ---
 

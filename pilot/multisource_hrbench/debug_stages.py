@@ -21,6 +21,11 @@ import argparse
 import warnings
 import logging
 import contextlib
+
+# Enforce strict offline execution (local files only, no online downloads)
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_DATASETS_OFFLINE"] = "1"
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any, Set, Union
 
@@ -608,9 +613,13 @@ def main():
     )
     parser.add_argument(
         "--qwen_path",
+        "--model_path",
+        "--model-path",
+        "--model",
         type=str,
-        default=os.environ.get("QWEN_PATH", "/home/ubuntu/workspace/hr/models/Qwen2.5-VL-7B-Instruct"),
-        help="Path or HuggingFace ID for Qwen2.5-VL-7B-Instruct.",
+        dest="qwen_path",
+        default=os.environ.get("MODEL_PATH", os.environ.get("QWEN_PATH", "/home/ubuntu/workspace/hr/models/Qwen2.5-VL-7B-Instruct")),
+        help="Path to local VLM checkpoint directory (local only, no online downloads).",
     )
     parser.add_argument(
         "--siglip_name",
@@ -663,9 +672,9 @@ def main():
     parser.add_argument(
         "--budget",
         type=str,
-        choices=["small", "medium", "large"],
-        default=None,
-        help="Quick budget preset: 'small' (fast), 'medium' (balanced sweet spot), 'large' (max accuracy).",
+        choices=["large"],
+        default="large",
+        help="Quick budget preset: 'large' (default high-depth visual search).",
     )
 
     # Logging & Display Arguments (Requirement 1: Only print final decision of each stage)
@@ -936,16 +945,24 @@ def main():
     if ModelQwenVL is None:
         raise ImportError("ModelQwenVL dependencies not installed; required for VLM evaluation.")
 
+    # Validate local model path exists (no online downloads)
+    if not os.path.exists(args.qwen_path):
+        raise FileNotFoundError(
+            f"Local model path '{args.qwen_path}' not found! "
+            f"Only local model directories are supported; online downloading is disabled."
+        )
+
     # Resolve visual pixel budget
     if args.max_pixels is not None:
         resolved_max_pixels = args.max_pixels
-    elif "32b" in str(args.qwen_path).lower():
+    elif any(tag in str(args.qwen_path).lower() for tag in ["32b", "72b"]):
         resolved_max_pixels = 4194304
     else:
         resolved_max_pixels = 12845056
 
-    print(f"[Loading] Qwen2.5-VL from '{args.qwen_path}' on {qwen_device}...")
-    print(f"  • Pixel Budget: min_pixels={args.min_pixels} (56x56) | max_pixels={resolved_max_pixels} ({'32B OOM-guard' if resolved_max_pixels == 4194304 else 'full-scale'})")
+    print(f"[Loading] Local VLM from '{args.qwen_path}' on {qwen_device}...")
+    guard_msg = "Large Model OOM-guard" if resolved_max_pixels == 4194304 else "full-scale"
+    print(f"  • Pixel Budget: min_pixels={args.min_pixels} (56x56) | max_pixels={resolved_max_pixels} ({guard_msg})")
     qwen_engine = ModelQwenVL(
         model_path=args.qwen_path,
         device=qwen_device,
