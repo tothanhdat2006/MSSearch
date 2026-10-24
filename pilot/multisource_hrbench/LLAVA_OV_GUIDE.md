@@ -1,108 +1,341 @@
-# LLaVA-OneVision (LLaVA-OV-7B) Running & Debugging Guide
+# Comprehensive Engineering Guide: LLaVA-OneVision (LLaVA-OV-7B) Integration, Offline Loading & Failure Diagnoses
 
-This document records the exact failure modes, architectural fixes, and execution commands required to run **LLaVA-OneVision-7B (`LLaVA-OV-7B`)** under offline conditions on HRBench.
+## 1. Executive Summary & Purpose
+
+This document provides complete, line-level documentation on integrating, loading, and debugging **LLaVA-OneVision-7B (`LLaVA-OV-7B`)** within the **MSSearch** visual search evaluation framework. 
+
+Future agents encountering model loading exceptions, tensor dimension mismatches, or silent degradations with LLaVA checkpoints must consult this reference before modifying model architectures or dispatch logic.
 
 ---
 
-## 1. Quick Execution Commands
+## 2. Checkpoint Specifications & Tensor Topology
 
-Activate the Conda environment and run via standard scripts:
+Target checkpoint directory: `/home/ubuntu/workspace/hr/models/LLaVA-OV-7B`  
+Base HuggingFace Model ID: `lmms-lab/llava-onevision-qwen2-7b-ov`
 
-### 1.1 Direct Baseline Mode (Vanilla VLM)
+### 2.1 Component Architecture Map
+
+```
+                    Raw Image Input (PIL.Image: H x W x 3)
+                                      │
+                                      ▼
+             SigLipImageProcessor (Input Size: 384x384, RGB, Mean=[0.5, 0.5, 0.5])
+                                      │
+                                      ▼
+                        SigLipVisionTower (so400m-patch14-384)
+            - Patch size: 14x14  -> Grid: 27 x 27 = 729 patches
+            - Embed dim: 1152    -> Output: [Batch, 729, 1152]
+            - Del last layer [-1:] & head = nn.Identity()
+                                      │
+                                      ▼
+                    Vision Resampler: SpatialPool (Stride=2, Mode='bilinear')
+            - Resamples 27x27 -> ceil(27/2) x ceil(27/2) = 14 x 14 = 196 tokens
+            - Output: [Batch, 196, 1152]
+                                      │
+                                      ▼
+             Multimodal Projector: mm_projector (mlp2x_gelu)
+            - Linear(1152, 3584) -> GELU() -> Linear(3584, 3584)
+            - Output: [Batch, 196, 3584] (hidden_size of LLM)
+                                      │
+                                      ▼
+        LlavaQwenForCausalLM (Qwen2-7B Backbone, Vocab: 152064, Hidden: 3584)
+            - Interleaved text tokens + image tokens (<image>)
+            - Chat Template: `qwen_1_5` (<|im_start|>system...<|im_start|>user...)
+            - Rotary Positional Embedding: Qwen2RotaryEmbedding
+```
+
+### 2.2 Tensor Dimensional Contracts
+
+| Module | Input Tensor Shape | Output Tensor Shape | Parameter Types |
+| :--- | :--- | :--- | :--- |
+| **SigLip Vision Encoder** | `[B, 3, 384, 384]` | `[B, 729, 1152]` | FP16 / BF16 (Frozen) |
+| **Spatial 2D Pooling** | `[B, 729, 1152]` | `[B, 196, 1152]` | Non-parametric / Bilinear |
+| **Multimodal Projector** | `[B, 196, 1152]` | `[B, 196, 3584]` | Trainable Linear + GELU |
+| **Qwen2 LM Embeddings** | `[B, SeqLen]` | `[B, SeqLen, 3584]` | Vocab: 152,064 |
+| **Qwen2 LM Head** | `[B, SeqLen, 3584]` | `[B, SeqLen, 152064]` | FP16 Linear |
+
+---
+
+## 3. Four Core Failure Modes, Root Causes & Fixes
+
+### 3.1 Failure Mode 1: Checkpoint Dispatched to LLaMA (`lm_head.weight` Size Mismatch)
+
+#### Error Traceback
+```python
+RuntimeError: Error(s) in loading state_dict for LlavaLlamaForCausalLM:
+    size mismatch for lm_head.weight: copying a param with shape torch.Size([152064, 3584]) from checkpoint,
+    the shape in current model is torch.Size([32000, 4096]).
+    size mismatch for model.embed_tokens.weight: copying a param with shape torch.Size([152064, 3584]) from checkpoint,
+    the shape in current model is torch.Size([32000, 4096]).
+```
+
+#### Root Cause
+Legacy LLaVA codebases (`modeling_llava.py` and `builder.py`) relied on path substring matching:
+```python
+# BROKEN LEGACY LOGIC
+if "qwen" in model_path.lower():
+    self.model = LlavaQwenForCausalLM.from_pretrained(...)
+else:
+    self.model = LlavaLlamaForCausalLM.from_pretrained(...)
+```
+When given the path `/home/ubuntu/workspace/hr/models/LLaVA-OV-7B`:
+- Substring `"qwen"` evaluates to `False`.
+- The code falls through to `LlavaLlamaForCausalLM` (which expects LLaMA architecture: `vocab_size=32000`, `hidden_size=4096`).
+- Weight loading immediately crashes due to tensor dimension mismatch.
+
+#### Fix Implementation
+In both `MSSearch/llava/model/builder.py` and `MSSearch/mssearch/models/modeling_llava.py`:
+1. Check `config.json` architectures and model type.
+2. Check for `"ov"`, `"onevision"`, `"qwen"`, or `conv_type == "qwen_1_5"`:
+```python
+is_qwen = (
+    "qwen" in model_path.lower()
+    or "ov" in model_path.lower()
+    or "onevision" in model_path.lower()
+    or conv_type == "qwen_1_5"
+)
+config_json_path = os.path.join(model_path, "config.json")
+if os.path.exists(config_json_path):
+    try:
+        with open(config_json_path, "r", encoding="utf-8") as f:
+            _c = json.load(f)
+            if (
+                any("qwen" in str(a).lower() for a in _c.get("architectures", []))
+                or "qwen" in _c.get("model_type", "").lower()
+                or "qwen" in _c.get("_name_or_path", "").lower()
+            ):
+                is_qwen = True
+    except Exception:
+        pass
+```
+
+---
+
+### 3.2 Failure Mode 2: `TypeError: 'NoneType' object is not subscriptable` in RoPE Initialization
+
+#### Error Traceback
+```python
+Traceback (most recent call last):
+  File "debug_stages.py", line 1194, in main
+    qwen_engine = ModelGlobalLocal(...)
+  File "mssearch/models/modeling_llava.py", line 432, in __init__
+    super().__init__(**kwargs)
+  File "mssearch/models/modeling_llava.py", line 62, in __init__
+    self.model = LlavaQwenForCausalLM.from_pretrained(model_path, **kwargs_load)
+  File "transformers/models/qwen2/modeling_qwen2.py", line 61, in __init__
+    self.rope_type = self.config.rope_parameters["rope_type"]
+TypeError: 'NoneType' object is not subscriptable
+```
+
+#### Root Cause
+1. In `transformers >= 4.43`, Hugging Face standardized RoPE configurations across all architectures via `PretrainedConfig.rope_scaling` and `PretrainedConfig.rope_parameters`:
+   ```python
+   # Inside transformers.configuration_utils.PretrainedConfig:
+   @property
+   def rope_scaling(self):
+       return self.rope_parameters
+
+   @rope_scaling.setter
+   def rope_scaling(self, value):
+       self.rope_parameters = value
+   ```
+2. In legacy LLaVA (`llava_qwen.py`, `llava_qwen_moe.py`, `llava_mistral.py`, `llava_mixtral.py`):
+   ```python
+   # BROKEN LEGACY LLaVA CONSTRUCTOR:
+   class LlavaQwenForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
+       def __init__(self, config):
+           Qwen2ForCausalLM.__init__(self, config)
+           config.model_type = "llava_qwen"
+           config.rope_scaling = None  # <--- CRITICAL BUG
+           self.model = LlavaQwenModel(config)
+   ```
+3. Executing `config.rope_scaling = None` invokes the setter, setting `config.rope_parameters = None`.
+4. Next line `self.model = LlavaQwenModel(config)` calls `Qwen2Model(config)` -> `Qwen2RotaryEmbedding(config)`.
+5. `Qwen2RotaryEmbedding` evaluates `self.config.rope_parameters["rope_type"]`.
+6. Since `rope_parameters` is `None`, Python raises `TypeError: 'NoneType' object is not subscriptable`.
+7. *Note*: In `llava_llama.py`, this had previously been commented out (`# config.rope_scaling = None`), but remained active in `llava_qwen.py` and other files.
+
+#### Fix Implementation
+In `MSSearch/llava/model/language_model/llava_qwen.py` (and `llava_qwen_moe.py`, `llava_mistral.py`, `llava_mixtral.py`):
+```python
+class LlavaQwenForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
+    config_class = LlavaQwenConfig
+
+    def __init__(self, config):
+        Qwen2ForCausalLM.__init__(self, config)
+        config.model_type = "llava_qwen"
+        # DO NOT NULLIFY rope_scaling: in transformers >= 4.43 this wipes rope_parameters
+        # config.rope_scaling = None
+        if hasattr(config, "rope_parameters") and config.rope_parameters is None:
+            config.rope_parameters = {
+                "rope_type": "default",
+                "rope_theta": getattr(config, "rope_theta", 10000.0),
+            }
+
+        self.model = LlavaQwenModel(config)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.post_init()
+```
+
+And in `MSSearch/mssearch/models/modeling_llava.py`:
+```python
+if is_qwen:
+    from llava.model.language_model.llava_qwen import LlavaQwenConfig
+    llava_cfg = LlavaQwenConfig.from_pretrained(model_path)
+    if hasattr(llava_cfg, "rope_parameters") and llava_cfg.rope_parameters is None:
+        llava_cfg.rope_parameters = {
+            "rope_type": "default",
+            "rope_theta": getattr(llava_cfg, "rope_theta", 10000.0),
+        }
+    self.model = LlavaQwenForCausalLM.from_pretrained(
+        model_path, config=llava_cfg, **kwargs_load
+    )
+```
+
+---
+
+### 3.3 Failure Mode 3: Meta-Device Initialization Bypass under `low_cpu_mem_usage=True`
+
+#### Error Traceback
+```python
+NotImplementedError: Cannot copy out of meta tensor; no data!
+# OR
+requests.exceptions.ConnectionError: (Offline mode active; cannot reach huggingface.co)
+```
+
+#### Root Cause
+Under `low_cpu_mem_usage=True`, PyTorch initializes tensors on a `meta` device to conserve host RAM. Calling `SigLipVisionModel.from_pretrained("google/siglip-so400m-patch14-384")` in an offline environment triggers either:
+1. Online download requests blocked by `HF_HUB_OFFLINE=1`.
+2. Meta-tensor allocation failures when trying to materialize weights from a non-local HuggingFace repo ID.
+
+#### Fix Implementation
+In `MSSearch/llava/model/multimodal_encoder/siglip_encoder.py` and `clip_encoder.py`:
+```python
+is_meta = hasattr(torch, "get_default_device") and torch.get_default_device().type == "meta"
+if is_meta:
+    # Under meta-device context, instantiate directly from config without downloading
+    self.vision_tower = SigLipVisionModel(self.config)
+else:
+    # Normal execution: try local directories first
+    target_path = self.vision_tower_name
+    for env_var in ["SIGLIP_MODEL_DIR", "CLIP_MODEL_DIR"]:
+        if not os.path.exists(target_path) and os.environ.get(env_var) and os.path.exists(os.environ.get(env_var)):
+            target_path = os.environ.get(env_var)
+            break
+    try:
+        self.vision_tower = SigLipVisionModel.from_pretrained(target_path, device_map=device_map)
+    except Exception as e:
+        rank0_print(f"Warning: Loading vision tower from pretrained failed ({e}), initializing from config.")
+        self.vision_tower = SigLipVisionModel(self.config)
+```
+
+---
+
+### 3.4 Failure Mode 4: Prompt Dictionary Key Mismatch in `ModelGlobalLocal`
+
+#### Error Traceback
+```python
+KeyError: 'global'
+# OR
+KeyError: 'zoom'
+```
+
+#### Root Cause
+`ModelGlobalLocal.init_prompts()` originally defined only the `"search"` key containing `pre_information_image1`, `pre_information_image2`, `latent_prompt`, etc.
+However, `free_form_using_nodes()`, `run_direct_vlm_inference()`, and Stage 5/6 routing index:
+- `self.prompts["global"]["pre_information"]` for single-image full views.
+- `self.prompts["zoom"]["pre_information"]` for dual foveated-zoom views.
+
+#### Fix Implementation
+In `MSSearch/mssearch/models/modeling_llava.py`:
+```python
+def init_prompts(self):
+    self.prompts = {
+        "search": {
+            "pre_information_image2": f"{DEFAULT_IMAGE_TOKEN}\nThis is the main image, and the section enclosed by the {BOX_COLOR} rectangle is the focus region.\n{DEFAULT_IMAGE_TOKEN}\nThis is the zoomed-in view of the focus region.\n",
+            "pre_information_image1": f"{DEFAULT_IMAGE_TOKEN}\n",
+            "latent_prompt": "According to your common sense knowledge and the content of image, is it possible to find a {} by further zooming in the image? Answer Yes or No.",
+            "existence_prompt": "Is there a '{}' in the image? Answer Yes or No.",
+            "answering_prompt": "Question: '{}'\nCould you answer the question based on the available visual information? Answer Yes or No.",
+        },
+        "global": {
+            "pre_information": f"{DEFAULT_IMAGE_TOKEN}\n",
+        },
+        "zoom": {
+            "pre_information": f"{DEFAULT_IMAGE_TOKEN}\nThis is the main image, and the section enclosed by the {BOX_COLOR} rectangle is the focus region.\n{DEFAULT_IMAGE_TOKEN}\nThis is the zoomed-in view of the focus region.\n",
+        },
+    }
+```
+
+---
+
+## 4. Modified Files Audit Trail
+
+All changes are committed strictly inside the `MSSearch` repository:
+
+| File Path | Changes Applied |
+| :--- | :--- |
+| `MSSearch/llava/model/language_model/llava_qwen.py` | Commented out `config.rope_scaling = None`; injected `rope_parameters` fallback check. |
+| `MSSearch/llava/model/language_model/llava_qwen_moe.py` | Commented out `config.rope_scaling = None`; injected `rope_parameters` fallback check. |
+| `MSSearch/llava/model/language_model/llava_mistral.py` | Commented out `config.rope_scaling = None`; injected `rope_parameters` fallback check. |
+| `MSSearch/llava/model/language_model/llava_mixtral.py` | Commented out `config.rope_scaling = None`; injected `rope_parameters` fallback check. |
+| `MSSearch/llava/model/multimodal_encoder/builder.py` | Guarded `os.path.exists(vision_tower)` when `vision_tower is None`. |
+| `MSSearch/llava/model/multimodal_encoder/siglip_encoder.py` | Meta-device check bypassing `from_pretrained`; env var path resolution. |
+| `MSSearch/llava/model/multimodal_encoder/clip_encoder.py` | Meta-device check bypassing `from_pretrained`; env var path resolution. |
+| `MSSearch/llava/model/builder.py` | Expanded `config.json` architecture inspection for Qwen/OneVision dispatch. |
+| `MSSearch/mssearch/models/modeling_llava.py` | Config-based model dispatch; explicit `LlavaQwenConfig` loading; added `global`/`zoom` prompts; attached full tracebacks to load errors. |
+| `MSSearch/pilot/multisource_hrbench/debug_stages.py` | Explicit `ModelGlobalLocal` routing for LLaVA checkpoints; multi-image composite canvas fallback; fail-fast exception bubbling. |
+| `MSSearch/pilot/multisource_hrbench/run_baseline.sh` | Model-specific output dir creation (`results_baseline_<model_name>/`); strict offline flags (`HF_HUB_OFFLINE=1`). |
+
+---
+
+## 5. Verification Runbook for Future Agents
+
+To verify that the LLaVA-OneVision loading pipeline is operational on any target machine:
+
+### Step 1: Verify Local Checkpoint Integrity
 ```bash
-cd MSSearch/pilot/multisource_hrbench
+ls -lh /home/ubuntu/workspace/hr/models/LLaVA-OV-7B/config.json
+grep -E "architectures|model_type" /home/ubuntu/workspace/hr/models/LLaVA-OV-7B/config.json
+```
+Expected output:
+```json
+"architectures": ["LlavaQwenForCausalLM"],
+"model_type": "llava_qwen"
+```
 
-# Positional model path (auto-creates results_baseline_LLaVA-OV-7B/)
-bash run_baseline.sh /home/ubuntu/workspace/hr/models/LLaVA-OV-7B
+### Step 2: Run Single-Sample Baseline Diagnostic
+```bash
+cd /home/ubuntu/workspace/hr/methods/MSSearch/pilot/multisource_hrbench
 
-# Target-only evaluation (N=1, ignoring candidate distractors)
-bash run_baseline.sh /home/ubuntu/workspace/hr/models/LLaVA-OV-7B --direct_target_only
-
-# Single sample test (e.g. sample 0)
 bash run_baseline.sh /home/ubuntu/workspace/hr/models/LLaVA-OV-7B --sample_idx 0
 ```
 
-### 1.2 Full MSSearch Pipeline Mode
-```bash
-cd MSSearch/pilot/multisource_hrbench
-
-# Run full visual search with LLaVA-OV-7B
-bash run_all.sh /home/ubuntu/workspace/hr/models/LLaVA-OV-7B
+### Step 3: Verify Initialization Signatures in Stdout
+The output must display the following milestones without warnings or tracebacks:
+```text
+[Loading] LLaVA GlobalLocal Engine from '/home/ubuntu/workspace/hr/models/LLaVA-OV-7B' on cuda:0...
+padding side: left
+model: <class 'llava.model.language_model.llava_qwen.LlavaQwenForCausalLM'>
+bias_value: 0.6
+input size: (384, 384)
+background color: (127, 127, 127)
+patch scale: 1.2
+Yes: [9454]
+No: [2753]
+index_yes: 9454
+index_no: 2753
+new_image_grid_pinpoints: [[384, 384], [384, 768], ... [2304, 768]]
 ```
 
----
+### Step 4: Run Full Benchmark Execution
+```bash
+# Full dataset direct baseline evaluation
+bash run_baseline.sh /home/ubuntu/workspace/hr/models/LLaVA-OV-7B --all_samples --resume
 
-## 2. Checkpoint Architecture Specification
-
-The checkpoint at `/home/ubuntu/workspace/hr/models/LLaVA-OV-7B` (`lmms-lab/llava-onevision-qwen2-7b-ov`) consists of:
-- **Language Backbone**: Qwen2-7B (`LlavaQwenForCausalLM`, `vocab_size=152064`, `hidden_size=3584`).
-- **Vision Tower**: `google/siglip-so400m-patch14-384` (`image_size=384`, `patch_size=14`, `num_channels=3`).
-- **Multimodal Projector**: 2-layer GELU MLP (`mlp2x_gelu`, `mm_hidden_size=1152` -> `hidden_size=3584`).
-- **Vision Resampler**: Spatial 2D Pooling (`spatial_pool`, stride=2, bilinear interpolation).
-- **Conversation Template**: `qwen_1_5` (`<|im_start|>system...<|im_start|>user...<|im_start|>assistant...`).
-- **Global-Local Hyperparameters**: `bias_value=0.6`, `patch_scale=1.2`, `max_anyres_num=12`.
-
----
-
-## 3. Four Core Failure Modes & Fixes
-
-### 3.1 Failure 1: Architecture Dispatch Defaulting to LLaMA (`lm_head.weight` Shape Mismatch)
-- **Error**: `size mismatch for lm_head.weight: copying a param with shape torch.Size([152064, 3584]) from checkpoint, the shape in current model is torch.Size([32000, 4096])`.
-- **Cause**: Legacy LLaVA loader checked `if "qwen" in model_path:`. Because the path was `/home/ubuntu/workspace/hr/models/LLaVA-OV-7B` (contains `"ov"` but not `"qwen"`), it instantiated `LlavaLlamaForCausalLM` (vocab 32000, hidden 4096).
-- **Fix**: Introspect `config.json` (`architectures`, `model_type`, `_name_or_path`) in addition to checking `ov`, `onevision`, `qwen`, or `conv_type == "qwen_1_5"` in `MSSearch/llava/model/builder.py` and `MSSearch/mssearch/models/modeling_llava.py`.
-
-### 3.2 Failure 2: RoPE Parameters NoneType Subscript in Modern Transformers
-- **Error**: `TypeError: 'NoneType' object is not subscriptable` at `self.rope_type = self.config.rope_parameters["rope_type"]` inside `Qwen2RotaryEmbedding`.
-- **Cause**: In `transformers >= 4.43`, `PretrainedConfig.rope_scaling` has a setter that mutates `self.rope_parameters`. Legacy code in `llava_qwen.py`, `llava_qwen_moe.py`, `llava_mistral.py`, and `llava_mixtral.py` executed `config.rope_scaling = None`, wiping `config.rope_parameters` to `None`.
-- **Fix**:
-  1. Commented out `config.rope_scaling = None` in `MSSearch/llava/model/language_model/llava_qwen.py` (matching `llava_llama.py`).
-  2. Added fallback in `llava_qwen.py` and `modeling_llava.py`:
-     ```python
-     if hasattr(config, "rope_parameters") and config.rope_parameters is None:
-         config.rope_parameters = {"rope_type": "default", "rope_theta": getattr(config, "rope_theta", 10000.0)}
-     ```
-
-### 3.3 Failure 3: Meta-Device Instantiation under `low_cpu_mem_usage=True`
-- **Error**: `NotImplementedError: Cannot copy out of meta tensor; no data!` or remote download attempt in offline mode when loading `SigLipVisionTower`.
-- **Cause**: Under PyTorch meta-device context during `from_pretrained(low_cpu_mem_usage=True)`, `from_pretrained` on external vision towers attempted remote hub checks or failed to allocate meta storage.
-- **Fix**: In `MSSearch/llava/model/multimodal_encoder/siglip_encoder.py` and `clip_encoder.py`, bypass `from_pretrained` when device is meta or when offline:
-  ```python
-  if hasattr(torch, "get_default_device") and torch.get_default_device().type == "meta":
-      self.vision_tower = SigLipVisionModel(self.config)
-  ```
-
-### 3.4 Failure 4: Missing `global` and `zoom` Keys in `ModelGlobalLocal.init_prompts`
-- **Error**: `KeyError: 'global'` or `KeyError: 'zoom'` during Stage 5 spatial compression / zoomed view prompt generation.
-- **Cause**: `ModelGlobalLocal.init_prompts()` only defined `"search"` sub-dict, omitting `"global"` and `"zoom"` prompt templates required by `free_form_using_nodes` and `run_direct_vlm_inference`.
-- **Fix**: Added `"global"` (`<image>\n`) and `"zoom"` (`<image>\nThis is the main image...<image>\nThis is the zoomed-in view...`) prompt entries to `ModelGlobalLocal.init_prompts()` in `MSSearch/mssearch/models/modeling_llava.py`.
-
----
-
-## 4. Verification Checklist
-
-When deploying to a new worker or environment:
-
-1. [ ] Check `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` are set.
-2. [ ] Check model checkpoint contains:
-   - `config.json` (with `"model_type": "llava_qwen"` or `architectures: ["LlavaQwenForCausalLM"]`).
-   - `model.safetensors.index.json` or `pytorch_model.bin.index.json`.
-   - `tokenizer.json`, `tokenizer_config.json`.
-3. [ ] Check `MSSearch/llava/model/language_model/llava_qwen.py` does not contain uncommented `config.rope_scaling = None`.
-4. [ ] Run single-sample verification:
-   ```bash
-   bash run_baseline.sh /home/ubuntu/workspace/hr/models/LLaVA-OV-7B --sample_idx 0
-   ```
-   Expected console output:
-   ```
-   [Loading] LLaVA GlobalLocal Engine from '/home/ubuntu/workspace/hr/models/LLaVA-OV-7B' on cuda:0...
-   padding side: left
-   model: <class 'llava.model.language_model.llava_qwen.LlavaQwenForCausalLM'>
-   bias_value: 0.6
-   input size: (384, 384)
-   background color: (127, 127, 127)
-   patch scale: 1.2
-   Yes: [9454]
-   No: [2753]
-   index_yes: 9454
-   index_no: 2753
-   ```
+# Full MSSearch recursive visual search evaluation
+bash run_all.sh /home/ubuntu/workspace/hr/models/LLaVA-OV-7B --all_samples --resume
+```
+Results will be stored in:
+- Baseline: `pilot/multisource_hrbench/results_baseline_LLaVA-OV-7B/`
+- Full Search: `pilot/multisource_hrbench/results_LLaVA-OV-7B/`
