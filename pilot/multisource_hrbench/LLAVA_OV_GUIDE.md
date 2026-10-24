@@ -269,22 +269,52 @@ def init_prompts(self):
 
 ---
 
+### 3.5 Failure Mode 5: CUDA Assertion in `vectorized_gather_kernel` (Negative `input_ids` & Repetition Penalty Out of Bounds)
+
+#### Error Traceback
+```text
+../aten/src/ATen/native/cuda/GatherScatterKernels.cu:108: vectorized_gather_kernel: Assertion `ind >= 0 && ind < ind_dim_size && "vectorized gather kernel index out of bounds"` failed.
+RuntimeError: CUDA error: device-side assert triggered
+```
+
+#### Root Cause
+1. `LLaVA-OV-7B`'s `generation_config.json` sets `repetition_penalty = 1.05`.
+2. In HuggingFace `transformers`, whenever `repetition_penalty != 1.0`, `RepetitionPenaltyLogitsProcessor` is instantiated.
+3. During generation, `RepetitionPenaltyLogitsProcessor` performs `torch.gather(scores, 1, input_ids)`.
+4. LLaVA tokenizers embed sentinel tokens such as `IMAGE_TOKEN_INDEX = -200` into `input_ids`.
+5. When `inputs_embeds` is computed from multimodal tokens, passing or leaking `input_ids` containing `-200` into `super().generate` causes `torch.gather` on GPU to evaluate index `-200 < 0`, triggering a fatal CUDA assertion failure in `vectorized_gather_kernel`.
+
+#### Fix Implementation
+1. In `MSSearch/llava/model/language_model/llava_qwen.py` (and related `llava_*.py` backbones):
+   - Pop `"input_ids"` from `kwargs` so it never leaks into `super().generate` alongside `inputs_embeds`.
+   - Sanitize negative sentinel tokens before any embedding lookup (`torch.where(inputs < 0, torch.zeros_like(inputs), inputs)`).
+   - Set `kwargs["repetition_penalty"] = 1.0` if not overridden, preventing `RepetitionPenaltyLogitsProcessor` instantiation.
+2. In `MSSearch/mssearch/models/modeling_llava.py`:
+   - Set `self.model.generation_config.repetition_penalty = 1.0` at model initialization.
+   - Explicitly pass `repetition_penalty=1.0` to all `self.model.generate(...)` calls (`free_form_using_nodes`, `generate_text`, etc.).
+3. In `MSSearch/pilot/multisource_hrbench/debug_stages.py`:
+   - Enforce `repetition_penalty=1.0` in direct inference generation loops.
+
+---
+
 ## 4. Modified Files Audit Trail
 
 All changes are committed strictly inside the `MSSearch` repository:
 
 | File Path | Changes Applied |
 | :--- | :--- |
-| `MSSearch/llava/model/language_model/llava_qwen.py` | Commented out `config.rope_scaling = None`; injected `rope_parameters` fallback check. |
-| `MSSearch/llava/model/language_model/llava_qwen_moe.py` | Commented out `config.rope_scaling = None`; injected `rope_parameters` fallback check. |
-| `MSSearch/llava/model/language_model/llava_mistral.py` | Commented out `config.rope_scaling = None`; injected `rope_parameters` fallback check. |
-| `MSSearch/llava/model/language_model/llava_mixtral.py` | Commented out `config.rope_scaling = None`; injected `rope_parameters` fallback check. |
+| `MSSearch/llava/model/language_model/llava_qwen.py` | Commented out `config.rope_scaling = None`; injected `rope_parameters` fallback; sanitized `input_ids` & neutralized `repetition_penalty` gather crash. |
+| `MSSearch/llava/model/language_model/llava_qwen_moe.py` | Commented out `config.rope_scaling = None`; injected `rope_parameters` fallback; popped `input_ids` & neutralized `repetition_penalty`. |
+| `MSSearch/llava/model/language_model/llava_llama.py` | Popped `input_ids` from kwargs; clamped negative token IDs; neutralized `repetition_penalty`. |
+| `MSSearch/llava/model/language_model/llava_mistral.py` | Commented out `config.rope_scaling = None`; popped `input_ids`; neutralized `repetition_penalty`. |
+| `MSSearch/llava/model/language_model/llava_mixtral.py` | Commented out `config.rope_scaling = None`; popped `input_ids`; neutralized `repetition_penalty`. |
+| `MSSearch/llava/model/language_model/llava_gemma.py` | Popped `input_ids` from kwargs; clamped negative token IDs; neutralized `repetition_penalty`. |
 | `MSSearch/llava/model/multimodal_encoder/builder.py` | Guarded `os.path.exists(vision_tower)` when `vision_tower is None`. |
 | `MSSearch/llava/model/multimodal_encoder/siglip_encoder.py` | Meta-device check bypassing `from_pretrained`; env var path resolution. |
 | `MSSearch/llava/model/multimodal_encoder/clip_encoder.py` | Meta-device check bypassing `from_pretrained`; env var path resolution. |
 | `MSSearch/llava/model/builder.py` | Expanded `config.json` architecture inspection for Qwen/OneVision dispatch. |
-| `MSSearch/mssearch/models/modeling_llava.py` | Config-based model dispatch; explicit `LlavaQwenConfig` loading; added `global`/`zoom` prompts; attached full tracebacks to load errors. |
-| `MSSearch/pilot/multisource_hrbench/debug_stages.py` | Explicit `ModelGlobalLocal` routing for LLaVA checkpoints; multi-image composite canvas fallback; fail-fast exception bubbling. |
+| `MSSearch/mssearch/models/modeling_llava.py` | Config-based model dispatch; explicit `LlavaQwenConfig` loading; added `global`/`zoom` prompts; clamped `repetition_penalty=1.0`; attached full tracebacks to load errors. |
+| `MSSearch/pilot/multisource_hrbench/debug_stages.py` | Explicit `ModelGlobalLocal` routing for LLaVA checkpoints; multi-image composite canvas fallback; fail-fast exception bubbling; explicit `repetition_penalty=1.0`. |
 | `MSSearch/pilot/multisource_hrbench/run_baseline.sh` | Model-specific output dir creation (`results_baseline_<model_name>/`); strict offline flags (`HF_HUB_OFFLINE=1`). |
 
 ---

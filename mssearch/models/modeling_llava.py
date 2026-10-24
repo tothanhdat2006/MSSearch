@@ -81,6 +81,8 @@ class Model(ABC):
             raise RuntimeError(f"Failed to load LLaVA model from '{model_path}': {last_err}\nTraceback:\n{last_tb}")
         print("model:", type(self.model))
         self.model.config.tokenizer_padding_side = padding_side
+        if hasattr(self.model, "generation_config") and self.model.generation_config is not None:
+            self.model.generation_config.repetition_penalty = 1.0
         self.model.to(self.device)
 
         vision_tower = self.model.get_vision_tower()
@@ -195,6 +197,7 @@ class Model(ABC):
             image_sizes=image_sizes,
             do_sample=False,
             temperature=0,
+            repetition_penalty=1.0,
             max_new_tokens=max_new_tokens,
         )
         outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
@@ -234,6 +237,7 @@ class Model(ABC):
             images=None,
             do_sample=False,
             temperature=0,
+            repetition_penalty=1.0,
             max_new_tokens=max_new_tokens,
         )
         return self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
@@ -346,6 +350,7 @@ class Model(ABC):
             images=None,
             do_sample=False,
             temperature=0,
+            repetition_penalty=1.0,
             max_new_tokens=256,
         )
         outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
@@ -642,6 +647,7 @@ class ModelGlobalLocal(Model):
             image_sizes=image_sizes,
             do_sample=False,
             temperature=0,
+            repetition_penalty=1.0,
             max_new_tokens=256,
         )
         outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]

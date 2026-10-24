@@ -650,14 +650,11 @@ def run_direct_vlm_inference(
 
     # 3. ModelGlobalLocal route (LLaVA models using image_processor + tokenizer)
     if hasattr(qwen_engine, "image_processor") and hasattr(qwen_engine, "tokenizer") and not hasattr(qwen_engine, "processor"):
-        try:
-            if len(safe_images) > 1:
-                composite = _create_composite_canvas(safe_images)
-                return qwen_engine.generate_response(image_pil=composite, question=prompt, max_new_tokens=max_new_tokens)
-            else:
-                return qwen_engine.generate_response(image_pil=safe_images[0], question=prompt, max_new_tokens=max_new_tokens)
-        except Exception as e_gl:
-            print(f"[Notice] ModelGlobalLocal direct inference exception: {e_gl}")
+        if len(safe_images) > 1:
+            composite = _create_composite_canvas(safe_images)
+            return qwen_engine.generate_response(image_pil=composite, question=prompt, max_new_tokens=max_new_tokens)
+        else:
+            return qwen_engine.generate_response(image_pil=safe_images[0], question=prompt, max_new_tokens=max_new_tokens)
 
     # 4. Single-image route (N=1) for other models
     if len(safe_images) == 1:
@@ -751,6 +748,7 @@ def run_direct_vlm_inference(
                         **model_inputs,
                         use_cache=True,
                         max_new_tokens=max_new_tokens,
+                        repetition_penalty=1.0,
                         do_sample=False,
                     )
                 trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
@@ -787,6 +785,7 @@ def run_direct_vlm_inference(
                     **model_inputs,
                     use_cache=True,
                     max_new_tokens=max_new_tokens,
+                    repetition_penalty=1.0,
                     do_sample=False,
                 )
             trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
@@ -822,6 +821,7 @@ def run_direct_vlm_inference(
                     **model_inputs,
                     use_cache=True,
                     max_new_tokens=max_new_tokens,
+                    repetition_penalty=1.0,
                     do_sample=False,
                 )
             trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
