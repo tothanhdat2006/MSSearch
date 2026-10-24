@@ -39,11 +39,34 @@ class ModelQwenVL:
         print(f"[ModelQwenVL] Multi-GPU device_map: {device_map} | max_memory: {max_memory}")
         print(f"[ModelQwenVL] Attention Backend: {actual_attn_implementation} | Precision: {self.dtype}")
 
-        self.processor = AutoProcessor.from_pretrained(
-            model_path,
-            trust_remote_code=True,
-            local_files_only=True,
+        # Determine offline/local execution preference
+        offline_env = (
+            os.environ.get("TRANSFORMERS_OFFLINE", "0") == "1"
+            or os.environ.get("HF_HUB_OFFLINE", "0") == "1"
         )
+        local_files_only = kwargs.pop("local_files_only", None)
+        if local_files_only is None:
+            # Only restrict to local files if path exists locally or offline env is explicitly set
+            local_files_only = os.path.exists(model_path) or offline_env
+
+        try:
+            self.processor = AutoProcessor.from_pretrained(
+                model_path,
+                trust_remote_code=True,
+                local_files_only=local_files_only,
+            )
+        except Exception as e_proc:
+            if local_files_only and not offline_env and not os.path.exists(model_path):
+                print(f"[ModelQwenVL] Local files only failed for '{model_path}', retrying with local_files_only=False...")
+                self.processor = AutoProcessor.from_pretrained(
+                    model_path,
+                    trust_remote_code=True,
+                    local_files_only=False,
+                )
+                local_files_only = False
+            else:
+                raise
+
         self.tokenizer = self.processor.tokenizer
         # 1. Inspect config.json to identify the architecture family
         cfg_path = os.path.join(model_path, "config.json")
@@ -55,6 +78,14 @@ class ModelQwenVL:
                     cfg_json = json.load(f)
                     archs = cfg_json.get("architectures", [])
                     model_type = str(cfg_json.get("model_type", "")).lower()
+            except Exception:
+                pass
+        else:
+            try:
+                from transformers import AutoConfig
+                cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True, local_files_only=local_files_only)
+                archs = getattr(cfg, "architectures", []) or []
+                model_type = str(getattr(cfg, "model_type", "")).lower()
             except Exception:
                 pass
 
@@ -141,7 +172,7 @@ class ModelQwenVL:
                     max_memory=max_memory,
                     low_cpu_mem_usage=True,
                     trust_remote_code=True,
-                    local_files_only=True,
+                    local_files_only=local_files_only,
                 )
                 if attn is not None:
                     kwargs_load["attn_implementation"] = attn
@@ -160,6 +191,28 @@ class ModelQwenVL:
                     self.model = loaded_model
                     break
                 except Exception as e_load:
+                    if (
+                        local_files_only
+                        and not offline_env
+                        and not os.path.exists(model_path)
+                        and ("LocalEntryNotFoundError" in type(e_load).__name__ or "local_files_only" in str(e_load))
+                    ):
+                        print(f"[ModelQwenVL] Local cache missed for '{model_path}', retrying {cls.__name__} with local_files_only=False...")
+                        kwargs_load["local_files_only"] = False
+                        try:
+                            try:
+                                loaded_model = cls.from_pretrained(model_path, dtype=self.dtype, **kwargs_load)
+                            except (TypeError, ValueError):
+                                loaded_model = cls.from_pretrained(model_path, torch_dtype=self.dtype, **kwargs_load)
+                            if not hasattr(loaded_model, "generate"):
+                                del loaded_model
+                                continue
+                            self.model = loaded_model
+                            local_files_only = False
+                            break
+                        except Exception as e_retry:
+                            last_err = e_retry
+                            continue
                     last_err = e_load
                     continue
             if self.model is not None:
