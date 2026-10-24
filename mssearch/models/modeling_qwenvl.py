@@ -127,7 +127,8 @@ class ModelQwenVL:
         add_class_if_generative("AutoModelForImageTextToText")
         add_class_if_generative("AutoModelForVision2Seq")
         add_class_if_generative("AutoModelForCausalLM")
-        add_class_if_generative("Qwen2_5_VLForConditionalGeneration")
+        if not ("llava" in m_path_lower or "llava" in model_type or any("llava" in a for a in archs)):
+            add_class_if_generative("Qwen2_5_VLForConditionalGeneration")
 
         # 2. Iterate and instantiate with failover and .generate() validation
         self.model = None

@@ -446,7 +446,18 @@ def run_direct_vlm_inference(
         except Exception as e_ivl_chat:
             print(f"[Notice] InternVL multi-image direct inference exception: {e_ivl_chat}")
 
-    # 3. Single-image route (N=1) for other models
+    # 3. ModelGlobalLocal route (LLaVA models using image_processor + tokenizer)
+    if hasattr(qwen_engine, "image_processor") and hasattr(qwen_engine, "tokenizer") and not hasattr(qwen_engine, "processor"):
+        try:
+            if len(safe_images) > 1:
+                composite = _create_composite_canvas(safe_images)
+                return qwen_engine.generate_response(image_pil=composite, question=prompt, max_new_tokens=max_new_tokens)
+            else:
+                return qwen_engine.generate_response(image_pil=safe_images[0], question=prompt, max_new_tokens=max_new_tokens)
+        except Exception as e_gl:
+            print(f"[Notice] ModelGlobalLocal direct inference exception: {e_gl}")
+
+    # 4. Single-image route (N=1) for other models
     if len(safe_images) == 1:
         if hasattr(qwen_engine, "generate_response"):
             return qwen_engine.generate_response(
@@ -1167,6 +1178,28 @@ def main():
             )
         except Exception as e_ivl:
             print(f"[Notice] ModelInternvl failed to initialize ({e_ivl}), falling back to ModelQwenVL unified loader.")
+            qwen_engine = ModelQwenVL(
+                model_path=args.qwen_path,
+                device=qwen_device,
+                torch_dtype=torch.float16 if "cuda" in qwen_device else torch.float32,
+                patch_scale=1.2,
+                min_pixels=args.min_pixels,
+                max_pixels=resolved_max_pixels,
+            )
+    elif "llava" in model_path_str or any("llava" in a for a in archs) or "llava" in model_type:
+        try:
+            from mssearch.models.modeling_llava import ModelGlobalLocal
+            print(f"[Loading] LLaVA GlobalLocal Engine from '{args.qwen_path}' on {qwen_device}...")
+            is_qwen = "qwen" in model_path_str or "ov" in model_path_str or "onevision" in model_path_str or any("qwen" in a for a in archs)
+            qwen_engine = ModelGlobalLocal(
+                model_path=args.qwen_path,
+                device=qwen_device,
+                torch_dtype=torch.float16 if "cuda" in qwen_device else torch.float32,
+                conv_type="qwen_1_5" if is_qwen else "llava_v1",
+                patch_scale=1.2,
+            )
+        except Exception as e_llava:
+            print(f"[Notice] ModelGlobalLocal failed to initialize ({e_llava}), falling back to ModelQwenVL.")
             qwen_engine = ModelQwenVL(
                 model_path=args.qwen_path,
                 device=qwen_device,

@@ -25,24 +25,46 @@ class Model(ABC):
 
         print("padding side:", self.tokenizer.padding_side)
 
-        if "qwen" in model_path:
-            self.model = LlavaQwenForCausalLM.from_pretrained(
-                model_path,
-                low_cpu_mem_usage=True,
-                torch_dtype=self.dtype,
-                attn_implementation=attn_implementation,
-            )
-        else:
-            llava_cfg = LlavaConfig.from_pretrained(model_path)
-            if "v1.5" in model_path.lower():
-                llava_cfg.delay_load = True
-            self.model = LlavaLlamaForCausalLM.from_pretrained(
-                model_path,
-                low_cpu_mem_usage=True,
-                torch_dtype=self.dtype,
-                attn_implementation=attn_implementation,
-                config=llava_cfg
-            )
+        is_qwen = (
+            "qwen" in model_path.lower()
+            or "ov" in model_path.lower()
+            or "onevision" in model_path.lower()
+            or conv_type == "qwen_1_5"
+        )
+        if os.path.exists(os.path.join(model_path, "config.json")):
+            try:
+                with open(os.path.join(model_path, "config.json"), "r", encoding="utf-8") as f:
+                    _c = json.load(f)
+                    if any("qwen" in str(a).lower() for a in _c.get("architectures", [])):
+                        is_qwen = True
+            except Exception:
+                pass
+
+        loaded = False
+        last_err = None
+        for attn in (attn_implementation, "sdpa", None):
+            try:
+                kwargs_load = dict(
+                    low_cpu_mem_usage=True,
+                    torch_dtype=self.dtype,
+                )
+                if attn is not None:
+                    kwargs_load["attn_implementation"] = attn
+                if is_qwen:
+                    self.model = LlavaQwenForCausalLM.from_pretrained(model_path, **kwargs_load)
+                else:
+                    llava_cfg = LlavaConfig.from_pretrained(model_path)
+                    if "v1.5" in model_path.lower():
+                        llava_cfg.delay_load = True
+                    self.model = LlavaLlamaForCausalLM.from_pretrained(model_path, config=llava_cfg, **kwargs_load)
+                loaded = True
+                break
+            except Exception as e_load:
+                last_err = e_load
+                continue
+
+        if not loaded:
+            raise RuntimeError(f"Failed to load LLaVA model from '{model_path}': {last_err}")
         print("model:", type(self.model))
         self.model.config.tokenizer_padding_side = padding_side
         self.model.to(self.device)
@@ -57,8 +79,12 @@ class Model(ABC):
         self.bias_value = kwargs.get("bias_value", 0.2)
         print("bias_value:", self.bias_value)
 
-        self.input_size = (self.image_processor.crop_size['width'], self.image_processor.crop_size['height'])
-        self.background_color = tuple(int(x * 255) for x in self.image_processor.image_mean)
+        crop_size = getattr(self.image_processor, "crop_size", None) or getattr(self.image_processor, "size", None) or {"width": 336, "height": 336}
+        w = crop_size.get('width', 336) if isinstance(crop_size, dict) else 336
+        h = crop_size.get('height', 336) if isinstance(crop_size, dict) else 336
+        self.input_size = (w, h)
+        image_mean = getattr(self.image_processor, "image_mean", [0.48145466, 0.4578275, 0.40821073])
+        self.background_color = tuple(int(x * 255) for x in image_mean)
         print("input size:", self.input_size)
         print("background color:", self.background_color)
 
@@ -68,8 +94,8 @@ class Model(ABC):
         self.init_prompts()
         self.init_index_yes_no()
 
-        self.view_size = max(self.image_processor.crop_size['width'], self.image_processor.crop_size['height'])
-        self.scale_size = max(self.image_processor.crop_size['width'], self.image_processor.crop_size['height'])
+        self.view_size = max(w, h)
+        self.scale_size = max(w, h)
 
     @abstractmethod
     def init_prompts(self):
@@ -401,8 +427,13 @@ class ModelGlobalLocal(Model):
 
     def set_anyres_num(self, max_anyres_num):
         patch_size = self.input_size[0]
+        pinpoints = getattr(getattr(self, "model", None), "config", None)
+        pinpoints = getattr(pinpoints, "image_grid_pinpoints", None) if pinpoints else None
+        if not pinpoints:
+            self.max_anyres_num = max_anyres_num
+            return
         new_possible_resolutions = []
-        for p in self.model.config.image_grid_pinpoints:
+        for p in pinpoints:
             x = p[0] // patch_size
             y = p[1] // patch_size
             if x * y <= max_anyres_num:
