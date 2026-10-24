@@ -2,7 +2,7 @@ import copy
 import torch
 from torch.nn import CrossEntropyLoss
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional, Union
 from PIL import Image
 import numpy as np
 from transformers import AutoTokenizer
