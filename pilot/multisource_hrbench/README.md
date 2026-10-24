@@ -38,7 +38,12 @@ bash run_baseline.sh --model_path /path/to/local/model
 
 # Evaluate strictly on target image (N=1 vanilla single-image baseline)
 bash run_baseline.sh /path/to/local/model --direct_target_only
+
+# LLaVA-OneVision-7B execution
+bash run_baseline.sh /home/ubuntu/workspace/hr/models/LLaVA-OV-7B
 ```
+
+> **LLaVA-OneVision (LLaVA-OV-7B) Guide**: For checkpoint structure, offline loading fixes, RoPE configuration, and troubleshooting, refer to [`LLAVA_OV_GUIDE.md`](LLAVA_OV_GUIDE.md).
 
 > **Offline Guarantee (Local Only)**: Both runners strictly enforce `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`, ensuring that all weights and processors are resolved strictly from local disk. If a non-existent or remote model path is provided, execution halts immediately without attempting any network connection. When evaluating custom models, results are automatically isolated into model-named output directories (e.g. `results_<model_name>/` or `results_baseline_<model_name>/`) to prevent cache or resume collisions.
 
