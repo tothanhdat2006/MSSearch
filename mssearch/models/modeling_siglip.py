@@ -49,7 +49,12 @@ class SigLIPScorer:
         model_name: str = "google/siglip-base-patch16-384",
         device: str = "cuda:0",
         torch_dtype=torch.float16,
+        **kwargs
     ):
+        if "model_path" in kwargs and (model_name == "google/siglip-base-patch16-384" or not model_name):
+            model_name = kwargs.pop("model_path")
+        elif "model_path" in kwargs:
+            model_name = kwargs.pop("model_path")
         self.model_name = model_name
         self.device = device if torch.cuda.is_available() else "cpu"
         self.dtype = torch_dtype if torch.cuda.is_available() else torch.float32
