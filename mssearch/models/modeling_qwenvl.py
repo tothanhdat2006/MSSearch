@@ -56,14 +56,19 @@ class ModelQwenVL:
                 local_files_only=local_files_only,
             )
         except Exception as e_proc:
-            if local_files_only and not offline_env and not os.path.exists(model_path):
-                print(f"[ModelQwenVL] Local files only failed for '{model_path}', retrying with local_files_only=False...")
-                self.processor = AutoProcessor.from_pretrained(
-                    model_path,
-                    trust_remote_code=True,
-                    local_files_only=False,
-                )
-                local_files_only = False
+            if not os.path.exists(model_path) and ("LocalEntryNotFoundError" in type(e_proc).__name__ or "local_files_only" in str(e_proc)):
+                print(f"[ModelQwenVL] Local cache missed for '{model_path}'. Attempting fallback with local_files_only=False...")
+                os.environ.pop("TRANSFORMERS_OFFLINE", None)
+                os.environ.pop("HF_HUB_OFFLINE", None)
+                try:
+                    self.processor = AutoProcessor.from_pretrained(
+                        model_path,
+                        trust_remote_code=True,
+                        local_files_only=False,
+                    )
+                    local_files_only = False
+                except Exception:
+                    raise e_proc
             else:
                 raise
 
@@ -192,12 +197,12 @@ class ModelQwenVL:
                     break
                 except Exception as e_load:
                     if (
-                        local_files_only
-                        and not offline_env
-                        and not os.path.exists(model_path)
+                        not os.path.exists(model_path)
                         and ("LocalEntryNotFoundError" in type(e_load).__name__ or "local_files_only" in str(e_load))
                     ):
                         print(f"[ModelQwenVL] Local cache missed for '{model_path}', retrying {cls.__name__} with local_files_only=False...")
+                        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+                        os.environ.pop("HF_HUB_OFFLINE", None)
                         kwargs_load["local_files_only"] = False
                         try:
                             try:
