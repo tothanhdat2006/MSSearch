@@ -68,7 +68,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
-        --hrbench_dir|--hrbench-dir)
+        --dataset_dir|--dataset-dir|--data_dir|--data-dir|--hrbench_dir|--hrbench-dir)
             if [[ -n "${2:-}" && ! "$2" =~ ^-- ]]; then
                 HRBENCH_DIR="$2"
                 shift 2
@@ -76,6 +76,10 @@ while [[ $# -gt 0 ]]; do
                 echo "[ERROR] $1 requires a dataset directory argument." >&2
                 exit 1
             fi
+            ;;
+        --resume)
+            FORWARD_ARGS+=("--resume")
+            shift
             ;;
         -h|--help)
             echo "=========================================================================="
@@ -154,12 +158,11 @@ echo "Offline Mode : Active (HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1)"
 echo "Forward Args : ${FORWARD_ARGS[*]:-none}"
 echo "=========================================================================="
 
-# Run in direct baseline mode with auto-resume
+# Run in direct baseline mode
 exec "${PYTHON_BIN}" "${SCRIPT_DIR}/debug_stages.py" \
     --mode direct_answer \
     --all_samples \
-    --resume \
-    --hrbench_dir "${HRBENCH_DIR}" \
+    --dataset_dir "${HRBENCH_DIR}" \
     --output_dir "${OUTPUT_DIR}" \
     --model_path "${MODEL_PATH}" \
     ${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}

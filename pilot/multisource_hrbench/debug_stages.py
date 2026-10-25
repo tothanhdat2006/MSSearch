@@ -119,136 +119,89 @@ except (ImportError, ModuleNotFoundError):
 # ==============================================================================
 
 def resolve_image_path(base_dir: str, rel_path: str) -> str:
-    """Resolves relative image paths across varying benchmark folder structures."""
+    """Resolves relative image path against dataset base directory."""
     if not rel_path:
         return ""
-    if os.path.isabs(rel_path) and os.path.exists(rel_path):
+    if os.path.isabs(rel_path):
         return rel_path
-    candidates = [
-        os.path.join(base_dir, rel_path),
-        os.path.join(base_dir, "images", rel_path),
-        os.path.join(base_dir, "vstar", rel_path),
-        os.path.join(base_dir, os.path.basename(rel_path)),
-        rel_path,
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return os.path.abspath(c)
     return os.path.join(base_dir, rel_path)
 
 
 def discover_benchmark_dataset(
-    benchmark: str = "auto",
+    benchmark: Optional[str] = None,
     preferred_dir: Optional[str] = None,
     preferred_ann: Optional[str] = None,
     vstar_dir: Optional[str] = None,
     hrbench_dir: Optional[str] = None,
 ) -> Tuple[str, str, str]:
     """
-    Discovers dataset base directory, annotation file, and resolved benchmark name.
-    Returns (benchmark_name, resolved_base_dir, annotation_path).
-    Supports HRBench (8k/4k) and V* benchmark.
+    Resolves dataset directory, annotation file, and benchmark name directly
+    from user-provided arguments without searching candidate directory lists.
     """
-    bm_lower = (benchmark or "auto").lower().strip()
+    raw_dir = preferred_dir or hrbench_dir or vstar_dir
+    raw_ann = preferred_ann
 
-    # Determine candidate benchmark(s) to check
-    if bm_lower in ("vstar", "v_star", "v*"):
-        target_benchmarks = ["vstar"]
-    elif bm_lower in ("hrbench", "hr-bench", "hr-bench_8k", "hr-bench_4k"):
-        target_benchmarks = ["hrbench"]
-    else:  # auto mode
-        combined_hints = f"{preferred_dir or ''} {preferred_ann or ''} {vstar_dir or ''}".lower()
-        if "vstar" in combined_hints:
-            target_benchmarks = ["vstar", "hrbench"]
+    if not raw_dir and not raw_ann:
+        raise ValueError(
+            "[Dataset Error] No dataset path provided. "
+            "Please specify --dataset_dir (or --annotation_file)."
+        )
+
+    if raw_ann:
+        ann_path = os.path.abspath(raw_ann)
+        base_dir = os.path.abspath(raw_dir) if raw_dir else os.path.dirname(ann_path)
+    else:
+        if os.path.isfile(raw_dir):
+            ann_path = os.path.abspath(raw_dir)
+            base_dir = os.path.dirname(ann_path)
         else:
-            target_benchmarks = ["hrbench", "vstar"]
+            base_dir = os.path.abspath(raw_dir)
+            bm_hint = (benchmark or "").lower()
+            if "vstar" in bm_hint:
+                ann_path = os.path.join(base_dir, "annotation_vstar.json")
+            elif "4k" in bm_hint:
+                ann_path = os.path.join(base_dir, "annotation_hr-bench_4k.json")
+            elif "8k" in bm_hint or "hr" in bm_hint:
+                ann_path = os.path.join(base_dir, "annotation_hr-bench_8k.json")
+            else:
+                p_hr8k = os.path.join(base_dir, "annotation_hr-bench_8k.json")
+                p_vstar = os.path.join(base_dir, "annotation_vstar.json")
+                p_hr4k = os.path.join(base_dir, "annotation_hr-bench_4k.json")
+                p_ann = os.path.join(base_dir, "annotation.json")
+                if os.path.exists(p_hr8k):
+                    ann_path = p_hr8k
+                elif os.path.exists(p_vstar):
+                    ann_path = p_vstar
+                elif os.path.exists(p_hr4k):
+                    ann_path = p_hr4k
+                elif os.path.exists(p_ann):
+                    ann_path = p_ann
+                else:
+                    ann_path = os.path.join(base_dir, "annotation.json")
 
-    for bm in target_benchmarks:
-        if bm == "vstar":
-            v_dirs = []
-            if preferred_dir:
-                v_dirs.append(preferred_dir)
-            if vstar_dir:
-                v_dirs.append(vstar_dir)
-            env_vstar = os.environ.get("VSTAR_DIR")
-            if env_vstar:
-                v_dirs.append(env_vstar)
+    if not os.path.exists(ann_path):
+        raise FileNotFoundError(f"[Dataset Error] Annotation file does not exist: '{ann_path}'")
+    if not os.path.exists(base_dir):
+        raise FileNotFoundError(f"[Dataset Error] Dataset directory does not exist: '{base_dir}'")
 
-            v_dirs.extend([
-                "/home/ubuntu/workspace/hr/data/vstar",
-                "/home/ubuntu/workspace/hr/data/vstar_bench",
-                "/data/shared/cvpr/dat/datasets/vstar",
-                os.path.join(SCRIPT_DIR, "../../../../docs/experiments/freeform/ICML26-CVSearch/cvsearch/CVsearch"),
-                os.path.join(SCRIPT_DIR, "../../../freeform/ICML26-CVSearch/cvsearch/CVsearch"),
-                "docs/experiments/freeform/ICML26-CVSearch/cvsearch/CVsearch",
-                "../freeform/ICML26-CVSearch/cvsearch/CVsearch",
-                "docs/experiments/multisource/data/vstar",
-                "d:/Project/mysite/docs/experiments/freeform/ICML26-CVSearch/cvsearch/CVsearch",
-            ])
+    if benchmark and benchmark.lower() != "auto":
+        resolved_benchmark = benchmark.lower()
+    else:
+        combined = (ann_path + " " + base_dir).lower()
+        if "vstar" in combined:
+            resolved_benchmark = "vstar"
+        elif "4k" in combined:
+            resolved_benchmark = "hr-bench_4k"
+        elif "8k" in combined or "hr" in combined:
+            resolved_benchmark = "hr-bench_8k"
+        else:
+            resolved_benchmark = "hrbench"
 
-            for d in v_dirs:
-                if not d:
-                    continue
-                if preferred_ann and os.path.exists(preferred_ann):
-                    return "vstar", (d if os.path.exists(d) else os.path.dirname(os.path.abspath(preferred_ann))), os.path.abspath(preferred_ann)
-
-                if os.path.exists(d):
-                    ann_names = [
-                        "annotation_vstar.json",
-                        "annotation_vstar_updated.json",
-                        "annotation.json",
-                        "vstar.json",
-                        "vstar/annotation_vstar.json",
-                    ]
-                    for a_name in ann_names:
-                        a_path = os.path.join(d, a_name)
-                        if os.path.exists(a_path):
-                            return "vstar", d, os.path.abspath(a_path)
-
-        elif bm == "hrbench":
-            h_dirs = []
-            if preferred_dir:
-                h_dirs.append(preferred_dir)
-            if hrbench_dir:
-                h_dirs.append(hrbench_dir)
-            env_hr = os.environ.get("HRBENCH_DIR")
-            if env_hr:
-                h_dirs.append(env_hr)
-
-            h_dirs.extend([
-                "/home/ubuntu/workspace/hr/data/hr-bench_8k",
-                "/home/ubuntu/workspace/hr/data/hr-bench_4k",
-                "D:/Research/VisualSearch/hr-bench_8k",
-                "d:/Research/VisualSearch/hr-bench_8k",
-                "/kaggle/input/datasets/thnhtt/vs-dataset/hr-bench_8k/mnt/sdb/llp/datasets/zoom_eye_data/zoom_eye_data/hr-bench_8k",
-                "/kaggle/input/datasets/thnhtt/vs-dataset/hr-bench_8k",
-                "/kaggle/input/datasets/thnhtt/vs-dataset/hr-bench_4k",
-                "docs/experiments/multisource/data/hr-bench_8k",
-                "docs/experiments/freeform/ICML26-CVSearch/data/hr-bench_8k",
-            ])
-
-            for d in h_dirs:
-                if not d:
-                    continue
-                if preferred_ann and os.path.exists(preferred_ann):
-                    resolved_name = "hr-bench_4k" if "4k" in preferred_ann else "hr-bench_8k"
-                    return resolved_name, (d if os.path.exists(d) else os.path.dirname(os.path.abspath(preferred_ann))), os.path.abspath(preferred_ann)
-
-                if os.path.exists(d):
-                    for a_name in ["annotation_hr-bench_8k.json", "annotation_hr-bench_4k.json", "annotation.json"]:
-                        a_path = os.path.join(d, a_name)
-                        if os.path.exists(a_path):
-                            resolved_name = "hr-bench_4k" if "4k" in a_name else "hr-bench_8k"
-                            return resolved_name, d, os.path.abspath(a_path)
-
-    raise FileNotFoundError(
-        f"[Dataset Error] Could not discover dataset for benchmark='{benchmark}'. "
-        f"Please provide --dataset_dir, --vstar_dir, or --hrbench_dir pointing to dataset folder containing annotations."
-    )
+    return resolved_benchmark, base_dir, ann_path
 
 
 def discover_hrbench_dir(preferred_path: Optional[str]) -> Tuple[str, str]:
-    """Discovers HRBench root directory and annotation file with multiple local fallbacks."""
+    """Resolves HRBench directory and annotation file directly from user input."""
     _, base_dir, ann_path = discover_benchmark_dataset(
         benchmark="hrbench",
         preferred_dir=preferred_path,
@@ -1022,9 +975,9 @@ def main():
     parser.add_argument(
         "--benchmark",
         type=str,
-        default="auto",
-        choices=["auto", "vstar", "hrbench", "hr-bench_8k", "hr-bench_4k"],
-        help="Benchmark dataset to evaluate: 'auto' (detect from paths), 'vstar', or 'hrbench' / 'hr-bench_8k' / 'hr-bench_4k'.",
+        default=None,
+        choices=["vstar", "hrbench", "hr-bench_8k", "hr-bench_4k"],
+        help="Benchmark dataset to evaluate: 'hrbench' or 'vstar'. Inferred from dataset path if omitted.",
     )
     parser.add_argument(
         "--dataset_dir",
@@ -1032,19 +985,19 @@ def main():
         type=str,
         default=None,
         dest="dataset_dir",
-        help="Unified root path to benchmark dataset directory.",
+        help="Unified root path to benchmark dataset directory provided by user.",
     )
     parser.add_argument(
         "--vstar_dir",
         type=str,
-        default=os.environ.get("VSTAR_DIR", "/home/ubuntu/workspace/hr/data/vstar"),
-        help="Root path to V* benchmark dataset (default: /home/ubuntu/workspace/hr/data/vstar or $VSTAR_DIR).",
+        default=None,
+        help="Root path to V* benchmark dataset (default: None).",
     )
     parser.add_argument(
         "--hrbench_dir",
         type=str,
         default=None,
-        help="Root path to HRBench dataset.",
+        help="Root path to HRBench dataset (default: None).",
     )
     parser.add_argument(
         "--annotation_file",
@@ -1052,7 +1005,7 @@ def main():
         type=str,
         default=None,
         dest="annotation_file",
-        help="Explicit path to annotation JSON file.",
+        help="Explicit path to annotation JSON file provided by user.",
     )
     parser.add_argument(
         "--use_logits_match",
@@ -1302,21 +1255,15 @@ def main():
 
     # Discover in-context examples if available
     ic_examples = None
-    ic_path_candidates = [
-        os.path.join(SCRIPT_DIR, f"../../mssearch/ic_examples/{benchmark_name}.json"),
-        os.path.join(SCRIPT_DIR, f"../../mssearch/ic_examples/{benchmark_name.replace('-bench', '')}.json"),
-        os.path.join(SCRIPT_DIR, "../../mssearch/ic_examples/vstar.json") if "vstar" in benchmark_name else None,
-        os.path.join(SCRIPT_DIR, "../../mssearch/ic_examples/hr-bench_8k.json") if "hr" in benchmark_name else None,
-    ]
-    for ic_p in ic_path_candidates:
-        if ic_p and os.path.exists(ic_p):
-            try:
-                with open(ic_p, "r", encoding="utf-8") as ic_f:
-                    ic_examples = json.load(ic_f)
-                print(f"[IC Examples] Loaded in-context examples from: {ic_p}")
-                break
-            except Exception:
-                pass
+    ic_name = "vstar.json" if "vstar" in benchmark_name else "hr-bench_8k.json"
+    ic_path = os.path.join(SCRIPT_DIR, f"../../mssearch/ic_examples/{ic_name}")
+    if os.path.exists(ic_path):
+        try:
+            with open(ic_path, "r", encoding="utf-8") as ic_f:
+                ic_examples = json.load(ic_f)
+            print(f"[IC Examples] Loaded in-context examples from: {ic_path}")
+        except Exception:
+            pass
 
     # 5. Generate timestamp string for de-duplication
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1341,20 +1288,15 @@ def main():
             results_log_path = os.path.abspath(args.resume_from)
             print(f"[Resume] Resuming from explicit file: {results_log_path}")
         else:
-            timestamped_candidates = []
-            other_candidates = []
+            timestamped_logs = []
             if os.path.exists(args.output_dir):
                 for f in os.listdir(args.output_dir):
-                    if f.endswith(".jsonl"):
+                    if f.endswith(".jsonl") and f.startswith(f"{prefix}_"):
                         fp = os.path.join(args.output_dir, f)
-                        if f.startswith(f"{prefix}_"):
-                            timestamped_candidates.append((os.path.getmtime(fp), fp))
-                        elif f == f"{prefix}.jsonl" or f == "results.jsonl":
-                            other_candidates.append((os.path.getmtime(fp), fp))
-            candidates = timestamped_candidates or other_candidates
-            if candidates:
-                candidates.sort(reverse=True)
-                results_log_path = candidates[0][1]
+                        timestamped_logs.append((os.path.getmtime(fp), fp))
+            if timestamped_logs:
+                timestamped_logs.sort(reverse=True)
+                results_log_path = timestamped_logs[0][1]
                 print(f"[Resume] Auto-detected most recent results file to resume: {results_log_path}")
             else:
                 results_log_path = os.path.abspath(os.path.join(args.output_dir, f"{prefix}_{timestamp_str}.jsonl"))
@@ -1363,10 +1305,9 @@ def main():
         results_log_path = os.path.abspath(os.path.join(args.output_dir, f"{prefix}_{timestamp_str}.jsonl"))
         print(f"[Results] Telemetry will be logged to timestamped file: {results_log_path}")
 
-    # Config file snapshot (timestamped + canonical pointer)
+    # Config file snapshot (timestamped snapshot only, no generic config_used.json overwrite)
     config_out_path = os.path.join(args.output_dir, f"config_used_{timestamp_str}.json")
     config.save_json(config_out_path)
-    config.save_json(os.path.join(args.output_dir, "config_used.json"))
     print(f"[Config] Active configuration written to: {config_out_path}")
 
     # 6. Resolve Target Queue
