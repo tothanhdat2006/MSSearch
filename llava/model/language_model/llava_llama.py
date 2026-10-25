@@ -134,23 +134,10 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         if "inputs_embeds" in kwargs:
             raise NotImplementedError("`inputs_embeds` is not supported")
 
-        if inputs is None:
-            inputs = kwargs.pop("input_ids", None)
-        else:
-            kwargs.pop("input_ids", None)
-
         if images is not None:
             (inputs, position_ids, attention_mask, _, inputs_embeds, _) = self.prepare_inputs_labels_for_multimodal(inputs, position_ids, attention_mask, None, None, images, modalities, image_sizes=image_sizes)
         else:
-            inputs_embeds = None
-
-        if inputs_embeds is None and inputs is not None:
-            if (inputs < 0).any():
-                inputs = torch.where(inputs < 0, torch.zeros_like(inputs), inputs)
             inputs_embeds = self.get_model().embed_tokens(inputs)
-
-        if "repetition_penalty" not in kwargs and getattr(self.generation_config, "repetition_penalty", None) is not None:
-            kwargs["repetition_penalty"] = 1.0
 
         return super().generate(position_ids=position_ids, attention_mask=attention_mask, inputs_embeds=inputs_embeds, **kwargs)
 

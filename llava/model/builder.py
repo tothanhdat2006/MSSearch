@@ -199,22 +199,7 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
 
                 model = LlavaLlamaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
 
-            elif (
-                "qwen" in model_name.lower()
-                or "quyen" in model_name.lower()
-                or "ov" in model_name.lower()
-                or "onevision" in model_name.lower()
-                or (overwrite_config is not None and "qwen" in getattr(overwrite_config, "model_type", "").lower())
-                or (customized_config is not None and "qwen" in getattr(customized_config, "model_type", "").lower())
-                or (os.path.exists(os.path.join(model_path, "config.json")) and any(
-                    "qwen" in str(x).lower()
-                    for x in (
-                        json.load(open(os.path.join(model_path, "config.json"), "r", encoding="utf-8")).get("architectures", [])
-                        + [json.load(open(os.path.join(model_path, "config.json"), "r", encoding="utf-8")).get("model_type", "")]
-                        + [json.load(open(os.path.join(model_path, "config.json"), "r", encoding="utf-8")).get("_name_or_path", "")]
-                    )
-                ))
-            ):
+            elif "qwen" in model_name.lower() or "quyen" in model_name.lower():
                 tokenizer = AutoTokenizer.from_pretrained(model_path)
                 if "moe" in model_name.lower() or "A14B" in model_name.lower():
                     from llava.model.language_model.llava_qwen_moe import LlavaQwenMoeConfig

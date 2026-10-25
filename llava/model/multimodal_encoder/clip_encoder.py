@@ -45,26 +45,9 @@ class CLIPVisionTower(nn.Module):
         if not os.path.exists(target_path) and os.environ.get("CLIP_MODEL_DIR") and os.path.exists(os.environ.get("CLIP_MODEL_DIR")):
             target_path = os.environ.get("CLIP_MODEL_DIR")
 
-        is_meta = hasattr(torch, "get_default_device") and torch.get_default_device().type == "meta"
-        if is_meta:
-            cfg = getattr(self, "cfg_only", None)
-            if cfg is None:
-                try:
-                    cfg = CLIPVisionConfig.from_pretrained(target_path)
-                except Exception:
-                    cfg = CLIPVisionConfig()
-            self.vision_tower = CLIPVisionModel(cfg)
-        else:
-            try:
-                self.image_processor = CLIPImageProcessor.from_pretrained(target_path)
-            except Exception:
-                pass
-            try:
-                self.vision_tower = CLIPVisionModel.from_pretrained(target_path, device_map=device_map)
-            except Exception:
-                cfg = getattr(self, "cfg_only", None) or CLIPVisionConfig()
-                self.vision_tower = CLIPVisionModel(cfg)
-
+        rank0_print(f"[*] Loading CLIP vision model from: {target_path}")
+        self.image_processor = CLIPImageProcessor.from_pretrained(target_path)
+        self.vision_tower = CLIPVisionModel.from_pretrained(target_path, device_map=device_map)
         self.vision_tower.requires_grad_(False)
 
         self.is_loaded = True
@@ -173,31 +156,13 @@ class CLIPVisionTowerS2(CLIPVisionTower):
         if not os.path.exists(target_path) and os.environ.get("CLIP_MODEL_DIR") and os.path.exists(os.environ.get("CLIP_MODEL_DIR")):
             target_path = os.environ.get("CLIP_MODEL_DIR")
 
-        is_meta = hasattr(torch, "get_default_device") and torch.get_default_device().type == "meta"
-        if is_meta:
-            cfg = getattr(self, "cfg_only", None)
-            if cfg is None:
-                try:
-                    cfg = CLIPVisionConfig.from_pretrained(target_path)
-                except Exception:
-                    cfg = CLIPVisionConfig()
-            self.vision_tower = CLIPVisionModel(cfg)
-        else:
-            try:
-                self.image_processor = CLIPImageProcessor.from_pretrained(target_path)
-            except Exception:
-                pass
-            try:
-                self.vision_tower = CLIPVisionModel.from_pretrained(target_path, device_map=device_map)
-            except Exception:
-                cfg = getattr(self, "cfg_only", None) or CLIPVisionConfig()
-                self.vision_tower = CLIPVisionModel(cfg)
-
+        rank0_print(f"[*] Loading CLIP S2 vision model from: {target_path}")
+        self.image_processor = CLIPImageProcessor.from_pretrained(target_path)
+        self.vision_tower = CLIPVisionModel.from_pretrained(target_path, device_map=device_map)
         self.vision_tower.requires_grad_(False)
 
-        if hasattr(self, "image_processor") and hasattr(self.image_processor, "size"):
-            self.image_processor.size["shortest_edge"] = self.s2_image_size
-            self.image_processor.crop_size["height"] = self.image_processor.crop_size["width"] = self.s2_image_size
+        self.image_processor.size["shortest_edge"] = self.s2_image_size
+        self.image_processor.crop_size["height"] = self.image_processor.crop_size["width"] = self.s2_image_size
 
         self.is_loaded = True
 

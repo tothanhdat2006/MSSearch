@@ -1,4 +1,4 @@
-import copy
+import os
 import torch
 from torch.nn import CrossEntropyLoss
 from abc import ABC, abstractmethod
@@ -16,6 +16,7 @@ from .tree import Node, NodeA
 from .utils import *
 from sentence_transformers import SentenceTransformer, util
 
+
 class Model(ABC):
     def __init__(self, model_path: str, conv_type: str = "qwen_1_5", device: str = "cuda:0", torch_dtype=torch.float16,
                  attn_implementation="flash_attention_2", padding_side="left", **kwargs) -> None:
@@ -32,76 +33,44 @@ class Model(ABC):
             or "onevision" in model_path.lower()
             or conv_type == "qwen_1_5"
         )
-        if os.path.exists(os.path.join(model_path, "config.json")):
-            try:
-                with open(os.path.join(model_path, "config.json"), "r", encoding="utf-8") as f:
-                    _c = json.load(f)
-                    if (
-                        any("qwen" in str(a).lower() for a in _c.get("architectures", []))
-                        or "qwen" in _c.get("model_type", "").lower()
-                        or "qwen" in _c.get("_name_or_path", "").lower()
-                    ):
-                        is_qwen = True
-            except Exception:
-                pass
-
-        loaded = False
-        last_err = None
-        last_tb = ""
-        for attn in (attn_implementation, "sdpa", None):
-            if loaded:
-                break
-            for low_cpu in (True, False):
-                try:
-                    kwargs_load = dict(
-                        low_cpu_mem_usage=low_cpu,
-                        torch_dtype=self.dtype,
-                    )
-                    if attn is not None:
-                        kwargs_load["attn_implementation"] = attn
-                    if is_qwen:
-                        from llava.model.language_model.llava_qwen import LlavaQwenConfig
-                        llava_cfg = LlavaQwenConfig.from_pretrained(model_path)
-                        if hasattr(llava_cfg, "rope_parameters") and llava_cfg.rope_parameters is None:
-                            llava_cfg.rope_parameters = {"rope_type": "default", "rope_theta": getattr(llava_cfg, "rope_theta", 10000.0)}
-                        self.model = LlavaQwenForCausalLM.from_pretrained(model_path, config=llava_cfg, **kwargs_load)
-                    else:
-                        llava_cfg = LlavaConfig.from_pretrained(model_path)
-                        if "v1.5" in model_path.lower():
-                            llava_cfg.delay_load = True
-                        self.model = LlavaLlamaForCausalLM.from_pretrained(model_path, config=llava_cfg, **kwargs_load)
-                    loaded = True
-                    break
-                except Exception as e_load:
-                    import traceback
-                    last_err = e_load
-                    last_tb = traceback.format_exc()
-                    continue
-
-        if not loaded:
-            raise RuntimeError(f"Failed to load LLaVA model from '{model_path}': {last_err}\nTraceback:\n{last_tb}")
+        if is_qwen:
+            self.model = LlavaQwenForCausalLM.from_pretrained(
+                model_path,
+                low_cpu_mem_usage=True,
+                torch_dtype=self.dtype,
+                attn_implementation=attn_implementation,
+            )
+        else:
+            llava_cfg = LlavaConfig.from_pretrained(model_path)
+            if "v1.5" in model_path.lower():
+                llava_cfg.delay_load = True
+            self.model = LlavaLlamaForCausalLM.from_pretrained(
+                model_path,
+                low_cpu_mem_usage=True,
+                torch_dtype=self.dtype,
+                attn_implementation=attn_implementation,
+                config=llava_cfg,
+            )
         print("model:", type(self.model))
         self.model.config.tokenizer_padding_side = padding_side
-        if hasattr(self.model, "generation_config") and self.model.generation_config is not None:
-            self.model.generation_config.repetition_penalty = 1.0
         self.model.to(self.device)
 
+        clip_model_path = kwargs.get("clip_model_path", os.environ.get("CLIP_MODEL_DIR", None))
         vision_tower = self.model.get_vision_tower()
-        if not vision_tower.is_loaded:
+        if vision_tower is not None and clip_model_path and os.path.exists(clip_model_path):
+            vision_tower.vision_tower_name = clip_model_path
+
+        if vision_tower is not None and not vision_tower.is_loaded:
             vision_tower.load_model(device_map=self.device)
             vision_tower.to(device=self.device, dtype=torch.float16)
-        self.image_processor = vision_tower.image_processor
+        self.image_processor = vision_tower.image_processor if vision_tower is not None else None
 
         self.conv_type = conv_type
         self.bias_value = kwargs.get("bias_value", 0.2)
         print("bias_value:", self.bias_value)
 
-        crop_size = getattr(self.image_processor, "crop_size", None) or getattr(self.image_processor, "size", None) or {"width": 336, "height": 336}
-        w = crop_size.get('width', 336) if isinstance(crop_size, dict) else 336
-        h = crop_size.get('height', 336) if isinstance(crop_size, dict) else 336
-        self.input_size = (w, h)
-        image_mean = getattr(self.image_processor, "image_mean", [0.48145466, 0.4578275, 0.40821073])
-        self.background_color = tuple(int(x * 255) for x in image_mean)
+        self.input_size = (self.image_processor.crop_size['width'], self.image_processor.crop_size['height'])
+        self.background_color = tuple(int(x * 255) for x in self.image_processor.image_mean)
         print("input size:", self.input_size)
         print("background color:", self.background_color)
 
@@ -111,8 +80,8 @@ class Model(ABC):
         self.init_prompts()
         self.init_index_yes_no()
 
-        self.view_size = max(w, h)
-        self.scale_size = max(w, h)
+        self.view_size = max(self.image_processor.crop_size['width'], self.image_processor.crop_size['height'])
+        self.scale_size = max(self.image_processor.crop_size['width'], self.image_processor.crop_size['height'])
 
     @abstractmethod
     def init_prompts(self):
@@ -158,7 +127,7 @@ class Model(ABC):
     def get_confidence_value(
         self,
         node: Optional[List[NodeA]] = None,
-        image_pil: Image.Image = None,
+        image_pil: Optional[Image.Image] = None,
         confidence_type: str = 'existence',
         input_ele: str = '',
         image: Optional[Image.Image] = None,
@@ -171,7 +140,7 @@ class Model(ABC):
             input_ele = active_object
 
         assert confidence_type in ['existence', 'latent', 'answering']
-        image_list = self.process_nodes_to_image_list(node, image_pil)
+        image_list = self.process_nodes_to_image_list(node or [], image_pil)
         prompt_tag = self.get_prompt_tag(image_list)
         qs = self.prompts[prompt_tag]["pre_information"] + self.prompts[prompt_tag][f"{confidence_type}_prompt"].format(
             input_ele)
@@ -201,6 +170,7 @@ class Model(ABC):
         prompt_tag = self.get_prompt_tag(image_list)
         qs = self.prompts[prompt_tag]["pre_information"] + question
         prompt = self.get_prompt_from_qs(qs)
+        print(f"\n[Final Input Prompt (LLaVA)]:\n{prompt}\n")
 
         image_tensor, image_sizes = self.process_image_list_to_tensor(image_list)
         input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(
@@ -212,7 +182,6 @@ class Model(ABC):
             image_sizes=image_sizes,
             do_sample=False,
             temperature=0,
-            repetition_penalty=1.0,
             max_new_tokens=max_new_tokens,
         )
         outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
@@ -239,11 +208,7 @@ class Model(ABC):
     def generate_text(self, prompt, max_new_tokens: int = 64) -> str:
         """Pure text generation interface for LLaVA."""
         if isinstance(prompt, list):
-            parts = []
-            for m in prompt:
-                if isinstance(m, dict):
-                    parts.append(str(m.get("content", "")))
-            prompt_str = "\n".join(parts)
+            prompt_str = "\n".join(str(m.get("content", "")) for m in prompt if isinstance(m, dict))
         else:
             prompt_str = str(prompt)
         input_ids = self.tokenizer(prompt_str, return_tensors='pt').input_ids.to(self.device)
@@ -252,7 +217,6 @@ class Model(ABC):
             images=None,
             do_sample=False,
             temperature=0,
-            repetition_penalty=1.0,
             max_new_tokens=max_new_tokens,
         )
         return self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
@@ -293,93 +257,36 @@ class Model(ABC):
 
         question_input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.device)
 
+        output_question = self.model(
+            question_input_ids,
+            use_cache=True,
+            images=image_tensor,
+            image_sizes=image_sizes)
+
+        question_logits = output_question.logits
+        question_past_key_values = output_question.past_key_values
+
         loss_list = []
-        try:
-            output_question = self.model(
-                question_input_ids,
-                use_cache=True,
-                images=image_tensor,
-                image_sizes=image_sizes,
-                modalities=["image"] * len(question_input_ids),
-            )
-            question_logits = output_question.logits
-            question_past_key_values = output_question.past_key_values
-            orig_cache_len = (
-                question_past_key_values.get_seq_length()
-                if hasattr(question_past_key_values, "get_seq_length")
-                else None
-            )
-            use_cached_eval = True
-        except Exception:
-            use_cached_eval = False
 
         for option in options:
             full_prompt = self.get_prompt_from_qs(qs, option)
             full_input_ids = tokenizer_image_token(full_prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.device)
             option_answer_input_ids = full_input_ids[:, question_input_ids.shape[1]:]
+            output_option = self.model(input_ids=option_answer_input_ids,
+                                       use_cache=True,
+                                       attention_mask=torch.ones(1, question_logits.shape[1] +
+                                                                 option_answer_input_ids.shape[1],
+                                                                 device=full_input_ids.device),
+                                       past_key_values=question_past_key_values)
 
-            if option_answer_input_ids.shape[1] == 0:
-                loss_list.append(torch.tensor(float("inf"), device=self.device))
-                continue
-
-            if use_cached_eval:
-                if hasattr(question_past_key_values, "crop") and orig_cache_len is not None:
-                    question_past_key_values.crop(orig_cache_len)
-                    cur_past_kv = question_past_key_values
-                else:
-                    try:
-                        cur_past_kv = copy.deepcopy(question_past_key_values)
-                    except Exception:
-                        cur_past_kv = question_past_key_values
-
-                past_len = (
-                    cur_past_kv.get_seq_length()
-                    if hasattr(cur_past_kv, "get_seq_length")
-                    else question_logits.shape[1]
-                )
-                attn_mask = torch.ones(
-                    1,
-                    past_len + option_answer_input_ids.shape[1],
-                    device=full_input_ids.device,
-                    dtype=torch.long,
-                )
-
-                try:
-                    output_option = self.model(
-                        input_ids=option_answer_input_ids,
-                        use_cache=True,
-                        attention_mask=attn_mask,
-                        past_key_values=cur_past_kv,
-                    )
-                    logits = torch.cat([question_logits[:, -1:], output_option.logits[:, :-1]], 1)
-                except Exception:
-                    output_option = self.model(
-                        full_input_ids,
-                        images=image_tensor,
-                        image_sizes=image_sizes,
-                        modalities=["image"] * len(full_input_ids),
-                    )
-                    logits = output_option.logits[:, question_logits.shape[1] - 1 : -1]
-
-                if hasattr(question_past_key_values, "crop") and orig_cache_len is not None:
-                    question_past_key_values.crop(orig_cache_len)
-            else:
-                output_option = self.model(
-                    full_input_ids,
-                    images=image_tensor,
-                    image_sizes=image_sizes,
-                    modalities=["image"] * len(full_input_ids),
-                )
-                logits = output_option.logits[:, -option_answer_input_ids.shape[1] - 1 : -1]
+            logits = torch.cat([question_logits[:, -1:], output_option.logits[:, :-1]], 1)
 
             loss_fct = CrossEntropyLoss()
-            logits = logits.reshape(-1, self.model.config.vocab_size)
-            labels = option_answer_input_ids.reshape(-1)
+            logits = logits.view(-1, self.model.config.vocab_size)
+            labels = option_answer_input_ids.view(-1)
             loss = loss_fct(logits, labels)
             loss_list.append(loss)
 
-        if not loss_list:
-            return 0
         option_chosen = torch.stack(loss_list).argmin()
 
         return option_chosen.cpu().item()
@@ -448,7 +355,6 @@ class Model(ABC):
             images=None,
             do_sample=False,
             temperature=0,
-            repetition_penalty=1.0,
             max_new_tokens=256,
         )
         outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
@@ -460,7 +366,7 @@ class Model(ABC):
 
         return targets
 
-    def filter_visual_cues(self, image_pil: Image.Image, targets, root_node, decomposed_question_template,answering_confidence_threshold_upper, show_value=False):
+    def filter_visual_cues(self, image_pil: Image.Image, targets, root_node, decomposed_question_template, answering_confidence_threshold_upper, show_value=False):
         assert root_node.is_root
         ret = []
         if len(targets) > 1:
@@ -507,7 +413,7 @@ class ModelLocal(Model):
 
     def process_nodes_to_image_list(self, nodes: List[Node], image_pil: Image.Image):
         square_image, left, top = expand2square(image_pil, self.background_color)
-        if len(nodes) == 0 or (len(nodes) == 1 and nodes[0].is_root):
+        if not nodes or (len(nodes) == 1 and nodes[0].is_root):
             return [square_image.resize(self.input_size)]
 
         resized_bboxes = [
@@ -537,18 +443,18 @@ class ModelLocal(Model):
 
 BOX_COLOR = 'red'
 
+
 class ModelGlobalLocal(Model):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.set_anyres_num(kwargs.get("max_anyres_num", 12))
 
     def set_anyres_num(self, max_anyres_num):
-        patch_size = self.input_size[0]
-        pinpoints = getattr(getattr(self, "model", None), "config", None)
-        pinpoints = getattr(pinpoints, "image_grid_pinpoints", None) if pinpoints else None
+        pinpoints = getattr(self.model.config, "image_grid_pinpoints", None)
         if not pinpoints:
             self.max_anyres_num = max_anyres_num
             return
+        patch_size = self.input_size[0]
         new_possible_resolutions = []
         for p in pinpoints:
             x = p[0] // patch_size
@@ -570,16 +476,26 @@ class ModelGlobalLocal(Model):
             },
             "global": {
                 "pre_information": f"{DEFAULT_IMAGE_TOKEN}\n",
+                "latent_prompt": "According to your common sense knowledge and the content of image, is it possible to find a {} by further zooming in the image? Answer Yes or No.",
+                "existence_prompt": "Is there a '{}' in the image? Answer Yes or No.",
+                "answering_prompt": "Question: '{}'\nCould you answer the question based on the available visual information? Answer Yes or No.",
             },
             "zoom": {
                 "pre_information": f"{DEFAULT_IMAGE_TOKEN}\nThis is the main image, and the section enclosed by the {BOX_COLOR} rectangle is the focus region.\n{DEFAULT_IMAGE_TOKEN}\nThis is the zoomed-in view of the focus region.\n",
+                "latent_prompt": "According to your common sense knowledge and the content of image, is it possible to find a {} by further zooming in the image? Answer Yes or No.",
+                "existence_prompt": "Is there a '{}' in the image? Answer Yes or No.",
+                "answering_prompt": "Question: '{}'\nCould you answer the question based on the available visual information? Answer Yes or No.",
             },
         }
 
-    def is_root_only(self, nodes: List[Node]):
+    def is_root_only(self, nodes: Optional[List[Node]]):
+        if not nodes:
+            return False
         return (len(nodes) == 1 and nodes[0].is_root)
 
-    def include_root(self, nodes: List[Node]):
+    def include_root(self, nodes: Optional[List[Node]]):
+        if not nodes:
+            return False
         return any(node.is_root for node in nodes)
 
     def get_bbox_in_square_image(self, bbox, left, top):
@@ -640,9 +556,9 @@ class ModelGlobalLocal(Model):
 
     def process_nodes_to_image_list(self, nodes, image_pil, root_anyres=True):
         square_image, left, top = expand2square(image_pil, self.background_color)
-        if self.is_root_only(nodes):
+        if not nodes or self.is_root_only(nodes):
             return [deepcopy(image_pil)] if root_anyres else [square_image.resize(self.input_size)]
-        if len(nodes) == 0 or self.include_root(nodes):
+        if self.include_root(nodes):
             return [deepcopy(image_pil)]
 
         resized_bboxes = []
@@ -684,7 +600,7 @@ class ModelGlobalLocal(Model):
     def get_confidence_value(
         self,
         node: Optional[List[Node]] = None,
-        image_pil: Image.Image = None,
+        image_pil: Optional[Image.Image] = None,
         confidence_type: str = 'existence',
         input_ele: str = '',
         root_anyres: bool = True,
@@ -734,7 +650,7 @@ class ModelGlobalLocal(Model):
         return confidence
 
     @torch.inference_mode()
-    def free_form_using_nodes_sgavs(self, image_pil, question, searched_nodes: List[Node], return_zoomed_view=False):
+    def free_form_using_nodes_sgavs(self, image_pil, question, searched_nodes: List[Node], return_zoomed_view=False, max_new_tokens: int = 256):
         image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
 
         if len(image_list) > 1:
@@ -751,6 +667,7 @@ class ModelGlobalLocal(Model):
 
         qs = self.prompts[prompt_tag][pre_information] + question
         prompt = self.get_prompt_from_qs(qs)
+        print(f"\n[Final Input Prompt (LLaVA-GlobalLocal)]:\n{prompt}\n")
 
         image_tensor, image_sizes = self.process_image_list_to_tensor(image_input)
         input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.device)
@@ -760,8 +677,7 @@ class ModelGlobalLocal(Model):
             image_sizes=image_sizes,
             do_sample=False,
             temperature=0,
-            repetition_penalty=1.0,
-            max_new_tokens=256,
+            max_new_tokens=max_new_tokens,
         )
         outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
 
@@ -770,6 +686,8 @@ class ModelGlobalLocal(Model):
             return response
 
         return outputs
+
+    free_form_using_nodes = free_form_using_nodes_sgavs
 
     @torch.inference_mode()
     def multiple_choices_inference(self, image_pil, question, options, searched_nodes: List[Node] = None):
@@ -792,94 +710,37 @@ class ModelGlobalLocal(Model):
         image_tensor, image_sizes = self.process_image_list_to_tensor(image_input)
 
         question_input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.device)
+        output_question = self.model(
+            question_input_ids,
+            use_cache=True,
+            images=image_tensor,
+            image_sizes=image_sizes)
+
+        question_logits = output_question.logits
+        question_past_key_values = output_question.past_key_values
 
         loss_list = []
-        try:
-            output_question = self.model(
-                question_input_ids,
-                use_cache=True,
-                images=image_tensor,
-                image_sizes=image_sizes,
-                modalities=["image"] * len(question_input_ids),
-            )
-            question_logits = output_question.logits
-            question_past_key_values = output_question.past_key_values
-            orig_cache_len = (
-                question_past_key_values.get_seq_length()
-                if hasattr(question_past_key_values, "get_seq_length")
-                else None
-            )
-            use_cached_eval = True
-        except Exception:
-            use_cached_eval = False
 
         for option in options:
             full_prompt = self.get_prompt_from_qs(qs, option)
             full_input_ids = tokenizer_image_token(full_prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.device)
             option_answer_input_ids = full_input_ids[:, question_input_ids.shape[1]:]
 
-            if option_answer_input_ids.shape[1] == 0:
-                loss_list.append(torch.tensor(float("inf"), device=self.device))
-                continue
+            output_option = self.model(input_ids=option_answer_input_ids,
+                                       use_cache=True,
+                                       attention_mask=torch.ones(1, question_logits.shape[1] +
+                                                                 option_answer_input_ids.shape[1],
+                                                                 device=full_input_ids.device),
+                                       past_key_values=question_past_key_values)
 
-            if use_cached_eval:
-                if hasattr(question_past_key_values, "crop") and orig_cache_len is not None:
-                    question_past_key_values.crop(orig_cache_len)
-                    cur_past_kv = question_past_key_values
-                else:
-                    try:
-                        cur_past_kv = copy.deepcopy(question_past_key_values)
-                    except Exception:
-                        cur_past_kv = question_past_key_values
-
-                past_len = (
-                    cur_past_kv.get_seq_length()
-                    if hasattr(cur_past_kv, "get_seq_length")
-                    else question_logits.shape[1]
-                )
-                attn_mask = torch.ones(
-                    1,
-                    past_len + option_answer_input_ids.shape[1],
-                    device=full_input_ids.device,
-                    dtype=torch.long,
-                )
-
-                try:
-                    output_option = self.model(
-                        input_ids=option_answer_input_ids,
-                        use_cache=True,
-                        attention_mask=attn_mask,
-                        past_key_values=cur_past_kv,
-                    )
-                    logits = torch.cat([question_logits[:, -1:], output_option.logits[:, :-1]], 1)
-                except Exception:
-                    output_option = self.model(
-                        full_input_ids,
-                        images=image_tensor,
-                        image_sizes=image_sizes,
-                        modalities=["image"] * len(full_input_ids),
-                    )
-                    logits = output_option.logits[:, question_logits.shape[1] - 1 : -1]
-
-                if hasattr(question_past_key_values, "crop") and orig_cache_len is not None:
-                    question_past_key_values.crop(orig_cache_len)
-            else:
-                output_option = self.model(
-                    full_input_ids,
-                    images=image_tensor,
-                    image_sizes=image_sizes,
-                    modalities=["image"] * len(full_input_ids),
-                )
-                logits = output_option.logits[:, -option_answer_input_ids.shape[1] - 1 : -1]
+            logits = torch.cat([question_logits[:, -1:], output_option.logits[:, :-1]], 1)
 
             loss_fct = CrossEntropyLoss()
-            logits = logits.reshape(-1, self.model.config.vocab_size)
-            labels = option_answer_input_ids.reshape(-1)
+            logits = logits.view(-1, self.model.config.vocab_size)
+            labels = option_answer_input_ids.view(-1)
             loss = loss_fct(logits, labels)
             loss_list.append(loss)
 
-        if not loss_list:
-            return 0
         option_chosen = torch.stack(loss_list).argmin()
 
         return option_chosen.cpu().item()
