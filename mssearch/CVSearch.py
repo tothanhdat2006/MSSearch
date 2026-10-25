@@ -108,14 +108,20 @@ def get_cvsearch_response(
         if image_folder is not None:
             input_image = os.path.join(image_folder, input_image)
         image_pil = Image.open(input_image).convert('RGB')
+        img_name = os.path.basename(input_image)
     else:
         image_pil = input_image
+        img_name = getattr(input_image, "filename", "candidate_canvas.png")
+        if isinstance(img_name, str):
+            img_name = os.path.basename(img_name)
+        else:
+            img_name = "candidate_canvas.png"
     question = annotation['question']
     options = annotation.get('options', None)
     question_free_form = None
     searched_nodes = []
     
-    print(f"\n{'='*70}\n[CVSearch] Processing: {os.path.basename(input_image)} | Dimensions: {image_pil.size[0]}x{image_pil.size[1]} | Q: '{question[:60]}...'\n{'='*70}")
+    print(f"\n{'='*70}\n[CVSearch] Processing: {img_name} | Dimensions: {image_pil.size[0]}x{image_pil.size[1]} | Q: '{question[:60]}...'\n{'='*70}")
     print_gpu_memory("Start CVSearch")
 
     ####Quick assessment
@@ -971,12 +977,12 @@ def get_direct_response(
         image_folder
 ):
     input_image = annotation['input_image']
-    if image_folder is not None:
-        input_image = os.path.join(image_folder, input_image)
-    question = annotation['question']
-    options = annotation.get('options', None)
-
-    image_pil = Image.open(input_image).convert('RGB')
+    if isinstance(input_image, str):
+        if image_folder is not None:
+            input_image = os.path.join(image_folder, input_image)
+        image_pil = Image.open(input_image).convert('RGB')
+    else:
+        image_pil = input_image
 
     # An empty list will conduct direct answering.
     searched_nodes = []
