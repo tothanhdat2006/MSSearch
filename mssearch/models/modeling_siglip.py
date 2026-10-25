@@ -55,6 +55,8 @@ class SigLIPScorer:
         self.dtype = torch_dtype if torch.cuda.is_available() else torch.float32
         self._model = None
         self._processor = None
+        self._load_attempted = False
+        self._load_failed = False
         self.is_siglip = "siglip" in model_name.lower()
 
     @property
@@ -79,11 +81,17 @@ class SigLIPScorer:
 
     def _ensure_loaded(self):
         """Lazy loader to prevent unneeded GPU allocation until invoked."""
-        if self._model is None:
-            print(f"[SigLIPScorer] Loading '{self.model_name}' on {self.device} ({self.dtype})...")
-            # Mute configuration warnings during checkpoint config ingestion
-            logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
+        if self._load_failed:
+            return
+        if self._model is not None and self._processor is not None:
+            return
 
+        self._load_attempted = True
+        print(f"[SigLIPScorer] Loading '{self.model_name}' on {self.device} ({self.dtype})...")
+        # Mute configuration warnings during checkpoint config ingestion
+        logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
+
+        try:
             offline_env = (
                 os.environ.get("TRANSFORMERS_OFFLINE", "0") == "1"
                 or os.environ.get("HF_HUB_OFFLINE", "0") == "1"
@@ -180,6 +188,11 @@ class SigLIPScorer:
                 except Exception:
                     self._processor = CLIPProcessor.from_pretrained(self.model_name, local_files_only=False)
                 self._model = loaded_model
+        except Exception as e:
+            self._load_failed = True
+            self._model = None
+            self._processor = None
+            print(f"[SigLIPScorer] Warning: Failed to load '{self.model_name}' on {self.device}: {e}. Disabling SigLIP scoring.")
 
     @torch.inference_mode()
     def score_crops(
@@ -200,7 +213,12 @@ class SigLIPScorer:
         if not crops or not text_queries:
             return []
 
+        if self._load_failed:
+            return []
+
         self._ensure_loaded()
+        if self._model is None or self._processor is None:
+            return []
 
         # Format prompt with descriptive templates to avoid zero-shot vocabulary shift
         prompts = [
@@ -294,7 +312,11 @@ class SigLIPScorer:
     @torch.inference_mode()
     def encode_image(self, images: Union[Image.Image, List[Image.Image]]) -> np.ndarray:
         """Extracts L2-normalized image embedding(s) as float32 numpy array."""
+        if self._load_failed:
+            return np.empty((0, 768), dtype=np.float32)
         self._ensure_loaded()
+        if self._model is None or self._processor is None:
+            return np.empty((0, 768), dtype=np.float32)
         single = isinstance(images, Image.Image)
         img_list = [images] if single else images
         if not img_list:
@@ -316,7 +338,11 @@ class SigLIPScorer:
     @torch.inference_mode()
     def encode_text(self, texts: Union[str, List[str]]) -> np.ndarray:
         """Extracts L2-normalized text embedding(s) as float32 numpy array."""
+        if self._load_failed:
+            return np.empty((0, 768), dtype=np.float32)
         self._ensure_loaded()
+        if self._model is None or self._processor is None:
+            return np.empty((0, 768), dtype=np.float32)
         single = isinstance(texts, str)
         text_list = [texts] if single else texts
         if not text_list:
@@ -346,7 +372,11 @@ class SigLIPScorer:
             s_pool: Global average-pooled cosine similarity
             token_heatmap: 2D spatial similarity map (e.g. 24x24)
         """
+        if self._load_failed:
+            return 0.0, 0.0, np.zeros((24, 24), dtype=np.float32)
         self._ensure_loaded()
+        if self._model is None or self._processor is None:
+            return 0.0, 0.0, np.zeros((24, 24), dtype=np.float32)
         if not text_queries:
             return 0.0, 0.0, np.zeros((24, 24), dtype=np.float32)
 

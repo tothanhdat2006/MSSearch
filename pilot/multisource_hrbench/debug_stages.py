@@ -1377,6 +1377,10 @@ def main():
             device=siglip_device,
             torch_dtype=torch.float16 if "cuda" in siglip_device else torch.float32,
         )
+        siglip_engine._ensure_loaded()
+        if getattr(siglip_engine, "_load_failed", False):
+            print(f"[SigLIPScorer] Offline checkpoint missing or unreadable; fallback to spatial entropy activated.")
+            siglip_engine = None
     else:
         print(f"[Mode: {args.mode}] Direct answer baseline mode active - bypassing SAM3 and SigLIP initialization.")
         sam3_engine = None
