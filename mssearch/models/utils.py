@@ -9,6 +9,10 @@ from copy import deepcopy
 from typing import List
 # For the visual cues like "man and his bag", we should remove the pronoun "his bag"
 def include_pronouns(nlp, text):
+    if nlp is None:
+        pronouns = {"he", "she", "it", "they", "his", "her", "its", "their", "him", "them", "this", "that", "these", "those"}
+        words = re.findall(r'\b[A-Za-z]+\b', text.lower())
+        return any(w in pronouns for w in words)
     doc = nlp(text)
     for token in doc:
         if token.pos_ == 'PRON':
@@ -17,9 +21,6 @@ def include_pronouns(nlp, text):
 
 
 def extract_visual_objects(nlp, text):
-    doc = nlp(text)
-    objects = []
-
     stop_nouns = set([
         "color", "position", "size", "shape", "texture", "material", "what", "where", "kind", "type",
         "side", "corner", "part", "surface", "area", "region", "level", "spot", "direction",
@@ -27,6 +28,11 @@ def extract_visual_objects(nlp, text):
         "left", "right", "top", "bottom", "front", "back", "middle", "center",
         "how", "many", "brand", "name", "object", "thing", "map", "locations", "country"
     ])
+    if nlp is None:
+        words = [w.lower() for w in re.findall(r'\b[A-Za-z]{3,}\b', text) if w.lower() not in stop_nouns]
+        return words[:3] if words else ["object"]
+    doc = nlp(text)
+    objects = []
 
     wh_words = set(["which", "what", "whose", "who", "that"])
 
