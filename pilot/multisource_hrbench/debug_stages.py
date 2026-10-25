@@ -1523,12 +1523,6 @@ def main():
             with open(results_log_path, "a", encoding="utf-8") as f_out:
                 f_out.write(json.dumps(rec) + "\n")
 
-            # Mirror to canonical results_{benchmark_name}.jsonl in output_dir
-            canonical_results_path = os.path.join(args.output_dir, f"{prefix}.jsonl")
-            if os.path.abspath(canonical_results_path) != os.path.abspath(results_log_path):
-                with open(canonical_results_path, "a", encoding="utf-8") as f_canon:
-                    f_canon.write(json.dumps(rec) + "\n")
-
             acc_pct = (correct_count / evaluated_count * 100.0) if evaluated_count > 0 else 0.0
             avg_lat = sum(latencies) / len(latencies) if latencies else 0.0
             print(
@@ -1627,14 +1621,9 @@ def main():
             "config_used_path": config_out_path,
         }
 
-    sum_prefix = f"summary_{benchmark_name}_baseline" if is_direct_mode else f"summary_{benchmark_name}"
-    summary_path = os.path.join(args.output_dir, f"{sum_prefix}_{timestamp_str}.json")
+    summary_path = os.path.splitext(results_log_path)[0] + "_summary.json"
     with open(summary_path, "w", encoding="utf-8") as f_sum:
         json.dump(summary_data, f_sum, indent=2)
-
-    canonical_summary_path = os.path.join(args.output_dir, f"{sum_prefix}.json")
-    with open(canonical_summary_path, "w", encoding="utf-8") as f_canon_sum:
-        json.dump(summary_data, f_canon_sum, indent=2)
 
     print("\n" + "=" * 80)
     print(f"BENCHMARK COMPLETED [{benchmark_name.upper()}]: Evaluated {total_eval} new sample(s) this session.")
