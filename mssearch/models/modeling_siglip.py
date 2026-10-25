@@ -39,6 +39,37 @@ def _extract_embedding_tensor(output: Any) -> torch.Tensor:
     raise TypeError(f"Cannot extract tensor embedding from output of type {type(output).__name__}")
 
 
+def _normalize_to_string_list(texts: Any) -> List[str]:
+    """Normalizes any text input (str, dict, list of dicts/str) into a list of non-empty strings."""
+    if isinstance(texts, str):
+        return [texts]
+    if isinstance(texts, dict):
+        texts = list(texts.values())
+    if not isinstance(texts, (list, tuple, set)):
+        return [str(texts)]
+    result = []
+    for item in texts:
+        if isinstance(item, str):
+            if item.strip():
+                result.append(item.strip())
+        elif isinstance(item, dict):
+            val = (
+                item.get("query")
+                or item.get("text")
+                or item.get("name")
+                or item.get("target")
+                or item.get("anchor")
+                or item.get("description")
+            )
+            if not val and item:
+                val = " ".join(str(v) for v in item.values() if isinstance(v, (str, int, float)))
+            if val and str(val).strip():
+                result.append(str(val).strip())
+        elif item is not None and str(item).strip():
+            result.append(str(item).strip())
+    return result if result else ["target visual object"]
+
+
 class SigLIPScorer:
     """
     SigLIP (or CLIP) inference wrapper for zero-shot text-image cosine similarity scoring.
@@ -341,7 +372,7 @@ class SigLIPScorer:
         return feats[0] if single else feats
 
     @torch.inference_mode()
-    def encode_text(self, texts: Union[str, List[str]]) -> np.ndarray:
+    def encode_text(self, texts: Union[str, List[str], Any]) -> np.ndarray:
         """Extracts L2-normalized text embedding(s) as float32 numpy array."""
         if self._load_failed:
             return np.empty((0, 768), dtype=np.float32)
@@ -349,7 +380,7 @@ class SigLIPScorer:
         if self._model is None or self._processor is None:
             return np.empty((0, 768), dtype=np.float32)
         single = isinstance(texts, str)
-        text_list = [texts] if single else texts
+        text_list = _normalize_to_string_list(texts)
         if not text_list:
             return np.empty((0, 768), dtype=np.float32)
 
@@ -382,6 +413,7 @@ class SigLIPScorer:
         self._ensure_loaded()
         if self._model is None or self._processor is None:
             return 0.0, 0.0, np.zeros((24, 24), dtype=np.float32)
+        text_queries = _normalize_to_string_list(text_queries)
         if not text_queries:
             return 0.0, 0.0, np.zeros((24, 24), dtype=np.float32)
 
