@@ -8,6 +8,7 @@ and reuses Stage 2 feature maps while caching pooled patch embeddings for Stage 
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional, Any
 import math
+import warnings
 import numpy as np
 from PIL import Image
 
@@ -333,8 +334,10 @@ def partition_into_sam3_sgap(
     # 4. Search optimal k* in [min_splits, max_splits]
     for k in range(min_splits, limit_k + 1):
         try:
-            model = AgglomerativeClustering(n_clusters=k, connectivity=adj_matrix, linkage='ward')
-            labels = model.fit_predict(clustering_features)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=r".*number of connected components.*", category=UserWarning)
+                model = AgglomerativeClustering(n_clusters=k, connectivity=adj_matrix, linkage='ward')
+                labels = model.fit_predict(clustering_features)
             sil = silhouette_score(scaled_semantic, labels) if k > 1 else 0.0
             overlap_cost = compute_bbox_overlap_cost(atom_bboxes, labels, k)
             score = sil - 1.5 * overlap_cost

@@ -242,7 +242,7 @@ def run_direct_global_assessment(
                         "Select the best option from the choices above that answers the question.\n"
                         "State ONLY the option letter and concise choice (e.g. <answer>(A)</answer> or <answer>A. choice text</answer>).\n"
                         "Do NOT write conversational filler, reasoning, or explanations.\n"
-                        "If the target object or requested text/information is NOT clearly visible in this crop, output strictly:\n"
+                        "If the target object or requested text/information is NOT clearly visible in this image, output strictly:\n"
                         "<answer>None</answer>\n\n"
                         "Otherwise, output the option letter inside <answer>...</answer> tags:\n"
                         "<answer>(A)</answer>"
@@ -250,7 +250,7 @@ def run_direct_global_assessment(
                 else:
                     prompt = (
                         f"{question}\n\n"
-                        "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
+                        "If the target object or requested text/information is NOT clearly visible in this image, output:\n"
                         "<answer>None</answer>\n\n"
                         "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
                         "<answer>concise answer</answer>"

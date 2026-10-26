@@ -748,13 +748,20 @@ def run_feature_grouping_and_gating(
         else:
             remaining_patches = sorted_patches
 
-    # Safety fallback: if all groups got pruned, retain top highest entropy patches
+    # Safety fallback: if all groups got pruned, retain top patches by SigLIP semantic score and entropy
     if not remaining_patches and bounded_patches:
-        sorted_by_entropy = sorted(bounded_patches, key=lambda p: p.entropy, reverse=True)
-        fallback_k = max(1, min(len(bounded_patches) // 5, getattr(config, "max_retained_patches", 16)))
-        remaining_patches = sorted_by_entropy[:fallback_k]
+        sorted_by_relevance = sorted(
+            bounded_patches,
+            key=lambda p: (
+                getattr(p, "siglip_score", 0.0) if getattr(p, "siglip_score", None) is not None else 0.0,
+                p.entropy
+            ),
+            reverse=True
+        )
+        fallback_k = max(1, min(len(bounded_patches), getattr(config, "max_retained_patches", 4)))
+        remaining_patches = sorted_by_relevance[:fallback_k]
         if config.verbose:
-            print(f"[Stage 4][Safety Fallback Trigger] All {len(groups)} groups were pruned! Fallback activated: keeping top {fallback_k} highest-entropy patches.")
+            print(f"[Stage 4][Safety Fallback Trigger] All {len(groups)} groups were pruned! Fallback activated: keeping top {fallback_k} most relevant patches (SigLIP/entropy).")
     elif config.verbose:
         pruned_count = len(bounded_patches) - len(remaining_patches)
         prune_pct = (pruned_count / max(1, len(bounded_patches))) * 100

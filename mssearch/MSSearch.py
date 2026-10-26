@@ -577,6 +577,44 @@ class MultiSourceSearchEngine:
 
         # Final answers consolidation
         informative_answers = [a for a in harvested_answers if not is_negative_or_unanswerable(a)]
+
+        # Root scene fallback: if visual search crops produced no affirmative evidence,
+        # query the root scene image directly (analogous to CVSearch root_node fallback).
+        if not informative_answers and candidate_images and self.zoom_model is not None:
+            from .stages.stage2_fast_path import _query_vlm_response
+            from .stages.stage6_foveated_reader import extract_final_answer
+            if not is_quiet:
+                print("[Stage 6 -> Root Fallback] Visual search crops yielded no affirmative evidence; querying global candidate image.")
+
+            best_img_idx = 0
+            if direct_result and getattr(direct_result, "candidate_scores", None):
+                best_img_idx = max(direct_result.candidate_scores, key=lambda x: x[1])[0]
+            elif direct_result and getattr(direct_result, "evidence_images", None):
+                best_img_idx = direct_result.evidence_images[0]
+
+            root_img = candidate_images[best_img_idx]
+            root_answer = _query_vlm_response(
+                self.zoom_model,
+                root_img,
+                reading_question,
+                max_new_tokens=getattr(self.config, "max_vlm_tokens", 128)
+            )
+            clean_root = extract_final_answer(root_answer) or root_answer.strip()
+            if clean_root and not is_negative_or_unanswerable(clean_root):
+                informative_answers = [clean_root]
+                harvested_answers = [clean_root]
+                harvested_evidence_images = [best_img_idx]
+                harvested_patch_boxes = [[0, 0, root_img.width, root_img.height]]
+                harvested_extractions.append({
+                    "img_idx": best_img_idx,
+                    "box": [0, 0, root_img.width, root_img.height],
+                    "expanded_box": [0, 0, root_img.width, root_img.height],
+                    "raw_answer": root_answer,
+                    "final_answer": clean_root,
+                    "source_branch": "RootGlobalFallback"
+                })
+                telemetry["route"] = "visual_search_root_fallback"
+
         final_answers_out = informative_answers if informative_answers else harvested_answers
 
         pred_list = []

@@ -1,5 +1,6 @@
 import spacy
 import re
+import warnings
 import numpy as np
 import networkx as nx
 import torch
@@ -422,12 +423,14 @@ class ConstrainedTreeBuilder:
 
         for k in range(effective_min_k, limit_k + 1):
             try:
-                model = AgglomerativeClustering(
-                    n_clusters=k,
-                    connectivity=sub_connectivity,
-                    linkage='ward'
-                )
-                labels = model.fit_predict(sub_features_for_clustering)
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message=r".*number of connected components.*", category=UserWarning)
+                    model = AgglomerativeClustering(
+                        n_clusters=k,
+                        connectivity=sub_connectivity,
+                        linkage='ward'
+                    )
+                    labels = model.fit_predict(sub_features_for_clustering)
 
                 if self.use_silhouette_score:
                     if k > 1 and len(indices) > k:
