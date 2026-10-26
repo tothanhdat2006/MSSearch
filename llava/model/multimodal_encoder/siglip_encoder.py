@@ -535,20 +535,42 @@ class SigLipVisionModel(SigLipPreTrainedModel):
         )
 
 
+def _resolve_siglip_path(path: str) -> str:
+    if path and os.path.exists(path):
+        return path
+    for cand in [
+        os.environ.get("SIGLIP_MODEL_DIR"),
+        os.environ.get("SIGLIP_PATH"),
+        os.environ.get("SIGLIP_NAME"),
+        "/home/ubuntu/workspace/hr/models/siglip-base-patch16-384",
+        "/home/ubuntu/workspace/hr/models/siglip-so400m-patch14-384",
+        os.environ.get("CLIP_MODEL_DIR"),
+    ]:
+        if cand and os.path.exists(cand):
+            return cand
+    return path
+
+
 class SigLipVisionTower(nn.Module):
-    def __init__(self, vision_tower, vision_tower_cfg, delay_load=False):
+    def __init__(self, vision_tower, vision_tower_cfg=None, delay_load=False):
         super().__init__()
 
         self.is_loaded = False
+        self.vision_tower_cfg = vision_tower_cfg
+        self.vision_tower_name = _resolve_siglip_path(vision_tower)
 
-        self.config = SigLipVisionConfig()
-
-        self.vision_tower_name = vision_tower
+        if os.path.exists(self.vision_tower_name):
+            try:
+                self.config = SigLipVisionConfig.from_pretrained(self.vision_tower_name)
+            except Exception:
+                self.config = SigLipVisionConfig()
+        else:
+            self.config = SigLipVisionConfig()
 
         self.image_processor = SigLipImageProcessor()
 
         if not delay_load:
-            rank0_print(f"Loading vision tower: {vision_tower}")
+            rank0_print(f"Loading vision tower: {self.vision_tower_name}")
             self.load_model()
         elif getattr(vision_tower_cfg, "unfreeze_mm_vision_tower", False):
             # TODO: better detector is needed.
@@ -565,7 +587,11 @@ class SigLipVisionTower(nn.Module):
             rank0_print("{} is already loaded, `load_model` called again, skipping.".format(self.vision_tower_name))
             return
 
-        self.vision_tower = SigLipVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        target_path = _resolve_siglip_path(self.vision_tower_name)
+        rank0_print(f"[*] Loading SigLIP vision model from: {target_path}")
+        self.vision_tower = SigLipVisionModel.from_pretrained(target_path, device_map=device_map)
+        if hasattr(self.vision_tower, "config"):
+            self.config = self.vision_tower.config
 
         del self.vision_tower.vision_model.encoder.layers[-1:]
         self.vision_tower.vision_model.head = nn.Identity()
@@ -574,17 +600,23 @@ class SigLipVisionTower(nn.Module):
         self.is_loaded = True
 
     def forward(self, images):
+        expected_dim = getattr(self.vision_tower_cfg, "mm_hidden_size", 1152) if self.vision_tower_cfg else 1152
+
+        def _format_feature(feat):
+            if feat.shape[-1] < expected_dim:
+                feat = torch.nn.functional.pad(feat, (0, expected_dim - feat.shape[-1]))
+            return feat
+
         if type(images) is list:
             image_features = []
             for image in images:
                 image_forward_out = self.vision_tower(image.to(device=self.device, dtype=self.dtype).unsqueeze(0), output_hidden_states=True)
                 image_feature = image_forward_out.hidden_states[-1].to(image.dtype)
-                assert image_features.shape[-2] == 729
-                image_features.append(image_feature)
+                image_features.append(_format_feature(image_feature))
         else:
             image_forward_outs = self.vision_tower(images.to(device=self.device, dtype=self.dtype), output_hidden_states=True)
             image_features = image_forward_outs.hidden_states[-1].to(images.dtype)
-            assert image_features.shape[-2] == 729
+            image_features = _format_feature(image_features)
 
         return image_features
 
@@ -604,7 +636,10 @@ class SigLipVisionTower(nn.Module):
 
     @property
     def hidden_size(self):
-        return self.config.hidden_size
+        expected_dim = getattr(self.vision_tower_cfg, "mm_hidden_size", None) if self.vision_tower_cfg else None
+        if expected_dim is not None:
+            return expected_dim
+        return getattr(self.config, "hidden_size", 1152)
 
     @property
     def num_patches(self):

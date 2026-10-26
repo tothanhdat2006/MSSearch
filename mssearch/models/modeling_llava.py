@@ -55,10 +55,20 @@ class Model(ABC):
         self.model.config.tokenizer_padding_side = padding_side
         self.model.to(self.device)
 
-        clip_model_path = kwargs.get("clip_model_path", os.environ.get("CLIP_MODEL_DIR", None))
+        siglip_candidates = [
+            kwargs.get("siglip_model_path"),
+            kwargs.get("clip_model_path"),
+            os.environ.get("SIGLIP_MODEL_DIR"),
+            os.environ.get("SIGLIP_PATH"),
+            os.environ.get("SIGLIP_NAME"),
+            "/home/ubuntu/workspace/hr/models/siglip-base-patch16-384",
+            "/home/ubuntu/workspace/hr/models/siglip-so400m-patch14-384",
+            os.environ.get("CLIP_MODEL_DIR"),
+        ]
+        local_vision_path = next((c for c in siglip_candidates if c and os.path.exists(c)), None)
         vision_tower = self.model.get_vision_tower()
-        if vision_tower is not None and clip_model_path and os.path.exists(clip_model_path):
-            vision_tower.vision_tower_name = clip_model_path
+        if vision_tower is not None and local_vision_path:
+            vision_tower.vision_tower_name = local_vision_path
 
         if vision_tower is not None and not vision_tower.is_loaded:
             vision_tower.load_model(device_map=self.device)

@@ -1051,7 +1051,10 @@ def main():
     parser.add_argument(
         "--siglip_name",
         type=str,
-        default=os.environ.get("SIGLIP_NAME", "google/siglip-base-patch16-384"),
+        default=os.environ.get(
+            "SIGLIP_MODEL_DIR",
+            os.environ.get("SIGLIP_NAME", "/home/ubuntu/workspace/hr/models/siglip-base-patch16-384" if os.path.exists("/home/ubuntu/workspace/hr/models/siglip-base-patch16-384") else "google/siglip-base-patch16-384"),
+        ),
         help="HuggingFace model ID or path for SigLIP.",
     )
     parser.add_argument(
@@ -1448,6 +1451,7 @@ def main():
                 conv_type="qwen_1_5" if is_qwen else "llava_v1",
                 patch_scale=1.2,
                 bias_value=0.6,
+                siglip_model_path=args.siglip_name,
             )
         except Exception as e_llava:
             print(f"[Error] ModelGlobalLocal failed to initialize: {e_llava}")

@@ -193,55 +193,104 @@ def create_spatial_compressed_canvas(
 # HRBENCH AUTO-DISCOVERY & DATASET HELPERS
 # ==============================================================================
 
+def discover_benchmark_dataset(
+    results_path: str = "",
+    preferred_path: Optional[str] = None,
+    preferred_annotation: Optional[str] = None
+) -> Tuple[str, str, str]:
+    """
+    Discovers dataset directory, annotation file, and benchmark name across
+    HRBench-8K, HRBench-4K, and V* benchmarks.
+    Returns: (benchmark_name, base_dir, annotation_path)
+    """
+    # 1. Determine benchmark type
+    combined_hint = (str(results_path) + " " + str(preferred_path or "") + " " + str(preferred_annotation or "")).lower()
+    if "vstar" in combined_hint:
+        benchmark = "vstar"
+    elif "4k" in combined_hint:
+        benchmark = "hr-bench_4k"
+    else:
+        benchmark = "hr-bench_8k"
+
+    # 2. Check explicit annotation
+    if preferred_annotation and os.path.exists(preferred_annotation):
+        resolved_annot = os.path.abspath(preferred_annotation)
+        resolved_base = preferred_path if (preferred_path and os.path.exists(preferred_path)) else os.path.dirname(resolved_annot)
+        return benchmark, resolved_base, resolved_annot
+
+    # 3. Candidate base directories
+    candidate_bases = []
+    if preferred_path:
+        candidate_bases.append(preferred_path)
+
+    if benchmark == "vstar":
+        candidate_bases.extend([
+            "D:/Research/VisualSearch/vstar",
+            "d:/Research/VisualSearch/vstar",
+            "/home/ubuntu/workspace/hr/data/vstar",
+            "/kaggle/input/datasets/thnhtt/vs-dataset/vstar",
+        ])
+    elif benchmark == "hr-bench_4k":
+        candidate_bases.extend([
+            "D:/Research/VisualSearch/hr-bench_4k",
+            "d:/Research/VisualSearch/hr-bench_4k",
+            "/home/ubuntu/workspace/hr/data/hr-bench_4k",
+            "/kaggle/input/datasets/thnhtt/vs-dataset/hr-bench_4k",
+        ])
+    else:  # hr-bench_8k
+        env_dir = os.environ.get("HRBENCH_DIR")
+        if env_dir:
+            candidate_bases.append(env_dir)
+        candidate_bases.extend([
+            "D:/Research/VisualSearch/hr-bench_8k",
+            "d:/Research/VisualSearch/hr-bench_8k",
+            "/home/ubuntu/workspace/hr/data/hr-bench_8k",
+            "docs/experiments/multisource/data/hr-bench_8k",
+            "docs/experiments/freeform/ICML26-CVSearch/data/hr-bench_8k",
+            "/kaggle/input/datasets/thnhtt/vs-dataset/hr-bench_8k",
+        ])
+
+    resolved_base = None
+    for d in candidate_bases:
+        if d and os.path.exists(d):
+            resolved_base = os.path.abspath(d)
+            break
+
+    if resolved_base is None:
+        raise FileNotFoundError(f"[Dataset Error] Could not find base directory for {benchmark} in: {candidate_bases}")
+
+    # 4. Resolve annotation file
+    if benchmark == "vstar":
+        annot_candidates = ["annotation_vstar.json", "annotation_vstar_updated.json"]
+    elif benchmark == "hr-bench_4k":
+        annot_candidates = ["annotation_hr-bench_4k.json", "annotation.json"]
+    else:
+        annot_candidates = ["annotation_hr-bench_8k.json", "annotation.json"]
+
+    annotation_path = None
+    for ac in annot_candidates:
+        cand = os.path.join(resolved_base, ac)
+        if os.path.exists(cand):
+            annotation_path = cand
+            break
+
+    if not annotation_path:
+        raise FileNotFoundError(f"[Dataset Error] Annotation file not found in {resolved_base} (looked for {annot_candidates})")
+
+    return benchmark, resolved_base, annotation_path
+
+
 def discover_hrbench_dir(
     preferred_path: Optional[str] = None,
     preferred_annotation: Optional[str] = None
 ) -> Tuple[str, str]:
-    """Discovers HRBench directory and annotation file across Windows & Linux environments."""
-    if preferred_annotation and os.path.exists(preferred_annotation):
-        resolved_annot = os.path.abspath(preferred_annotation)
-        resolved_base = preferred_path if (preferred_path and os.path.exists(preferred_path)) else os.path.dirname(resolved_annot)
-        return resolved_base, resolved_annot
-
-    search_dirs = []
-    if preferred_path:
-        search_dirs.append(preferred_path)
-    env_dir = os.environ.get("HRBENCH_DIR")
-    if env_dir:
-        search_dirs.append(env_dir)
-
-    search_dirs.extend([
-        "D:/Research/VisualSearch/hr-bench_8k",
-        "d:/Research/VisualSearch/hr-bench_8k",
-        "/home/ubuntu/workspace/hr/data/hr-bench_8k",
-        "/home/ubuntu/workspace/hr/data/hr-bench_4k",
-        "docs/experiments/multisource/data/hr-bench_8k",
-        "docs/experiments/freeform/ICML26-CVSearch/data/hr-bench_8k",
-        "/kaggle/input/datasets/thnhtt/vs-dataset/hr-bench_8k/mnt/sdb/llp/datasets/zoom_eye_data/zoom_eye_data/hr-bench_8k",
-        "/kaggle/input/datasets/thnhtt/vs-dataset/hr-bench_8k",
-    ])
-
-    resolved_base = None
-    for d in search_dirs:
-        if d and os.path.exists(d):
-            resolved_base = d
-            break
-
-    if resolved_base is None:
-        raise FileNotFoundError(
-            f"[Dataset Error] Could not find HRBench directory in paths: {search_dirs}"
-        )
-
-    annotation_path = os.path.join(resolved_base, "annotation_hr-bench_8k.json")
-    if not os.path.exists(annotation_path):
-        annotation_path = os.path.join(resolved_base, "annotation_hr-bench_4k.json")
-
-    if not os.path.exists(annotation_path):
-        raise FileNotFoundError(
-            f"[Dataset Error] Annotation file not found in HRBench dir: {resolved_base}"
-        )
-
-    return resolved_base, annotation_path
+    """Discovers HRBench directory and annotation file (backwards compatible wrapper)."""
+    _, base_dir, annotation_path = discover_benchmark_dataset(
+        results_path="hr-bench_8k",
+        preferred_path=preferred_path,
+        preferred_annotation=preferred_annotation
+    )
+    return base_dir, annotation_path
 
 
 def parse_sample_options_map(options_raw: Any, cycle_idx: int = 0) -> Dict[str, str]:
@@ -253,6 +302,16 @@ def parse_sample_options_map(options_raw: Any, cycle_idx: int = 0) -> Dict[str, 
     if isinstance(options_raw, list):
         if not options_raw:
             return opt_dict
+        # V* format check: list of string options without cycle wrapper or explicit letters
+        if all(isinstance(opt, str) for opt in options_raw) and not any("\n" in opt for opt in options_raw):
+            is_labeled = all(re.match(r"^[\(\[\"']*[A-Fa-f][\)\]\.\:\s]", opt.strip()) for opt in options_raw if opt.strip())
+            if not is_labeled:
+                letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
+                for i, opt in enumerate(options_raw):
+                    let = letters[i] if i < len(letters) else str(i)
+                    opt_dict[let] = str(opt).strip()
+                return opt_dict
+
         if 0 <= cycle_idx < len(options_raw):
             chosen = options_raw[cycle_idx]
         else:
@@ -282,26 +341,34 @@ def get_sample_gt_details(
 ) -> Tuple[str, str, Dict[str, str]]:
     """
     Extracts authoritative ground truth letter, full ground truth text, and options map
-    directly from HRBench annotation JSON.
+    directly from benchmark annotation JSON.
     Returns: (gt_letter, gt_text, options_map)
     """
     if sample_index < 0 or sample_index >= len(hrbench_data):
         return ("N/A", "N/A", {})
 
     sample = hrbench_data[sample_index]
-    ans_obj = sample.get("answer", "")
     gt_letter = "N/A"
-    if isinstance(ans_obj, list):
-        if 0 <= cycle_idx < len(ans_obj):
-            gt_letter = str(ans_obj[cycle_idx]).strip().upper()
-        elif len(ans_obj) > 0:
-            gt_letter = str(ans_obj[0]).strip().upper()
-    elif ans_obj:
-        gt_letter = str(ans_obj).strip().upper()
+
+    if "label" in sample and sample["label"]:
+        gt_letter = str(sample["label"]).strip().upper()
+    elif "answer" in sample and sample["answer"] is not None:
+        ans_obj = sample.get("answer", "")
+        if isinstance(ans_obj, list):
+            if 0 <= cycle_idx < len(ans_obj):
+                gt_letter = str(ans_obj[cycle_idx]).strip().upper()
+            elif len(ans_obj) > 0:
+                gt_letter = str(ans_obj[0]).strip().upper()
+        elif ans_obj:
+            gt_letter = str(ans_obj).strip().upper()
+    elif "options" in sample and isinstance(sample["options"], list) and len(sample["options"]) > 0:
+        # Standard V* format: options[0] is ground truth, corresponds to letter 'A'
+        gt_letter = "A"
 
     options_map = parse_sample_options_map(sample.get("options", {}), cycle_idx=cycle_idx)
     gt_text = options_map.get(gt_letter, "")
     return (gt_letter, gt_text, options_map)
+
 
 
 def is_sample_cross_object(rec: Dict[str, Any]) -> bool:
@@ -394,8 +461,12 @@ def reconstruct_candidate_pool(
         d_path = os.path.join(hrbench_base_dir, d_rel)
         if not os.path.exists(d_path):
             d_path = d_rel
-        d_img = Image.open(d_path).convert("RGB")
-        pool_items.append({"is_target": False, "sample_idx": d_idx, "image": d_img, "path": d_rel})
+        if os.path.exists(d_path):
+            try:
+                d_img = Image.open(d_path).convert("RGB")
+                pool_items.append({"is_target": False, "sample_idx": d_idx, "image": d_img, "path": d_rel})
+            except Exception:
+                pass
 
     # Shuffle candidate images deterministically
     rng.shuffle(pool_items)
@@ -502,16 +573,20 @@ def draw_header_card(
 
     # Stage Timings Chips
     timings = rec.get("timings", {})
-    timing_parts = [
-        f"P1: {timings.get('phase1_direct_answer', 0.0):.2f}s",
-        f"S1: {timings.get('stage1_parser', 0.0):.2f}s",
-        f"S2: {timings.get('stage2_fast_path', 0.0):.2f}s",
-        f"S3: {timings.get('stage3_partitioning', 0.0):.2f}s",
-        f"S4: {timings.get('stage4_grouping_gating', 0.0):.2f}s",
-        f"S5: {timings.get('stage5_screening', 0.0):.2f}s",
-        f"S6: {timings.get('stage6_reading', 0.0):.2f}s",
-    ]
-    draw.text((pad_x, curr_y), "Stages: " + "  |  ".join(timing_parts), fill=PALETTE["text_muted"], font=font_mono)
+    if "direct_baseline" in timings:
+        timing_str = f"Timing: direct_baseline = {timings['direct_baseline']:.2f}s"
+    else:
+        timing_parts = [
+            f"P1: {timings.get('phase1_direct_answer', 0.0):.2f}s",
+            f"S1: {timings.get('stage1_parser', 0.0):.2f}s",
+            f"S2: {timings.get('stage2_fast_path', 0.0):.2f}s",
+            f"S3: {timings.get('stage3_partitioning', 0.0):.2f}s",
+            f"S4: {timings.get('stage4_grouping_gating', 0.0):.2f}s",
+            f"S5: {timings.get('stage5_screening', 0.0):.2f}s",
+            f"S6: {timings.get('stage6_reading', 0.0):.2f}s",
+        ]
+        timing_str = "Stages: " + "  |  ".join(timing_parts)
+    draw.text((pad_x, curr_y), timing_str, fill=PALETTE["text_muted"], font=font_mono)
     curr_y += 24
 
     return curr_y + pad_y
@@ -1304,25 +1379,348 @@ def resolve_results_path(input_path: str) -> str:
     )
 
 
+def generate_master_dashboard(run_summaries: List[Dict[str, Any]], master_html_path: str) -> str:
+    """Generates a top-level unified navigation hub for all 6 benchmark visualizer galleries."""
+    cards_html = []
+    for s in run_summaries:
+        badge_bg = "#14532d" if s["acc"] >= 50 else ("#1e3a8a" if s["acc"] >= 40 else "#7f1d1d")
+        badge_fg = "#4ade80" if s["acc"] >= 50 else ("#60a5fa" if s["acc"] >= 40 else "#f87171")
+        rel_index = os.path.relpath(s["html_path"], os.path.dirname(master_html_path)).replace("\\", "/")
+        card = f"""
+        <div class="card">
+          <div class="card-header">
+            <span class="benchmark-tag">{s['benchmark'].upper()}</span>
+            <span class="method-tag {'method-ms' if 'MSSearch' in s['name'] else 'method-base'}">{s['name']}</span>
+          </div>
+          <div class="stats-row">
+            <div class="stat-box">
+              <span class="stat-num" style="color: {badge_fg}">{s['acc']:.2f}%</span>
+              <span class="stat-lbl">Accuracy ({s['correct']}/{s['total']})</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-num" style="color: #38bdf8">{s['latency']:.2f}s</span>
+              <span class="stat-lbl">Avg Latency / Sample</span>
+            </div>
+          </div>
+          <a class="view-btn" href="{rel_index}" target="_blank">Open Gallery &rarr;</a>
+        </div>
+        """
+        cards_html.append(card)
+
+    cards_joined = "\n".join(cards_html)
+    master_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MSSearch vs Baseline — Master Visualizer Hub</title>
+  <style>
+    :root {{
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --cyan: #38bdf8;
+      --green: #4ade80;
+      --red: #f87171;
+      --gold: #fbbf24;
+      --purple: #a855f7;
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      padding: 32px 24px;
+      line-height: 1.5;
+    }}
+    .container {{ max-width: 1200px; margin: 0 auto; }}
+    header {{
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 28px;
+    }}
+    h1 {{ font-size: 26px; font-weight: 700; color: var(--cyan); margin-bottom: 8px; }}
+    p.subtitle {{ color: var(--muted); font-size: 14px; margin-bottom: 20px; }}
+    .comparison-table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      font-size: 14px;
+    }}
+    .comparison-table th, .comparison-table td {{
+      padding: 10px 14px;
+      text-align: left;
+      border: 1px solid var(--border);
+    }}
+    .comparison-table th {{ background: rgba(56, 189, 248, 0.1); color: var(--cyan); font-weight: 600; }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 20px;
+      margin-top: 28px;
+    }}
+    .card {{
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: transform 0.2s, border-color 0.2s;
+    }}
+    .card:hover {{
+      transform: translateY(-2px);
+      border-color: var(--cyan);
+    }}
+    .card-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }}
+    .benchmark-tag {{
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--cyan);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 6px;
+    }}
+    .method-tag {{
+      font-size: 13px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 6px;
+    }}
+    .method-ms {{ background: rgba(74, 222, 128, 0.15); color: var(--green); }}
+    .method-base {{ background: rgba(148, 163, 184, 0.15); color: var(--muted); }}
+    .stats-row {{ display: flex; gap: 16px; margin-bottom: 20px; }}
+    .stat-box {{
+      flex: 1;
+      background: rgba(15, 23, 42, 0.6);
+      padding: 12px;
+      border-radius: 8px;
+      text-align: center;
+    }}
+    .stat-num {{ display: block; font-size: 22px; font-weight: 700; }}
+    .stat-lbl {{ display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }}
+    .view-btn {{
+      display: block;
+      width: 100%;
+      text-align: center;
+      padding: 10px;
+      background: rgba(56, 189, 248, 0.2);
+      color: var(--cyan);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: background 0.2s;
+    }}
+    .view-btn:hover {{ background: rgba(56, 189, 248, 0.35); }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>MSSearch vs Baseline — Interactive Results Gallery Hub</h1>
+      <p class="subtitle">Publication-grade visualization panels and exact Stage 6 layout feeds across HRBench-4K, HRBench-8K, and V*.</p>
+      
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Benchmark</th>
+            <th>Baseline (Qwen2.5-VL-7B)</th>
+            <th>MSSearch (Our Method)</th>
+            <th>Accuracy Gain (&Delta;)</th>
+            <th>Baseline Latency</th>
+            <th>MSSearch Latency</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>HRBench-4K</strong></td>
+            <td>56.50% (113/200)</td>
+            <td>45.50% (91/200)</td>
+            <td style="color: var(--red); font-weight: 600;">-11.00%</td>
+            <td>0.95 s</td>
+            <td>86.02 s</td>
+          </tr>
+          <tr>
+            <td><strong>HRBench-8K</strong></td>
+            <td>35.00% (70/200)</td>
+            <td>47.50% (95/200)</td>
+            <td style="color: var(--green); font-weight: 600;">+12.50%</td>
+            <td>1.07 s</td>
+            <td>39.11 s</td>
+          </tr>
+          <tr>
+            <td><strong>V*</strong></td>
+            <td>36.13% (69/191)</td>
+            <td>59.16% (113/191)</td>
+            <td style="color: var(--green); font-weight: 600;">+23.03%</td>
+            <td>0.33 s</td>
+            <td>64.05 s</td>
+          </tr>
+        </tbody>
+      </table>
+    </header>
+
+    <div class="grid">
+      {cards_joined}
+    </div>
+  </div>
+</body>
+</html>
+"""
+    with open(master_html_path, "w", encoding="utf-8") as f:
+        f.write(master_html)
+    return master_html_path
+
+
+def process_results_run(
+    results_path: str,
+    output_dir: str,
+    name: str = "",
+    preferred_hrbench_dir: Optional[str] = None,
+    preferred_annotation: Optional[str] = None,
+    sample_indices: str = "all",
+    max_samples: Optional[int] = None,
+    no_html: bool = False,
+    workers: int = 8
+) -> Dict[str, Any]:
+    """Processes a single results file, rendering sample panels in parallel and compiling gallery."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    results_path = resolve_results_path(results_path)
+    output_dir = os.path.abspath(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"\n{'='*75}")
+    print(f"[Visualizer] Processing Run: {name or os.path.basename(results_path)}")
+    print(f"[Visualizer] Results file: {results_path}")
+
+    with open(results_path, "r", encoding="utf-8") as f:
+        records = [json.loads(line) for line in f if line.strip()]
+
+    print(f"[Visualizer] Loaded {len(records)} result records.")
+
+    # Discover dataset
+    benchmark, base_dir, annot_file = discover_benchmark_dataset(
+        results_path=results_path,
+        preferred_path=preferred_hrbench_dir,
+        preferred_annotation=preferred_annotation
+    )
+    print(f"[Visualizer] Benchmark: '{benchmark}' | Base Dir: '{base_dir}'")
+    print(f"[Visualizer] Annotations: '{annot_file}'")
+
+    with open(annot_file, "r", encoding="utf-8") as f:
+        dataset_data = json.load(f)
+
+    # Filter samples
+    if sample_indices != "all":
+        target_indices = {int(x.strip()) for x in sample_indices.split(",") if x.strip()}
+        records = [r for r in records if r.get("sample_index") in target_indices]
+
+    if max_samples is not None:
+        records = records[:max_samples]
+
+    total_to_render = len(records)
+    print(f"[Visualizer] Rendering {total_to_render} sample(s) with {workers} worker threads -> '{output_dir}'...")
+
+    vis_filenames: Dict[int, str] = {}
+    layout_map: Dict[int, List[str]] = {}
+
+    def _render_task(item_tuple: Tuple[int, Dict[str, Any]]):
+        idx_in_list, rec_item = item_tuple
+        s_idx = rec_item.get("sample_index", idx_in_list)
+        try:
+            out_png, layout_fnames = visualize_sample(
+                rec=rec_item,
+                hrbench_data=dataset_data,
+                hrbench_base_dir=base_dir,
+                output_dir=output_dir,
+                max_panel_w=760,
+                max_panel_h=650,
+                save_crops=True
+            )
+            return s_idx, os.path.basename(out_png), layout_fnames, None
+        except Exception as e:
+            return s_idx, "", [], str(e)
+
+    done_count = 0
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+        for s_idx, fname, lnames, err in executor.map(_render_task, enumerate(records)):
+            done_count += 1
+            if err:
+                print(f"  [{done_count}/{total_to_render}] Sample #{s_idx} ERROR: {err}")
+            else:
+                vis_filenames[s_idx] = fname
+                layout_map[s_idx] = lnames
+                if done_count % 20 == 0 or done_count == total_to_render:
+                    print(f"  [{done_count}/{total_to_render}] Rendered samples progress...")
+
+    # Generate HTML gallery dashboard
+    html_path = ""
+    if not no_html:
+        html_path = generate_html_gallery(
+            records=records,
+            output_dir=output_dir,
+            vis_filenames=vis_filenames,
+            layout_map=layout_map,
+            hrbench_data=dataset_data
+        )
+        print(f"[Visualizer] Interactive HTML dashboard generated: {html_path}")
+
+    correct_count = sum(1 for r in records if r.get("is_correct", False))
+    acc_pct = (correct_count / len(records) * 100) if records else 0.0
+    avg_lat = sum(r.get("latency_sec", 0.0) for r in records) / len(records) if records else 0.0
+
+    print(f"[Visualizer] Done! Acc: {acc_pct:.2f}% ({correct_count}/{len(records)}) | Avg Latency: {avg_lat:.2f}s")
+    return {
+        "name": name or benchmark,
+        "benchmark": benchmark,
+        "results_path": results_path,
+        "output_dir": output_dir,
+        "html_path": html_path,
+        "total": len(records),
+        "correct": correct_count,
+        "acc": acc_pct,
+        "latency": avg_lat,
+    }
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Visualize MSSearch Pilot Results with Stage 6 Layouts")
+    parser = argparse.ArgumentParser(description="Visualize MSSearch and Baseline Pilot Results with Stage 6 Layouts")
     parser.add_argument(
         "--results_path",
         type=str,
         default="pilot/results.jsonl",
-        help="Path to results.jsonl or timestamped results_*.jsonl file (auto-detects newest if directory or default)."
+        help="Path to results.jsonl or timestamped results_*.jsonl file."
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Run visualization across all 6 benchmark runs (MSSearch & Baseline on HRBench-4K, HRBench-8K, and V*)."
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="Number of concurrent worker threads for rendering (default: 8)."
     )
     parser.add_argument(
         "--hrbench_dir",
         type=str,
         default=None,
-        help="Root path to HRBench dataset."
+        help="Root path to benchmark dataset directory."
     )
     parser.add_argument(
         "--annotation_file",
         type=str,
-        default="D:/Research/VisualSearch/hr-bench_8k/annotation_hr-bench_8k.json",
-        help="Path to HRBench annotation JSON file (defaults to D:/Research/VisualSearch/hr-bench_8k/annotation_hr-bench_8k.json if present)."
+        default=None,
+        help="Path to benchmark annotation JSON file."
     )
     parser.add_argument(
         "--output_dir",
@@ -1340,7 +1738,7 @@ def main():
         "--max_samples",
         type=int,
         default=None,
-        help="Maximum number of samples to process."
+        help="Maximum number of samples to process per run."
     )
     parser.add_argument(
         "--no_html",
@@ -1349,68 +1747,76 @@ def main():
     )
     args = parser.parse_args()
 
-    # Resolve paths
-    results_path = resolve_results_path(args.results_path)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    mssearch_root = os.path.abspath(os.path.join(script_dir, ".."))
+    results_root = os.path.join(mssearch_root, "results")
 
-    output_dir = os.path.abspath(args.output_dir)
-    os.makedirs(output_dir, exist_ok=True)
+    if args.all:
+        ALL_RUNS = [
+            {
+                "name": "MSSearch (HRBench-4K)",
+                "results_path": os.path.join(results_root, "mssearch", "hr4k", "results_hr-bench_4k_20261025_114807.jsonl"),
+                "output_dir": os.path.join(results_root, "mssearch", "hr4k", "vis"),
+            },
+            {
+                "name": "MSSearch (HRBench-8K)",
+                "results_path": os.path.join(results_root, "mssearch", "hr8k", "results_20261022_161142.jsonl"),
+                "output_dir": os.path.join(results_root, "mssearch", "hr8k", "vis"),
+            },
+            {
+                "name": "MSSearch (V*)",
+                "results_path": os.path.join(results_root, "mssearch", "vstar", "results_vstar_20261025_114817.jsonl"),
+                "output_dir": os.path.join(results_root, "mssearch", "vstar", "vis"),
+            },
+            {
+                "name": "Baseline (HRBench-4K)",
+                "results_path": os.path.join(results_root, "baseline", "qwen25vl7b", "hr4k", "results_hr-bench_4k_baseline_20261025_035013.jsonl"),
+                "output_dir": os.path.join(results_root, "baseline", "qwen25vl7b", "hr4k", "vis"),
+            },
+            {
+                "name": "Baseline (HRBench-8K)",
+                "results_path": os.path.join(results_root, "baseline", "qwen25vl7b", "hr8k", "results_baseline_20261023_084659.jsonl"),
+                "output_dir": os.path.join(results_root, "baseline", "qwen25vl7b", "hr8k", "vis"),
+            },
+            {
+                "name": "Baseline (V*)",
+                "results_path": os.path.join(results_root, "baseline", "qwen25vl7b", "vstar", "results_vstar_baseline_20261025_033138.jsonl"),
+                "output_dir": os.path.join(results_root, "baseline", "qwen25vl7b", "vstar", "vis"),
+            },
+        ]
 
-    print(f"[Visualizer] Loading results from: {results_path}")
-    with open(results_path, "r", encoding="utf-8") as f:
-        records = [json.loads(line) for line in f if line.strip()]
+        summaries = []
+        for r_cfg in ALL_RUNS:
+            summary = process_results_run(
+                results_path=r_cfg["results_path"],
+                output_dir=r_cfg["output_dir"],
+                name=r_cfg["name"],
+                preferred_hrbench_dir=args.hrbench_dir,
+                preferred_annotation=args.annotation_file,
+                sample_indices=args.sample_indices,
+                max_samples=args.max_samples,
+                no_html=args.no_html,
+                workers=args.workers
+            )
+            summaries.append(summary)
 
-    print(f"[Visualizer] Loaded {len(records)} result records.")
-
-    # Discover HRBench
-    base_dir, annot_file = discover_hrbench_dir(
-        preferred_path=args.hrbench_dir,
-        preferred_annotation=args.annotation_file
-    )
-    print(f"[Visualizer] Found HRBench directory: {base_dir}")
-    print(f"[Visualizer] Loading annotations from: {annot_file}")
-    with open(annot_file, "r", encoding="utf-8") as f:
-        hrbench_data = json.load(f)
-
-    # Filter samples
-    if args.sample_indices != "all":
-        target_indices = {int(x.strip()) for x in args.sample_indices.split(",") if x.strip()}
-        records = [r for r in records if r.get("sample_index") in target_indices]
-
-    if args.max_samples is not None:
-        records = records[:args.max_samples]
-
-    print(f"[Visualizer] Rendering visualizations for {len(records)} sample(s) with Stage 6 Layouts -> '{output_dir}'...")
-
-    vis_filenames: Dict[int, str] = {}
-    layout_map: Dict[int, List[str]] = {}
-
-    for i, rec in enumerate(records):
-        s_idx = rec.get("sample_index", i)
-        print(f"  [{i+1}/{len(records)}] Rendering Sample #{s_idx} ({'CORRECT' if rec.get('is_correct') else 'INCORRECT'})...")
-        out_png, layout_fnames = visualize_sample(
-            rec=rec,
-            hrbench_data=hrbench_data,
-            hrbench_base_dir=base_dir,
-            output_dir=output_dir,
-            max_panel_w=760,
-            max_panel_h=650,
-            save_crops=True
+        # Generate Unified Master Hub HTML
+        master_html_path = os.path.join(results_root, "index.html")
+        generate_master_dashboard(summaries, master_html_path)
+        print(f"\n{'='*75}")
+        print(f"[Visualizer] Master Unified Hub generated: {master_html_path}")
+        print(f"[Visualizer] All 6 benchmark visualizations completed successfully!")
+    else:
+        process_results_run(
+            results_path=args.results_path,
+            output_dir=args.output_dir,
+            preferred_hrbench_dir=args.hrbench_dir,
+            preferred_annotation=args.annotation_file,
+            sample_indices=args.sample_indices,
+            max_samples=args.max_samples,
+            no_html=args.no_html,
+            workers=args.workers
         )
-        vis_filenames[s_idx] = os.path.basename(out_png)
-        layout_map[s_idx] = layout_fnames
-
-    # Generate HTML gallery dashboard
-    if not args.no_html:
-        html_path = generate_html_gallery(
-            records=records,
-            output_dir=output_dir,
-            vis_filenames=vis_filenames,
-            layout_map=layout_map,
-            hrbench_data=hrbench_data
-        )
-        print(f"[Visualizer] Interactive HTML dashboard generated: {html_path}")
-
-    print(f"[Visualizer] Completed! All outputs saved to: {output_dir}")
 
 
 if __name__ == "__main__":
