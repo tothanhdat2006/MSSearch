@@ -460,7 +460,7 @@ class MultiSourceSearchEngine:
                         parent_crop = candidate_images[img_idx].crop(parent_box)
                         local_child_patches = partition_candidate_images(
                             candidate_images=[parent_crop],
-                            feature_cache={},
+                            stage2_feature_cache={},
                             config=sub_config,
                             active_objects=active_objects,
                             siglip_model=self.siglip_model

@@ -406,11 +406,13 @@ def slice_feature_map(
 
 def partition_candidate_images(
     candidate_images: List[Image.Image],
-    stage2_feature_cache: Dict[int, np.ndarray],
-    config: MSSearchConfig,
+    stage2_feature_cache: Optional[Dict[int, np.ndarray]] = None,
+    config: Optional[MSSearchConfig] = None,
     active_objects: Optional[List[str]] = None,
     siglip_model: Optional[Any] = None,
-    target_img_indices: Optional[List[int]] = None
+    target_img_indices: Optional[List[int]] = None,
+    feature_cache: Optional[Dict[int, np.ndarray]] = None,
+    **kwargs
 ) -> List[BoundedPatch]:
     """
     Executes Entropy-Gated Recursive Patch Partitioning across candidate images.
@@ -418,6 +420,12 @@ def partition_candidate_images(
     Guarantees that all output patches satisfy longer side max(W, H) <= config.max_patch_size.
     Reuses cached Stage 2 feature maps and returns pooled embeddings for Stage 4 grouping.
     """
+    if stage2_feature_cache is None:
+        stage2_feature_cache = feature_cache if feature_cache is not None else kwargs.get("stage2_feature_cache", {})
+    if stage2_feature_cache is None:
+        stage2_feature_cache = {}
+    if config is None:
+        config = MSSearchConfig()
     bounded_patches: List[BoundedPatch] = []
 
     for img_idx, img_pil in enumerate(candidate_images):
