@@ -22,6 +22,8 @@ def parse_args():
     parser.add_argument("--nlp_model", type=str, default=os.environ.get("NLP_MODEL", "/home/ubuntu/workspace/hr/models/spacy/en_core_web_sm-3.8.0"))
     parser.add_argument("--pool_mode", type=str, choices=["N_5", "ALL"], default=os.environ.get("POOL_MODE", "N_5"))
     parser.add_argument("--max_samples", type=int, default=None)
+    parser.add_argument("--resume", action="store_true", default=os.environ.get("RESUME", "0") in ("1", "true", "True"))
+    parser.add_argument("--resume-from", "--resume_from", dest="resume_from", type=str, default=os.environ.get("RESUME_FROM", None))
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
 
@@ -97,7 +99,10 @@ def main():
         nlp_parser = None
 
     os.makedirs(args.output_dir, exist_ok=True)
-    predictions_jsonl = os.path.join(args.output_dir, f"mssearch_pilot10_predictions_{args.pool_mode.lower()}.jsonl")
+    if args.resume_from and os.path.exists(str(args.resume_from).strip()):
+        predictions_jsonl = os.path.abspath(str(args.resume_from).strip())
+    else:
+        predictions_jsonl = os.path.join(args.output_dir, f"mssearch_pilot10_predictions_{args.pool_mode.lower()}.jsonl")
 
     # Hardware devices
     num_gpus = torch.cuda.device_count()

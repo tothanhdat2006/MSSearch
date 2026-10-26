@@ -83,6 +83,15 @@ while [[ $# -gt 0 ]]; do
             FORWARD_ARGS+=("--resume")
             shift
             ;;
+        --resume_from|--resume-from)
+            if [[ -n "${2:-}" && ! "$2" =~ ^-- ]]; then
+                FORWARD_ARGS+=("--resume_from" "$2")
+                shift 2
+            else
+                echo "[ERROR] $1 requires a path or sample index argument." >&2
+                exit 1
+            fi
+            ;;
         -h|--help)
             echo "=========================================================================="
             echo "HRBENCH DIRECT VLM BASELINE RUNNER (OFFLINE LOCAL INFERENCE)"
@@ -102,6 +111,7 @@ while [[ $# -gt 0 ]]; do
             echo "      --all_samples          Evaluate all samples in HRBench"
             echo "      --sample_idx IDX       Evaluate single sample index"
             echo "      --resume               Resume evaluation from existing results file"
+            echo "      --resume_from PATH|IDX Resume evaluation from specific results JSONL or start index"
             echo "  -h, --help                 Show this help message"
             echo "=========================================================================="
             exit 0
@@ -118,6 +128,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Ensure RESUME_FROM environment variable is passed if set and not already in FORWARD_ARGS
+if [[ -n "${RESUME_FROM:-}" && ! " ${FORWARD_ARGS[*]:-} " =~ " --resume_from " ]]; then
+    FORWARD_ARGS+=("--resume_from" "${RESUME_FROM}")
+fi
 
 # Validate local model path existence (strict offline check)
 if [ ! -e "${MODEL_PATH}" ]; then

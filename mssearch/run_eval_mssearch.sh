@@ -13,6 +13,8 @@ BENCHMARK="hr-bench_multisource"
 
 NUM_CHUNKS=1
 CHUNK_IDX=0
+RESUME=""
+RESUME_FROM="${RESUME_FROM:-}"
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -25,6 +27,8 @@ while [[ "$#" -gt 0 ]]; do
         --num-chunks) NUM_CHUNKS="$2"; shift ;;
         --chunk-idx) CHUNK_IDX="$2"; shift ;;
         --benchmark) BENCHMARK="$2"; shift ;;
+        --resume) RESUME="--resume" ;;
+        --resume_from|--resume-from) RESUME_FROM="$2"; shift ;;
         *) echo "Unknown parameter: $1"; exit 1 ;;
     esac
     shift
@@ -54,5 +58,7 @@ python perform_MSSearch.py \
     --partition-mode hybrid \
     --max-patch-size 1024 \
     --bbox-expansion-factor 1.25 \
-    --verbose
+    --verbose \
+    ${RESUME} \
+    ${RESUME_FROM:+--resume_from "${RESUME_FROM}"}
 

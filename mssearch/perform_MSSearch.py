@@ -78,6 +78,11 @@ def main():
                         help="Prompt answer format: 'free_form' (default open-ended prompt without options) or 'option_single' / 'multiple_choice' (appends candidate options)")
     parser.add_argument("--include-options-in-prompt", "--add-options-to-prompt", dest="include_options_in_prompt", action="store_true",
                         help="Explicit flag to include options in the reading prompt (equivalent to --answer-type option_single)")
+    parser.add_argument("--resume", action="store_true", default=os.environ.get("RESUME", "0") in ("1", "true", "True"),
+                        help="Skip already evaluated samples and continue appending to results file")
+    parser.add_argument("--resume-from", "--resume_from", dest="resume_from", type=str,
+                        default=os.environ.get("RESUME_FROM", None),
+                        help="Specific JSONL path or integer sample index to resume from")
     parser.add_argument("--verbose", action="store_true", default=True, help="Enable verbose debug logging on fallback/non-fallback decisions")
     parser.add_argument("--quiet", action="store_true", help="Silence verbose debug logging")
 
@@ -85,7 +90,10 @@ def main():
     is_verbose = args.verbose and not args.quiet
 
     # Configure output file path
-    if args.answers_file is None:
+    if args.resume_from and os.path.exists(str(args.resume_from).strip()):
+        args.answers_file = os.path.abspath(str(args.resume_from).strip())
+        args.resume = True
+    elif args.answers_file is None:
         answers_dir = f"/kaggle/working/answers/{args.benchmark}"
         os.makedirs(answers_dir, exist_ok=True)
         args.answers_file = os.path.join(answers_dir, f"mssearch_chunk{args.chunk_idx}.jsonl")
@@ -160,8 +168,31 @@ def main():
     # Base dataset directory resolution
     base_data_dir = args.base_data_dir if args.base_data_dir else os.path.dirname(os.path.abspath(args.annotation_path))
 
-    with open(args.answers_file, "w", encoding="utf-8") as f_out:
+    resume_from_idx = None
+    if args.resume_from and str(args.resume_from).strip().isdigit():
+        resume_from_idx = int(str(args.resume_from).strip())
+
+    completed_ids = set()
+    if args.resume and os.path.exists(args.answers_file):
+        with open(args.answers_file, "r", encoding="utf-8") as f_prev:
+            for line in f_prev:
+                if line.strip():
+                    try:
+                        rec = json.loads(line)
+                        if "id" in rec:
+                            completed_ids.add(rec["id"])
+                    except Exception:
+                        pass
+        print(f"[Resume] Found {len(completed_ids)} completed samples in: {args.answers_file}")
+
+    file_mode = "a" if (args.resume and os.path.exists(args.answers_file)) else "w"
+    with open(args.answers_file, file_mode, encoding="utf-8") as f_out:
         for idx, anno in enumerate(tqdm(chunk_data, desc=f"MSSearch Chunk {args.chunk_idx}")):
+            s_id = anno.get('id', idx)
+            if args.resume and s_id in completed_ids:
+                continue
+            if resume_from_idx is not None and idx < resume_from_idx:
+                continue
             # Support both 'candidate_images' and legacy 'input_image' fallback
             candidate_paths = anno.get('candidate_images', [])
             if not candidate_paths and 'input_image' in anno:

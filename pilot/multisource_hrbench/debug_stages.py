@@ -1074,8 +1074,18 @@ def main():
     parser.add_argument("--num_candidate_images", type=int, default=3, help="Candidate pool size N (1 target + N-1 distractors).")
     parser.add_argument("--window_size", type=int, default=5, help="Window for distractor sampling.")
     parser.add_argument("--random_seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--resume", action="store_true", help="Skip already evaluated samples and continue appending to results file.")
-    parser.add_argument("--resume_from", type=str, default=None, help="Specific previous results JSONL path to resume from (defaults to latest results_*.jsonl in output_dir).")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=os.environ.get("RESUME", "0") in ("1", "true", "True"),
+        help="Skip already evaluated samples and continue appending to results file.",
+    )
+    parser.add_argument(
+        "--resume_from",
+        type=str,
+        default=os.environ.get("RESUME_FROM", None),
+        help="Specific previous results JSONL path or integer sample index to resume from (defaults to latest results_*.jsonl in output_dir).",
+    )
     parser.add_argument(
         "--mode",
         type=str,
@@ -1273,8 +1283,18 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     # If --resume_from is explicitly passed, automatically enable resume mode
+    resume_from_idx = None
+    resume_from_file = None
     if args.resume_from:
         args.resume = True
+        val = str(args.resume_from).strip()
+        if os.path.exists(val):
+            resume_from_file = os.path.abspath(val)
+        elif os.path.exists(os.path.join(args.output_dir, val)):
+            resume_from_file = os.path.abspath(os.path.join(args.output_dir, val))
+        elif val.isdigit():
+            resume_from_idx = int(val)
+            print(f"[Resume] Slicing target queue to start from sample index >= {resume_from_idx}")
 
     is_direct_mode = args.mode in ("direct", "direct_answer", "baseline")
     prefix = f"results_{benchmark_name}_baseline" if is_direct_mode else f"results_{benchmark_name}"
@@ -1287,8 +1307,8 @@ def main():
         else:
             print(f"[Results] Telemetry will be logged to: {results_log_path}")
     elif args.resume:
-        if args.resume_from and os.path.exists(args.resume_from):
-            results_log_path = os.path.abspath(args.resume_from)
+        if resume_from_file:
+            results_log_path = resume_from_file
             print(f"[Resume] Resuming from explicit file: {results_log_path}")
         else:
             timestamped_logs = []
@@ -1328,6 +1348,9 @@ def main():
 
     if args.max_samples is not None and args.max_samples > 0:
         target_indices = target_indices[: args.max_samples]
+
+    if resume_from_idx is not None:
+        target_indices = [idx for idx in target_indices if idx >= resume_from_idx]
 
     if args.resume and os.path.exists(results_log_path):
         completed_ids = set()

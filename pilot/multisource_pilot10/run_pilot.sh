@@ -75,4 +75,8 @@ if [ -n "${MAX_SAMPLES}" ]; then
     ARGS+=("--max_samples" "${MAX_SAMPLES}")
 fi
 
+if [ -n "${RESUME_FROM:-}" ]; then
+    ARGS+=("--resume_from" "${RESUME_FROM}")
+fi
+
 "${PYTHON_BIN}" "${SCRIPT_DIR}/run_pilot.py" "${ARGS[@]}"

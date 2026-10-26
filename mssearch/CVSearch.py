@@ -184,7 +184,7 @@ def get_cvsearch_response(
             if not text_target:
                 text_target = ["target visual object"]
             one_target_search = (len(text_target) == 1)
-            backbone_out, processed_results, target_id = None, [], 0
+            backbone_out, processed_results, target_id = None, [], []
 
         # print("targets:", targets)
         # print('text_target:', text_target)
@@ -201,7 +201,7 @@ def get_cvsearch_response(
         if target_sign:
             # print('MLLM Visual Cue!')
             # MLLM extract target objects
-            if sum(sam_success_flags) == len(text_target):
+            if sam_model is not None and sum(sam_success_flags) == len(text_target) and len(text_target) > 0:
                 # sam3 segment all target objects
                 fast_node = []
                 for search_box in sam_bboxes:
@@ -288,7 +288,7 @@ def get_cvsearch_response(
                             # Search fail: candidates_search is the sorted node list
                             if candidates_search:
                                 best_candidate = candidates_search[0]  # first Node
-                                if not search_mode:
+                                if not search_mode or sam_model is None:
                                     best_candidate.search_source = "fine_fallback"
                                     zoom_node.append(best_candidate)
                                     # print("Fine Search Fail!")
@@ -381,7 +381,7 @@ def get_cvsearch_response(
         else:
             # print('Rules Visual Cue!')
             # MLLM extraction failed, rule matches target objects
-            if sum(sam_success_flags) == len(text_target):
+            if sam_model is not None and sum(sam_success_flags) == len(text_target) and len(text_target) > 0:
                 fast_node = []
                 for search_box in sam_bboxes:
                     x0, y0 = search_box[0], search_box[1]
@@ -461,7 +461,7 @@ def get_cvsearch_response(
                         else:
                             if candidates_search:
                                 best_candidate = candidates_search[0]
-                                if not search_mode:
+                                if not search_mode or sam_model is None:
                                     best_candidate.search_source = "fine_fallback"
                                     zoom_node.append(best_candidate)
                                     # print("Fine Search Fail!")
@@ -605,7 +605,13 @@ def process_sam_result(processed_results, target_id, is_second_search):
     """
     sam_success_flags = []
     sam_bboxes = []
+    if isinstance(target_id, int):
+        target_id = [target_id] if 0 <= target_id < len(processed_results) else []
+    elif not isinstance(target_id, (list, tuple)):
+        target_id = []
     for t_id in target_id:
+        if not (0 <= t_id < len(processed_results)):
+            continue
         # 1. boxes and scores
         boxes = processed_results[t_id]["boxes"].float().cpu().numpy()
         scores = processed_results[t_id]["scores"].float().cpu().numpy()
