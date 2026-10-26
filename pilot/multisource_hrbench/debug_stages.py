@@ -1128,6 +1128,13 @@ def main():
 
     # Visual Pixel Budget Arguments
     parser.add_argument(
+        "--attn_implementation",
+        type=str,
+        default=os.environ.get("ATTN_IMPLEMENTATION", "sdpa"),
+        choices=["sdpa", "flash_attention_2", "eager"],
+        help="Attention backend implementation (default: sdpa).",
+    )
+    parser.add_argument(
         "--min_pixels",
         type=int,
         default=3136,
@@ -1475,6 +1482,7 @@ def main():
                 patch_scale=1.2,
                 bias_value=0.6,
                 siglip_model_path=args.siglip_name,
+                attn_implementation=args.attn_implementation,
             )
         except Exception as e_llava:
             print(f"[Error] ModelGlobalLocal failed to initialize: {e_llava}")
