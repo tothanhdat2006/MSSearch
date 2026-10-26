@@ -109,6 +109,12 @@ class SigLipVisionConfig(PretrainedConfig):
         if config_dict.get("model_type") == "siglip":
             config_dict = config_dict["vision_config"]
 
+        if "hidden_size" not in config_dict and "base" in str(pretrained_model_name_or_path).lower():
+            config_dict.setdefault("hidden_size", 768)
+            config_dict.setdefault("intermediate_size", 3072)
+            config_dict.setdefault("num_hidden_layers", 12)
+            config_dict.setdefault("patch_size", 16)
+
         if "model_type" in config_dict and hasattr(cls, "model_type") and config_dict["model_type"] != cls.model_type:
             print(f"You are using a model of type {config_dict['model_type']} to instantiate a model of type " f"{cls.model_type}. This is not supported for all configurations of models and can yield errors.")
 
@@ -538,14 +544,30 @@ class SigLipVisionModel(SigLipPreTrainedModel):
 def _resolve_siglip_path(path: str) -> str:
     if path and os.path.exists(path):
         return path
-    for cand in [
-        os.environ.get("SIGLIP_MODEL_DIR"),
-        os.environ.get("SIGLIP_PATH"),
-        os.environ.get("SIGLIP_NAME"),
-        "/home/ubuntu/workspace/hr/models/siglip-base-patch16-384",
-        "/home/ubuntu/workspace/hr/models/siglip-so400m-patch14-384",
-        os.environ.get("CLIP_MODEL_DIR"),
-    ]:
+
+    is_so400m = "so400m" in (path or "").lower()
+    is_base = "base" in (path or "").lower()
+
+    if is_so400m:
+        candidates = [
+            os.environ.get("SIGLIP_SO400M_DIR"),
+            "/home/ubuntu/workspace/hr/models/siglip-so400m-patch14-384",
+        ]
+    elif is_base:
+        candidates = [
+            os.environ.get("SIGLIP_BASE_DIR"),
+            "/home/ubuntu/workspace/hr/models/siglip-base-patch16-384",
+            os.environ.get("SIGLIP_MODEL_DIR"),
+        ]
+    else:
+        candidates = [
+            os.environ.get("SIGLIP_SO400M_DIR"),
+            "/home/ubuntu/workspace/hr/models/siglip-so400m-patch14-384",
+            os.environ.get("SIGLIP_MODEL_DIR"),
+            os.environ.get("SIGLIP_PATH"),
+        ]
+
+    for cand in candidates:
         if cand and os.path.exists(cand):
             return cand
     return path
@@ -588,10 +610,18 @@ class SigLipVisionTower(nn.Module):
             return
 
         target_path = _resolve_siglip_path(self.vision_tower_name)
-        rank0_print(f"[*] Loading SigLIP vision model from: {target_path}")
-        self.vision_tower = SigLipVisionModel.from_pretrained(target_path, device_map=device_map)
-        if hasattr(self.vision_tower, "config"):
-            self.config = self.vision_tower.config
+        if target_path and os.path.exists(target_path):
+            try:
+                rank0_print(f"[*] Loading SigLIP vision model from: {target_path}")
+                self.vision_tower = SigLipVisionModel.from_pretrained(target_path, device_map=device_map)
+                if hasattr(self.vision_tower, "config"):
+                    self.config = self.vision_tower.config
+            except Exception as e:
+                rank0_print(f"Warning: Loading vision tower from pretrained failed ({e}), initializing from config.")
+                self.vision_tower = SigLipVisionModel(self.config)
+        else:
+            rank0_print(f"[*] Initializing SigLIP vision model from config (offline): {self.config}")
+            self.vision_tower = SigLipVisionModel(self.config)
 
         del self.vision_tower.vision_model.encoder.layers[-1:]
         self.vision_tower.vision_model.head = nn.Identity()

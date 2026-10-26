@@ -42,8 +42,6 @@ export HF_DATASETS_OFFLINE=1
 
 # Default Model and Dataset Paths on Local Server
 DEFAULT_MODEL_PATH="/home/ubuntu/workspace/hr/models/Qwen2.5-VL-7B-Instruct"
-DEFAULT_SIGLIP_PATH="/home/ubuntu/workspace/hr/models/siglip-base-patch16-384"
-export SIGLIP_MODEL_DIR="${SIGLIP_MODEL_DIR:-${DEFAULT_SIGLIP_PATH}}"
 export ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 MODEL_PATH="${MODEL_PATH:-${QWEN_PATH:-${DEFAULT_MODEL_PATH}}}"
 HRBENCH_DIR="${HRBENCH_DIR:-/home/ubuntu/workspace/hr/data/hr-bench_8k}"
