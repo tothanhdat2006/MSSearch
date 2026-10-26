@@ -38,8 +38,15 @@ def build_quadtree_for_cvsearch(image_pil, max_depth=2):
     root.is_root = True
     root.depth = 0
     root.prior_prob = 1.0
+    root.id = "root"
+    root.relative_score = 1.0
+    root.aggregated_confidence = -1.0
+    root.posterior_score = -1.0
+
+    node_counter = 1
 
     def _subdivide(node, depth):
+        nonlocal node_counter
         if depth >= max_depth:
             return
         bx, by, bw, bh = node.state.bbox
@@ -55,6 +62,11 @@ def build_quadtree_for_cvsearch(image_pil, max_depth=2):
             child = NodeA(NodeState(image_pil, sb), parent=node)
             child.depth = depth + 1
             child.prior_prob = 1.0
+            child.id = f"node_{node_counter}"
+            child.relative_score = 0.5
+            child.aggregated_confidence = -1.0
+            child.posterior_score = -1.0
+            node_counter += 1
             node.add_child(child)
             _subdivide(child, depth + 1)
 
@@ -130,6 +142,10 @@ def get_cvsearch_response(
     root_node = NodeA(state)
     root_node.is_root = True
     root_node.search_source = "global"
+    root_node.id = "root"
+    root_node.depth = 0
+    root_node.aggregated_confidence = -1.0
+    root_node.posterior_score = -1.0
 
     print_gpu_memory("Pre-Quick-Assessment")
     root_ans_conf = zoom_model.get_confidence_value([root_node], image_pil, confidence_type='answering',input_ele=question)
@@ -196,6 +212,9 @@ def get_cvsearch_response(
 
         ####sam3 result -> bbox
         sam_success_flags, sam_bboxes = process_sam_result(processed_results, target_id, is_search_second)
+        if sam_model is None:
+            sam_success_flags = [0] * len(text_target)
+            sam_bboxes = [[0, 0, img_w, img_h]] * len(text_target)
 
         # Adaptive visual search
         if target_sign:
@@ -714,7 +733,7 @@ def format_question_grounded(question):
 
 def format_question(question, option_str):
     if isinstance(option_str, list):
-        if len(option_str) > 0 and isinstance(option_str[0], str) and ("\n" in option_str[0] or option_str[0].strip().startswith("A.")):
+        if len(option_str) == 1 and isinstance(option_str[0], str) and "\n" in option_str[0]:
             option_str = option_str[0]
         else:
             option_str = "\n".join(str(o) for o in option_str)
@@ -725,7 +744,7 @@ def format_question(question, option_str):
 
 def format_question_new(question, option_str):
     if isinstance(option_str, list):
-        if len(option_str) > 0 and isinstance(option_str[0], str) and ("\n" in option_str[0] or option_str[0].strip().startswith("A.")):
+        if len(option_str) == 1 and isinstance(option_str[0], str) and "\n" in option_str[0]:
             option_str = option_str[0]
         else:
             option_str = "\n".join(str(o) for o in option_str)
