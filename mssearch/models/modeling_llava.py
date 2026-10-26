@@ -19,13 +19,26 @@ from sentence_transformers import SentenceTransformer, util
 
 class Model(ABC):
     def __init__(self, model_path: str, conv_type: str = "qwen_1_5", device: str = "cuda:0", torch_dtype=torch.float16,
-                 attn_implementation="flash_attention_2", padding_side="left", **kwargs) -> None:
+                 attn_implementation="sdpa", padding_side="left", **kwargs) -> None:
         disable_torch_init()
         self.device = device
         self.dtype = torch_dtype
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False, padding_side=padding_side)
 
         print("padding side:", self.tokenizer.padding_side)
+
+        attn_impl = kwargs.pop("attn_implementation", attn_implementation) or os.environ.get("ATTN_IMPLEMENTATION", "sdpa")
+        print(f"[Model] Attention implementation: {attn_impl}")
+
+        def _load_causal_lm(model_cls, *load_args, **load_kwargs):
+            try:
+                return model_cls.from_pretrained(*load_args, **load_kwargs)
+            except Exception as e_attn:
+                if "attn_implementation" in load_kwargs and load_kwargs["attn_implementation"] != "eager":
+                    print(f"[Warning] Failed loading with {load_kwargs['attn_implementation']} ({e_attn}). Falling back to 'eager' attention.")
+                    load_kwargs["attn_implementation"] = "eager"
+                    return model_cls.from_pretrained(*load_args, **load_kwargs)
+                raise
 
         is_qwen = (
             "qwen" in model_path.lower()
@@ -34,21 +47,23 @@ class Model(ABC):
             or conv_type == "qwen_1_5"
         )
         if is_qwen:
-            self.model = LlavaQwenForCausalLM.from_pretrained(
+            self.model = _load_causal_lm(
+                LlavaQwenForCausalLM,
                 model_path,
                 low_cpu_mem_usage=True,
                 torch_dtype=self.dtype,
-                attn_implementation=attn_implementation,
+                attn_implementation=attn_impl,
             )
         else:
             llava_cfg = LlavaConfig.from_pretrained(model_path)
             if "v1.5" in model_path.lower():
                 llava_cfg.delay_load = True
-            self.model = LlavaLlamaForCausalLM.from_pretrained(
+            self.model = _load_causal_lm(
+                LlavaLlamaForCausalLM,
                 model_path,
                 low_cpu_mem_usage=True,
                 torch_dtype=self.dtype,
-                attn_implementation=attn_implementation,
+                attn_implementation=attn_impl,
                 config=llava_cfg,
             )
         print("model:", type(self.model))
