@@ -84,15 +84,15 @@ MODELS_TO_EVAL=()
 TARGET_MODEL="${TARGET_MODEL:-all}"
 
 case "${TARGET_MODEL,,}" in
-    qwen|qwen25|qwen2.5|qwen2.5-vl-7b)
-        MODELS_TO_EVAL+=("qwen:${BASE_MODEL_DIR}/Qwen2.5-VL-7B-Instruct")
-        ;;
-    llava|llava-ov|llavaov|llava-onevision|llava-onevision-7b)
+    *llava*|*onevision*|*ov*)
         LLAVA_PATH="${BASE_MODEL_DIR}/llava-onevision-qwen2-7b-ov"
         if [ ! -d "${LLAVA_PATH}" ] && [ -d "${BASE_MODEL_DIR}/LLaVA-OV-7B" ]; then
             LLAVA_PATH="${BASE_MODEL_DIR}/LLaVA-OV-7B"
         fi
         MODELS_TO_EVAL+=("llava:${LLAVA_PATH}")
+        ;;
+    *qwen*)
+        MODELS_TO_EVAL+=("qwen:${BASE_MODEL_DIR}/Qwen2.5-VL-7B-Instruct")
         ;;
     all|*)
         LLAVA_PATH="${BASE_MODEL_DIR}/llava-onevision-qwen2-7b-ov"
