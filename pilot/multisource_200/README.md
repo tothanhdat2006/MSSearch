@@ -18,36 +18,47 @@ Benchmark evaluation suite for measuring visual search and attribute extraction 
 
 ## Slurm Execution on A240 Server (`gpu-a240`)
 
+### Strict Exact-Match and Zero-Fallback Policy
+- **Exact Model Matching**: Target models must match directory names exactly (e.g. `Qwen3-VL-8B`, `LLaVA-v1.6-7B`, `LLaVA-v1.6-13B`, `LLaVA-v1.6-34B`, `LLaVA-HR-X-7B`, `LLaVA-HR-X-13B`, `Qwen2.5-VL-32B`, `InternVL3-38B`, `Yi-VL-34B`, `Qwen2.5-VL-7B-Instruct`, `llava-onevision-qwen2-7b-ov`).
+- **Immediate Failure**: If any path (dataset, image directory, model checkpoint, SAM3, SigLIP, spaCy, or virtual environment) does not exist, execution terminates immediately (`exit 1` / `FileNotFoundError`). No silent guessing or fallback paths are permitted.
+
 ### 1. Launch Full MSSearch Pipeline via Slurm
-Run all experiments for both **Qwen2.5-VL-7B** and **LLaVA-OneVision-7B**:
+Default execution (runs `Qwen2.5-VL-7B-Instruct` and `llava-onevision-qwen2-7b-ov` sequentially):
 ```bash
 sbatch run_all.slurm
 ```
 
-Run only a specific model family:
+Run specific model(s) by exact folder name:
 ```bash
-# Run only Qwen 2.5-VL 7B
-sbatch --export=ALL,TARGET_MODEL=qwen run_all.slurm
+# Single model
+sbatch run_all.slurm Qwen3-VL-8B
+sbatch run_all.slurm LLaVA-v1.6-7B
+sbatch run_all.slurm Qwen2.5-VL-32B
 
-# Run only LLaVA-OneVision 7B
-sbatch --export=ALL,TARGET_MODEL=llava run_all.slurm
+# Multiple models sequentially
+sbatch run_all.slurm Qwen2.5-VL-32B InternVL3-38B Yi-VL-34B
+
+# Via environment variable
+sbatch --export=ALL,MODELS="LLaVA-v1.6-13B LLaVA-v1.6-34B" run_all.slurm
 ```
 
-Run across all pool sizes ($N=5, 10, 20$):
+Forward arguments with exact model name:
 ```bash
-sbatch --export=ALL,POOL_MODE=ALL run_all.slurm
-```
+# Smoke test on index 0
+sbatch run_all.slurm Qwen3-VL-8B --sample_idx 0
 
-Single sample smoke test or slice:
-```bash
-sbatch run_all.slurm --sample_idx 0
-sbatch run_all.slurm --start_idx 0 --end_idx 10
+# All pool sizes
+sbatch run_all.slurm Qwen2.5-VL-7B-Instruct --pool_mode ALL
 ```
 
 ### 2. Launch Direct VLM Baseline via Slurm
-Run baseline across both models:
 ```bash
+# Default models
 sbatch run_baseline.slurm
+
+# Specific exact models
+sbatch run_baseline.slurm Qwen3-VL-8B
+sbatch run_baseline.slurm LLaVA-v1.6-7B --pool_mode ALL
 ```
 
 ### 3. Monitor Slurm Jobs

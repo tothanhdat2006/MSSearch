@@ -31,78 +31,94 @@ echo "==========================================================================
 nvidia-smi -L || true
 echo "=========================================================================="
 
-# Activate required virtual environment
+# Activate required virtual environment (Strict: Fail immediately if missing)
 VENV_PATH="/data/shared/cvpr/dat/.venv/bin/activate"
-if [ -f "${VENV_PATH}" ]; then
-    echo "[Env Setup] Activating virtual environment: ${VENV_PATH}"
-    source "${VENV_PATH}"
-else
-    echo "[ERROR] Virtual environment not found at: '${VENV_PATH}'" >&2
+if [ ! -f "${VENV_PATH}" ]; then
+    echo "[FATAL ERROR] Virtual environment not found at: '${VENV_PATH}'" >&2
+    echo "Immediate failure enforced. No fallback allowed." >&2
     exit 1
 fi
+echo "[Env Setup] Activating virtual environment: ${VENV_PATH}"
+source "${VENV_PATH}"
 
-# Locate Python binary and repo directories
+# Python and repository paths
 PYTHON_BIN="$(command -v python || echo "python")"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MSSEARCH_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 export PYTHONPATH="${MSSEARCH_ROOT}:${PYTHONPATH:-}"
 
-# Enforce strict offline execution (local checkpoint weights only)
+# Offline enforcement
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 
-# Shared Server Paths
+# Base server directories
 BASE_MODEL_DIR="/data/shared/cvpr/dat/models"
 DATA_ROOT="${DATA_ROOT:-/home/cvpr2027/dat/simple/data}"
 
-# Resolve Dataset Path (200_samples.json)
-if [ -f "${DATA_ROOT}/200_samples.json" ]; then
-    DATASET_PATH="${DATA_ROOT}/200_samples.json"
-elif [ -f "${DATA_ROOT}/output/200_samples.json" ]; then
-    DATASET_PATH="${DATA_ROOT}/output/200_samples.json"
-else
-    DATASET_PATH="${DATA_ROOT}/200_samples.json"
+# Strict Dataset and Image Paths (Fail immediately if missing)
+DATASET_PATH="${DATASET_PATH:-${DATA_ROOT}/200_samples.json}"
+if [ ! -f "${DATASET_PATH}" ]; then
+    echo "[FATAL ERROR] Dataset path does not exist: '${DATASET_PATH}'" >&2
+    echo "Immediate failure enforced. No fallback allowed." >&2
+    exit 1
 fi
 
-# Resolve Raw Image Directory
-if [ -d "${DATA_ROOT}/images" ]; then
-    IMAGE_DIR="${DATA_ROOT}/images"
-elif [ -d "${DATA_ROOT}/pilot_5000_images" ]; then
-    IMAGE_DIR="${DATA_ROOT}/pilot_5000_images"
-else
-    IMAGE_DIR="${DATA_ROOT}"
+IMAGE_DIR="${IMAGE_DIR:-${DATA_ROOT}/images}"
+if [ ! -d "${IMAGE_DIR}" ]; then
+    echo "[FATAL ERROR] Image directory does not exist: '${IMAGE_DIR}'" >&2
+    echo "Immediate failure enforced. No fallback allowed." >&2
+    exit 1
 fi
 
-# Benchmark Configuration
 POOL_MODE="${POOL_MODE:-N_5}"
-FORWARD_ARGS=("$@")
 
-# Define Target Foundation Models
-MODELS_TO_EVAL=()
-TARGET_MODEL="${TARGET_MODEL:-all}"
+# Parse models and extra forward arguments
+# Non-option arguments are treated as exact model folder names
+# Supported exact names examples:
+#   Qwen2.5-VL-7B-Instruct, llava-onevision-qwen2-7b-ov, Qwen3-VL-8B,
+#   LLaVA-v1.6-7B, LLaVA-v1.6-13B, LLaVA-v1.6-34B, LLaVA-HR-X-7B, LLaVA-HR-X-13B,
+#   Qwen2.5-VL-32B, InternVL3-38B, Yi-VL-34B
+CLI_MODELS=()
+FORWARD_ARGS=()
 
-case "${TARGET_MODEL,,}" in
-    *llava*|*onevision*|*ov*)
-        LLAVA_PATH="${BASE_MODEL_DIR}/llava-onevision-qwen2-7b-ov"
-        if [ ! -d "${LLAVA_PATH}" ] && [ -d "${BASE_MODEL_DIR}/LLaVA-OV-7B" ]; then
-            LLAVA_PATH="${BASE_MODEL_DIR}/LLaVA-OV-7B"
-        fi
-        MODELS_TO_EVAL+=("llava:${LLAVA_PATH}")
-        ;;
-    *qwen*)
-        MODELS_TO_EVAL+=("qwen:${BASE_MODEL_DIR}/Qwen2.5-VL-7B-Instruct")
-        ;;
-    all|*)
-        LLAVA_PATH="${BASE_MODEL_DIR}/llava-onevision-qwen2-7b-ov"
-        if [ ! -d "${LLAVA_PATH}" ] && [ -d "${BASE_MODEL_DIR}/LLaVA-OV-7B" ]; then
-            LLAVA_PATH="${BASE_MODEL_DIR}/LLaVA-OV-7B"
-        fi
-        MODELS_TO_EVAL+=("qwen:${BASE_MODEL_DIR}/Qwen2.5-VL-7B-Instruct")
-        MODELS_TO_EVAL+=("llava:${LLAVA_PATH}")
-        ;;
-esac
+for arg in "$@"; do
+    if [[ "$arg" == -* ]]; then
+        FORWARD_ARGS+=("$arg")
+    else
+        CLI_MODELS+=("$arg")
+    fi
+done
+
+TARGET_MODELS=()
+if [ ${#CLI_MODELS[@]} -gt 0 ]; then
+    TARGET_MODELS=("${CLI_MODELS[@]}")
+elif [ -n "${MODELS:-}" ]; then
+    read -r -a TARGET_MODELS <<< "${MODELS}"
+elif [ -n "${MODEL_NAME:-}" ]; then
+    TARGET_MODELS=("${MODEL_NAME}")
+else
+    # Default benchmark pair
+    TARGET_MODELS=("Qwen2.5-VL-7B-Instruct" "llava-onevision-qwen2-7b-ov")
+fi
+
+# Strict Model Path Validation: Check all models exist upfront
+RESOLVED_MODEL_PATHS=()
+for M_ITEM in "${TARGET_MODELS[@]}"; do
+    if [[ "${M_ITEM}" = /* ]]; then
+        M_FULL_PATH="${M_ITEM}"
+    else
+        M_FULL_PATH="${BASE_MODEL_DIR}/${M_ITEM}"
+    fi
+
+    if [ ! -d "${M_FULL_PATH}" ]; then
+        echo "[FATAL ERROR] Exact model directory does not exist: '${M_FULL_PATH}'" >&2
+        echo "Exact match required for model '${M_ITEM}'. Immediate failure enforced." >&2
+        exit 1
+    fi
+    RESOLVED_MODEL_PATHS+=("${M_FULL_PATH}")
+done
 
 echo "=========================================================================="
 echo "BASELINE EVALUATION SPECIFICATION"
@@ -110,29 +126,26 @@ echo "==========================================================================
 echo "Dataset Path     : ${DATASET_PATH}"
 echo "Image Dir        : ${IMAGE_DIR}"
 echo "Pool Mode        : ${POOL_MODE}"
-echo "Target Models    : ${#MODELS_TO_EVAL[@]} model(s)"
+echo "Target Models (${#RESOLVED_MODEL_PATHS[@]}):"
+for P in "${RESOLVED_MODEL_PATHS[@]}"; do
+    echo "  - ${P}"
+done
 echo "Extra Args       : ${FORWARD_ARGS[*]:-none}"
 echo "=========================================================================="
 
-for MODEL_ENTRY in "${MODELS_TO_EVAL[@]}"; do
-    M_TAG="${MODEL_ENTRY%%:*}"
-    M_PATH="${MODEL_ENTRY#*:}"
+# Execute baseline evaluation sequentially for each validated model
+for M_PATH in "${RESOLVED_MODEL_PATHS[@]}"; do
     M_NAME="$(basename "${M_PATH}")"
     OUTPUT_DIR="${SCRIPT_DIR}/results_baseline_${M_NAME}"
     mkdir -p "${OUTPUT_DIR}"
 
     echo ""
     echo "=========================================================================="
-    echo "STARTING BASELINE EXPERIMENT: ${M_NAME} (${M_TAG^^})"
+    echo "STARTING BASELINE EXPERIMENT: ${M_NAME}"
     echo "=========================================================================="
     echo "Model Path : ${M_PATH}"
     echo "Output Dir : ${OUTPUT_DIR}"
     echo "=========================================================================="
-
-    if [ ! -d "${M_PATH}" ]; then
-        echo "[WARNING] Model directory does not exist: '${M_PATH}'. Skipping." >&2
-        continue
-    fi
 
     "${PYTHON_BIN}" -u "${SCRIPT_DIR}/eval_200.py" \
         --mode direct \

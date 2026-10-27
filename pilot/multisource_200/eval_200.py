@@ -94,11 +94,11 @@ def parse_args():
 
 
 def resolve_image(image_id: str, image_dir: str) -> Image.Image:
-    """Strict GPU server image resolver: expects <image_id>.jpg inside image_dir."""
+    """Strict server image resolver: expects <image_id>.jpg inside image_dir. Fails immediately if not found."""
     target_filename = f"{image_id}.jpg" if not str(image_id).lower().endswith((".jpg", ".jpeg", ".png", ".webp")) else str(image_id)
     target_path = os.path.join(image_dir, target_filename)
     if not os.path.isfile(target_path):
-        raise FileNotFoundError(f"[Dataset Error] Image '{image_id}' not found at required server path: '{target_path}'")
+        raise FileNotFoundError(f"[FATAL ERROR] Image '{image_id}' not found at required path: '{target_path}'. Immediate failure enforced.")
     return Image.open(target_path).convert("RGB")
 
 
@@ -349,14 +349,24 @@ def main():
     # Map baseline mode name
     execution_mode = "direct" if args.mode in ("direct", "baseline") else "e2e"
 
-    # Resolve dataset path
+    # Strict Path Verifications: Fail immediately without any fallback
+    if not os.path.isfile(args.dataset_path):
+        raise FileNotFoundError(f"[FATAL ERROR] Dataset file not found at: '{args.dataset_path}'. Immediate failure enforced.")
     resolved_dataset_path = os.path.abspath(args.dataset_path)
-    if not os.path.exists(resolved_dataset_path):
-        local_fallback = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", "..", "datasets", "200_samples.json"))
-        if os.path.exists(local_fallback):
-            resolved_dataset_path = local_fallback
-        else:
-            raise FileNotFoundError(f"[Dataset Error] Dataset file does not exist: '{args.dataset_path}'")
+
+    if not os.path.isdir(args.image_dir):
+        raise FileNotFoundError(f"[FATAL ERROR] Image directory not found at: '{args.image_dir}'. Immediate failure enforced.")
+
+    if not os.path.exists(args.model_path):
+        raise FileNotFoundError(f"[FATAL ERROR] Model path not found at: '{args.model_path}'. Immediate failure enforced.")
+
+    if execution_mode == "e2e":
+        if not os.path.isfile(args.sam3_path):
+            raise FileNotFoundError(f"[FATAL ERROR] SAM3 checkpoint not found at: '{args.sam3_path}'. Immediate failure enforced.")
+        if not os.path.exists(args.siglip_name):
+            raise FileNotFoundError(f"[FATAL ERROR] SigLIP path not found at: '{args.siglip_name}'. Immediate failure enforced.")
+        if not os.path.exists(args.nlp_model):
+            raise FileNotFoundError(f"[FATAL ERROR] NLP model not found at: '{args.nlp_model}'. Immediate failure enforced.")
 
     # Resolve output directory
     model_name = os.path.basename(os.path.normpath(args.model_path)) if args.model_path else "model"
@@ -445,10 +455,10 @@ def main():
     from mssearch.config import MSSearchConfig
     from mssearch.models.modeling_qwenvl import ModelQwenVL
 
-    # Auto-cap max_pixels for 32B checkpoints
+    # Auto-cap max_pixels for >=32B checkpoints (e.g. Qwen2.5-VL-32B, LLaVA-v1.6-34B, InternVL3-38B, Yi-VL-34B)
     max_pixels = args.max_pixels
-    if "32b" in str(args.model_path).lower() and max_pixels > 4194304:
-        print(f"[OOM Guard] Detected 32B model path. Capping max_pixels to 4194304 (was {max_pixels}).")
+    if any(tag in str(args.model_path).lower() for tag in ["32b", "34b", "38b", "72b"]) and max_pixels > 4194304:
+        print(f"[OOM Guard] Detected large model checkpoint ({args.model_path}). Capping max_pixels to 4194304 (was {max_pixels}).")
         max_pixels = 4194304
 
     # Load VLM Engine

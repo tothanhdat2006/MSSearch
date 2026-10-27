@@ -192,10 +192,24 @@ fi
 # Validate local model path existence (strict offline check)
 if [ ! -e "${MODEL_PATH}" ]; then
     echo "=========================================================================="
-    echo "[ERROR] Local model path does not exist: '${MODEL_PATH}'"
-    echo "Online downloads are strictly disabled (offline mode active)."
-    echo "Please specify an existing local checkpoint directory. Example:"
-    echo "  $0 /home/ubuntu/workspace/hr/models/Qwen2.5-VL-7B-Instruct"
+    echo "[FATAL ERROR] Local model path does not exist: '${MODEL_PATH}'"
+    echo "Immediate failure enforced. No fallback allowed."
+    echo "=========================================================================="
+    exit 1
+fi
+
+if [ ! -f "${DATASET_PATH}" ]; then
+    echo "=========================================================================="
+    echo "[FATAL ERROR] Dataset path does not exist: '${DATASET_PATH}'"
+    echo "Immediate failure enforced. No fallback allowed."
+    echo "=========================================================================="
+    exit 1
+fi
+
+if [ ! -d "${IMAGE_DIR}" ]; then
+    echo "=========================================================================="
+    echo "[FATAL ERROR] Image directory does not exist: '${IMAGE_DIR}'"
+    echo "Immediate failure enforced. No fallback allowed."
     echo "=========================================================================="
     exit 1
 fi
