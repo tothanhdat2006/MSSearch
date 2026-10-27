@@ -1379,18 +1379,106 @@ def resolve_results_path(input_path: str) -> str:
     )
 
 
+def get_available_runs(results_root: str, target_model: str = "all") -> List[Dict[str, Any]]:
+    """Discovers all available results.jsonl files under results/ organized by method, model, and benchmark."""
+    t_model = (target_model or "all").lower()
+    if t_model in ["llavaov7b", "llava", "llava-ov", "llava_ov"]:
+        models = ["llavaov7b"]
+    elif t_model in ["qwen25vl7b", "qwen", "qwen25", "qwen2.5"]:
+        models = ["qwen25vl7b"]
+    else:
+        models = ["llavaov7b", "qwen25vl7b"]
+
+    runs = []
+    benchmarks = [("hr4k", "HRBench-4K"), ("hr8k", "HRBench-8K"), ("vstar", "V*")]
+    methods = [("baseline", "Baseline"), ("mssearch", "MSSearch")]
+
+    for model_key in models:
+        model_display = "LLaVA-OneVision-7B" if model_key == "llavaov7b" else "Qwen2.5-VL-7B"
+        for method_key, method_display in methods:
+            for bm_key, bm_display in benchmarks:
+                folder = os.path.join(results_root, method_key, model_key, bm_key)
+                if not os.path.exists(folder):
+                    # fallback for un-nested legacy paths
+                    folder_fb = os.path.join(results_root, method_key, bm_key)
+                    if os.path.exists(folder_fb):
+                        folder = folder_fb
+                    else:
+                        continue
+
+                jsonl_files = [f for f in os.listdir(folder) if f.endswith(".jsonl")]
+                if not jsonl_files:
+                    continue
+
+                jsonl_files.sort(key=lambda x: os.path.getmtime(os.path.join(folder, x)), reverse=True)
+                jsonl_path = os.path.join(folder, jsonl_files[0])
+                vis_dir = os.path.join(folder, "vis")
+
+                runs.append({
+                    "name": f"{method_display} ({model_display} / {bm_display})",
+                    "model_key": model_key,
+                    "model_display": model_display,
+                    "method": method_display,
+                    "benchmark_display": bm_display,
+                    "benchmark": bm_key,
+                    "results_path": jsonl_path,
+                    "output_dir": vis_dir,
+                })
+    return runs
+
+
 def generate_master_dashboard(run_summaries: List[Dict[str, Any]], master_html_path: str) -> str:
-    """Generates a top-level unified navigation hub for all 6 benchmark visualizer galleries."""
+    """Generates a top-level unified navigation hub for all benchmark visualizer galleries."""
+    # Build dynamic comparison table rows
+    pairs: Dict[Tuple[str, str], Dict[str, Dict[str, Any]]] = {}
+    for s in run_summaries:
+        m_disp = s.get("model_display") or ("LLaVA-OneVision-7B" if "llava" in s.get("name", "").lower() else "Qwen2.5-VL-7B")
+        b_disp = s.get("benchmark_display") or s.get("benchmark", "").upper()
+        meth = s.get("method") or ("MSSearch" if "MSSearch" in s.get("name", "") else "Baseline")
+        pairs.setdefault((m_disp, b_disp), {})[meth] = s
+
+    table_rows_html = []
+    for (model, bm), m_dict in sorted(pairs.items()):
+        b = m_dict.get("Baseline")
+        m = m_dict.get("MSSearch")
+        b_acc = f"{b['acc']:.2f}% ({b['correct']}/{b['total']})" if b else "—"
+        m_acc = f"{m['acc']:.2f}% ({m['correct']}/{m['total']})" if m else "—"
+        b_lat = f"{b['latency']:.2f} s" if b else "—"
+        m_lat = f"{m['latency']:.2f} s" if m else "—"
+
+        if b and m:
+            delta = m["acc"] - b["acc"]
+            d_color = "var(--green)" if delta > 0 else ("var(--red)" if delta < 0 else "var(--muted)")
+            delta_str = f"+{delta:.2f}%" if delta > 0 else f"{delta:.2f}%"
+            delta_html = f"<span style='color: {d_color}; font-weight: 700;'>{delta_str}</span>"
+        else:
+            delta_html = "—"
+
+        table_rows_html.append(f"""
+          <tr>
+            <td><strong>{model}</strong></td>
+            <td><strong>{bm}</strong></td>
+            <td>{b_acc}</td>
+            <td>{m_acc}</td>
+            <td>{delta_html}</td>
+            <td>{b_lat}</td>
+            <td>{m_lat}</td>
+          </tr>
+        """)
+
+    table_body = "\n".join(table_rows_html)
+
     cards_html = []
     for s in run_summaries:
-        badge_bg = "#14532d" if s["acc"] >= 50 else ("#1e3a8a" if s["acc"] >= 40 else "#7f1d1d")
         badge_fg = "#4ade80" if s["acc"] >= 50 else ("#60a5fa" if s["acc"] >= 40 else "#f87171")
         rel_index = os.path.relpath(s["html_path"], os.path.dirname(master_html_path)).replace("\\", "/")
+        bm_disp = s.get("benchmark_display") or s.get("benchmark", "").upper()
+        is_ms = "MSSearch" in s["name"]
         card = f"""
         <div class="card">
           <div class="card-header">
-            <span class="benchmark-tag">{s['benchmark'].upper()}</span>
-            <span class="method-tag {'method-ms' if 'MSSearch' in s['name'] else 'method-base'}">{s['name']}</span>
+            <span class="benchmark-tag">{bm_disp}</span>
+            <span class="method-tag {'method-ms' if is_ms else 'method-base'}">{s['name']}</span>
           </div>
           <div class="stats-row">
             <div class="stat-box">
@@ -1435,7 +1523,7 @@ def generate_master_dashboard(run_summaries: List[Dict[str, Any]], master_html_p
       padding: 32px 24px;
       line-height: 1.5;
     }}
-    .container {{ max-width: 1200px; margin: 0 auto; }}
+    .container {{ max-width: 1250px; margin: 0 auto; }}
     header {{
       background: var(--surface);
       border: 1px solid var(--border);
@@ -1530,39 +1618,17 @@ def generate_master_dashboard(run_summaries: List[Dict[str, Any]], master_html_p
       <table class="comparison-table">
         <thead>
           <tr>
+            <th>Model Family</th>
             <th>Benchmark</th>
-            <th>Baseline (Qwen2.5-VL-7B)</th>
-            <th>MSSearch (Our Method)</th>
+            <th>Baseline</th>
+            <th>MSSearch</th>
             <th>Accuracy Gain (&Delta;)</th>
             <th>Baseline Latency</th>
             <th>MSSearch Latency</th>
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td><strong>HRBench-4K</strong></td>
-            <td>56.50% (113/200)</td>
-            <td>45.50% (91/200)</td>
-            <td style="color: var(--red); font-weight: 600;">-11.00%</td>
-            <td>0.95 s</td>
-            <td>86.02 s</td>
-          </tr>
-          <tr>
-            <td><strong>HRBench-8K</strong></td>
-            <td>35.00% (70/200)</td>
-            <td>47.50% (95/200)</td>
-            <td style="color: var(--green); font-weight: 600;">+12.50%</td>
-            <td>1.07 s</td>
-            <td>39.11 s</td>
-          </tr>
-          <tr>
-            <td><strong>V*</strong></td>
-            <td>36.13% (69/191)</td>
-            <td>59.16% (113/191)</td>
-            <td style="color: var(--green); font-weight: 600;">+23.03%</td>
-            <td>0.33 s</td>
-            <td>64.05 s</td>
-          </tr>
+          {table_body}
         </tbody>
       </table>
     </header>
@@ -1583,6 +1649,10 @@ def process_results_run(
     results_path: str,
     output_dir: str,
     name: str = "",
+    model_key: str = "",
+    model_display: str = "",
+    method: str = "",
+    benchmark_display: str = "",
     preferred_hrbench_dir: Optional[str] = None,
     preferred_annotation: Optional[str] = None,
     sample_indices: str = "all",
@@ -1680,6 +1750,10 @@ def process_results_run(
     print(f"[Visualizer] Done! Acc: {acc_pct:.2f}% ({correct_count}/{len(records)}) | Avg Latency: {avg_lat:.2f}s")
     return {
         "name": name or benchmark,
+        "model_key": model_key,
+        "model_display": model_display or ("LLaVA-OneVision-7B" if "llava" in (name or "").lower() else "Qwen2.5-VL-7B"),
+        "method": method or ("MSSearch" if "MSSearch" in (name or "") else "Baseline"),
+        "benchmark_display": benchmark_display or benchmark.upper(),
         "benchmark": benchmark,
         "results_path": results_path,
         "output_dir": output_dir,
@@ -1702,7 +1776,14 @@ def main():
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Run visualization across all 6 benchmark runs (MSSearch & Baseline on HRBench-4K, HRBench-8K, and V*)."
+        help="Run visualization across all benchmark runs."
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        choices=["llavaov7b", "qwen25vl7b", "llava", "qwen", "all"],
+        help="Filter runs by model family: 'llavaov7b' or 'qwen25vl7b' (default: all discovered runs)."
     )
     parser.add_argument(
         "--workers",
@@ -1751,46 +1832,22 @@ def main():
     mssearch_root = os.path.abspath(os.path.join(script_dir, ".."))
     results_root = os.path.join(mssearch_root, "results")
 
-    if args.all:
-        ALL_RUNS = [
-            {
-                "name": "MSSearch (HRBench-4K)",
-                "results_path": os.path.join(results_root, "mssearch", "hr4k", "results_hr-bench_4k_20261025_114807.jsonl"),
-                "output_dir": os.path.join(results_root, "mssearch", "hr4k", "vis"),
-            },
-            {
-                "name": "MSSearch (HRBench-8K)",
-                "results_path": os.path.join(results_root, "mssearch", "hr8k", "results_20261022_161142.jsonl"),
-                "output_dir": os.path.join(results_root, "mssearch", "hr8k", "vis"),
-            },
-            {
-                "name": "MSSearch (V*)",
-                "results_path": os.path.join(results_root, "mssearch", "vstar", "results_vstar_20261025_114817.jsonl"),
-                "output_dir": os.path.join(results_root, "mssearch", "vstar", "vis"),
-            },
-            {
-                "name": "Baseline (HRBench-4K)",
-                "results_path": os.path.join(results_root, "baseline", "qwen25vl7b", "hr4k", "results_hr-bench_4k_baseline_20261025_035013.jsonl"),
-                "output_dir": os.path.join(results_root, "baseline", "qwen25vl7b", "hr4k", "vis"),
-            },
-            {
-                "name": "Baseline (HRBench-8K)",
-                "results_path": os.path.join(results_root, "baseline", "qwen25vl7b", "hr8k", "results_baseline_20261023_084659.jsonl"),
-                "output_dir": os.path.join(results_root, "baseline", "qwen25vl7b", "hr8k", "vis"),
-            },
-            {
-                "name": "Baseline (V*)",
-                "results_path": os.path.join(results_root, "baseline", "qwen25vl7b", "vstar", "results_vstar_baseline_20261025_033138.jsonl"),
-                "output_dir": os.path.join(results_root, "baseline", "qwen25vl7b", "vstar", "vis"),
-            },
-        ]
+    # If --all or --model is requested, run multi-dataset mode
+    if args.all or args.model:
+        target_model = args.model or "all"
+        runs_to_process = get_available_runs(results_root, target_model)
 
+        print(f"\n[Visualizer] Discovered {len(runs_to_process)} run(s) for model filter: '{target_model}'")
         summaries = []
-        for r_cfg in ALL_RUNS:
+        for r_cfg in runs_to_process:
             summary = process_results_run(
                 results_path=r_cfg["results_path"],
                 output_dir=r_cfg["output_dir"],
                 name=r_cfg["name"],
+                model_key=r_cfg.get("model_key", ""),
+                model_display=r_cfg.get("model_display", ""),
+                method=r_cfg.get("method", ""),
+                benchmark_display=r_cfg.get("benchmark_display", ""),
                 preferred_hrbench_dir=args.hrbench_dir,
                 preferred_annotation=args.annotation_file,
                 sample_indices=args.sample_indices,
@@ -1805,7 +1862,7 @@ def main():
         generate_master_dashboard(summaries, master_html_path)
         print(f"\n{'='*75}")
         print(f"[Visualizer] Master Unified Hub generated: {master_html_path}")
-        print(f"[Visualizer] All 6 benchmark visualizations completed successfully!")
+        print(f"[Visualizer] All {len(summaries)} benchmark visualizations completed successfully!")
     else:
         process_results_run(
             results_path=args.results_path,
