@@ -80,6 +80,9 @@ def parse_args():
                         help="Specific JSONL path to resume from.")
 
     # Budget & Resolution
+    parser.add_argument("--attn_implementation", type=str,
+                        default=os.environ.get("ATTN_IMPLEMENTATION", "sdpa"),
+                        help="Attention backend (sdpa, flash_attention_2, eager).")
     parser.add_argument("--min_pixels", type=int, default=3136,
                         help="Minimum visual patch resolution in pixels (56x56 floor).")
     parser.add_argument("--max_pixels", type=int, default=12845056,
@@ -239,6 +242,14 @@ def run_direct_vlm_inference(
             return response.strip()
         except Exception:
             pass
+
+    # ModelGlobalLocal Route (LLaVA models using image_processor + tokenizer)
+    if hasattr(qwen_engine, "image_processor") and hasattr(qwen_engine, "tokenizer") and not hasattr(qwen_engine, "processor"):
+        if len(safe_images) > 1:
+            composite = _create_composite_canvas(safe_images)
+            return qwen_engine.generate_response(image_pil=composite, question=prompt, max_new_tokens=max_new_tokens)
+        else:
+            return qwen_engine.generate_response(image_pil=safe_images[0], question=prompt, max_new_tokens=max_new_tokens)
 
     # Single-Image Route
     if len(safe_images) == 1:
@@ -442,13 +453,60 @@ def main():
 
     # Load VLM Engine
     qwen_device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    qwen_engine = ModelQwenVL(
-        model_path=args.model_path,
-        device=qwen_device,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        min_pixels=args.min_pixels,
-        max_pixels=max_pixels,
-    )
+    model_path_str = str(args.model_path).lower()
+    cfg_data = {}
+    cfg_path = os.path.join(args.model_path, "config.json")
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg_data = json.load(f)
+        except Exception:
+            pass
+    archs = [a.lower() for a in cfg_data.get("architectures", [])]
+    model_type = cfg_data.get("model_type", "").lower()
+
+    if "internvl" in model_path_str or any("internvl" in a for a in archs) or "internvl" in model_type:
+        try:
+            from mssearch.models.modeling_internvl import ModelInternvl
+            print(f"[Loading] InternVL Engine from '{args.model_path}' on {qwen_device}...")
+            qwen_engine = ModelInternvl(
+                model_path=args.model_path,
+                device=qwen_device,
+                torch_dtype=torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16,
+                patch_scale=1.2,
+            )
+        except Exception as e_ivl:
+            print(f"[Notice] ModelInternvl failed to initialize ({e_ivl}), falling back to ModelQwenVL.")
+            qwen_engine = ModelQwenVL(
+                model_path=args.model_path,
+                device=qwen_device,
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                min_pixels=args.min_pixels,
+                max_pixels=max_pixels,
+            )
+    elif "llava" in model_path_str or any("llava" in a for a in archs) or "llava" in model_type:
+        from mssearch.models.modeling_llava import ModelGlobalLocal
+        print(f"[Loading] LLaVA GlobalLocal Engine from '{args.model_path}' on {qwen_device}...")
+        is_qwen = "qwen" in model_path_str or "ov" in model_path_str or "onevision" in model_path_str or any("qwen" in a for a in archs)
+        qwen_engine = ModelGlobalLocal(
+            model_path=args.model_path,
+            device=qwen_device,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            conv_type="qwen_1_5" if is_qwen else "llava_v1",
+            patch_scale=1.2,
+            bias_value=0.6,
+            siglip_model_path=args.siglip_name,
+            attn_implementation=getattr(args, "attn_implementation", "sdpa"),
+        )
+    else:
+        print(f"[Loading] QwenVL Engine from '{args.model_path}' on {qwen_device}...")
+        qwen_engine = ModelQwenVL(
+            model_path=args.model_path,
+            device=qwen_device,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            min_pixels=args.min_pixels,
+            max_pixels=max_pixels,
+        )
 
     sam3_engine = None
     siglip_engine = None

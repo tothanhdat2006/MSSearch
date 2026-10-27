@@ -6,11 +6,61 @@ Benchmark evaluation suite for measuring visual search and attribute extraction 
 
 ## Directory Contents
 
-- `eval_200.py`: Main evaluation runner supporting MSSearch e2e pipeline and Direct VLM baselines.
-- `run_all.sh`: Shell launcher for MSSearch visual search pipeline.
-- `run_baseline.sh`: Shell launcher for Vanilla VLM direct inference.
+- `eval_200.py`: Main evaluation runner supporting MSSearch e2e pipeline and Direct VLM baselines (Qwen2.5-VL and LLaVA-OV).
+- `run_all.slurm`: Slurm batch launcher on GPU server `gpu-a240` running Qwen2.5-VL-7B and LLaVA-OneVision-7B sequentially.
+- `run_baseline.slurm`: Slurm batch launcher for Direct VLM baseline evaluations on `gpu-a240`.
+- `run_all.sh`: Local/standalone shell launcher for MSSearch visual search pipeline.
+- `run_baseline.sh`: Local/standalone shell launcher for Vanilla VLM direct inference.
 - `config_default.json`: Baseline budget configuration.
 - `test_metrics.py`: Self-contained runnable validation script for metric computation and dataset schema.
+
+---
+
+## Slurm Execution on A240 Server (`gpu-a240`)
+
+### 1. Launch Full MSSearch Pipeline via Slurm
+Run all experiments for both **Qwen2.5-VL-7B** and **LLaVA-OneVision-7B**:
+```bash
+sbatch run_all.slurm
+```
+
+Run only a specific model family:
+```bash
+# Run only Qwen 2.5-VL 7B
+sbatch --export=ALL,TARGET_MODEL=qwen run_all.slurm
+
+# Run only LLaVA-OneVision 7B
+sbatch --export=ALL,TARGET_MODEL=llava run_all.slurm
+```
+
+Run across all pool sizes ($N=5, 10, 20$):
+```bash
+sbatch --export=ALL,POOL_MODE=ALL run_all.slurm
+```
+
+Single sample smoke test or slice:
+```bash
+sbatch run_all.slurm --sample_idx 0
+sbatch run_all.slurm --start_idx 0 --end_idx 10
+```
+
+### 2. Launch Direct VLM Baseline via Slurm
+Run baseline across both models:
+```bash
+sbatch run_baseline.slurm
+```
+
+### 3. Monitor Slurm Jobs
+```bash
+# View active queue
+squeue -u $USER
+
+# Follow live output logs
+tail -f logs/mssearch_200-<JobID>.out
+
+# Check accounting
+sacct -j <JobID> --format=JobID,JobName,Partition,AllocCPUS,Elapsed,State,ExitCode
+```
 
 ---
 
