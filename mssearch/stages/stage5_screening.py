@@ -751,6 +751,175 @@ def is_relational_question(active_objects: Any = None, question: str = "", zoom_
     return False
 
 
+def are_seam_adjacent_siblings(
+    p1: BoundedPatch,
+    p2: BoundedPatch,
+    seam_overlap_threshold: float = 0.10,
+    tolerance_px: int = 2
+) -> bool:
+    """
+    Checks if two patches share a quadtree parent_id and touch or overlap along a seam boundary.
+    """
+    if p1.parent_id is None or p2.parent_id is None:
+        return False
+    if p1.parent_id != p2.parent_id:
+        return False
+    if p1.img_idx != p2.img_idx:
+        return False
+
+    b1 = p1.box
+    b2 = p2.box
+
+    x_overlap = max(0, min(b1[2], b2[2]) - max(b1[0], b2[0]))
+    y_overlap = max(0, min(b1[3], b2[3]) - max(b1[1], b2[1]))
+    min_w = max(1, min(b1[2] - b1[0], b2[2] - b2[0]))
+    min_h = max(1, min(b1[3] - b1[1], b2[3] - b2[1]))
+
+    # Direct 2D overlap (e.g. from quadrant overlap margin >= 10%)
+    if x_overlap > 0 and y_overlap > 0:
+        if (x_overlap / min_w >= seam_overlap_threshold) or (y_overlap / min_h >= seam_overlap_threshold):
+            return True
+
+    # Vertical seam: touching along X within tolerance, overlapping along Y >= 10%
+    touch_vert = (abs(b1[2] - b2[0]) <= tolerance_px or abs(b2[2] - b1[0]) <= tolerance_px)
+    if touch_vert and (y_overlap / min_h >= seam_overlap_threshold):
+        return True
+
+    # Horizontal seam: touching along Y within tolerance, overlapping along X >= 10%
+    touch_horiz = (abs(b1[3] - b2[1]) <= tolerance_px or abs(b2[3] - b1[1]) <= tolerance_px)
+    if touch_horiz and (x_overlap / min_w >= seam_overlap_threshold):
+        return True
+
+    return False
+
+
+def perform_atomic_sibling_refusion(
+    patches: List[BoundedPatch],
+    seam_overlap_threshold: float = 0.10,
+    tolerance_px: int = 2
+) -> List[BoundedPatch]:
+    """
+    Pillar 1: Atomic Sibling Re-Fusion (Healing Severed Macro-Objects).
+    Scans candidate patches sharing parent_id and seam boundary (d_edge = 0, >= 10% overlap)
+    and fuses them into solid, un-split atomic bounding boxes.
+    """
+    if len(patches) <= 1:
+        return patches
+
+    n = len(patches)
+    adj: Dict[int, List[int]] = {i: [] for i in range(n)}
+    for i in range(n):
+        for j in range(i + 1, n):
+            if are_seam_adjacent_siblings(patches[i], patches[j], seam_overlap_threshold, tolerance_px):
+                adj[i].append(j)
+                adj[j].append(i)
+
+    visited = [False] * n
+    fused_patches: List[BoundedPatch] = []
+
+    for i in range(n):
+        if visited[i]:
+            continue
+        comp = []
+        queue = [i]
+        visited[i] = True
+        while queue:
+            curr = queue.pop(0)
+            comp.append(curr)
+            for neighbor in adj[curr]:
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    queue.append(neighbor)
+
+        if len(comp) == 1:
+            fused_patches.append(patches[comp[0]])
+        else:
+            comp_patches = [patches[idx] for idx in comp]
+            fbx1 = min(p.box[0] for p in comp_patches)
+            fby1 = min(p.box[1] for p in comp_patches)
+            fbx2 = max(p.box[2] for p in comp_patches)
+            fby2 = max(p.box[3] for p in comp_patches)
+            fused_box = (fbx1, fby1, fbx2, fby2)
+            max_score = max((p.confidence_score if p.confidence_score is not None else 1.0) for p in comp_patches)
+            max_siglip = max((p.siglip_score if p.siglip_score is not None else 0.0) for p in comp_patches)
+            max_entropy = max(p.entropy for p in comp_patches)
+
+            constituent_boxes = []
+            for p in comp_patches:
+                if hasattr(p, "constituent_boxes") and p.constituent_boxes:
+                    constituent_boxes.extend(p.constituent_boxes)
+                else:
+                    constituent_boxes.append(p.box)
+
+            fused_p = BoundedPatch(
+                img_idx=comp_patches[0].img_idx,
+                box=fused_box,
+                feature_vector=comp_patches[0].feature_vector,
+                entropy=max_entropy,
+                confidence_score=max_score,
+                siglip_score=max_siglip,
+                parent_id=comp_patches[0].parent_id,
+                level=min(p.level for p in comp_patches)
+            )
+            setattr(fused_p, "constituent_boxes", constituent_boxes)
+            setattr(fused_p, "is_fused", True)
+            fused_patches.append(fused_p)
+
+    return fused_patches
+
+
+def partition_continuous_enclosure_subcanvases(
+    candidates: List[BoundedPatch],
+    image_shape: Tuple[int, int],
+    max_dim: int = 1024
+) -> List[List[BoundedPatch]]:
+    """
+    Pillar 2 & 3: Continuous Enclosure Windowing & Sub-Canvas Dispatch.
+    Greedily aggregates candidates into active sub-canvas clusters if their
+    bounding union span max(Delta X, Delta Y) <= max_dim (1024px).
+    Dispatches to next sub-canvas whenever the span exceeds max_dim.
+    """
+    if not candidates:
+        return []
+    if len(candidates) == 1:
+        return [candidates]
+
+    def _sort_key(p: BoundedPatch):
+        sc = p.confidence_score if p.confidence_score is not None else 0.0
+        sg = p.siglip_score if p.siglip_score is not None else 0.0
+        area = (p.box[2] - p.box[0]) * (p.box[3] - p.box[1])
+        return (sc, sg, area)
+
+    sorted_cands = sorted(candidates, key=_sort_key, reverse=True)
+
+    clusters: List[List[BoundedPatch]] = []
+    current_cluster: List[BoundedPatch] = []
+
+    for cand in sorted_cands:
+        if not current_cluster:
+            current_cluster.append(cand)
+            continue
+
+        test_members = current_cluster + [cand]
+        ux1 = min(p.box[0] for p in test_members)
+        uy1 = min(p.box[1] for p in test_members)
+        ux2 = max(p.box[2] for p in test_members)
+        uy2 = max(p.box[3] for p in test_members)
+        span_x = ux2 - ux1
+        span_y = uy2 - uy1
+
+        if span_x <= max_dim and span_y <= max_dim:
+            current_cluster.append(cand)
+        else:
+            clusters.append(current_cluster)
+            current_cluster = [cand]
+
+    if current_cluster:
+        clusters.append(current_cluster)
+
+    return clusters
+
+
 def run_resolution_screening(
     remaining_patches: List[BoundedPatch],
     candidate_images: List[Image.Image],
@@ -832,115 +1001,196 @@ def run_resolution_screening(
     ]
 
     unified_pool: List[CandidateCrop] = []
+    stage5_mode_label = "layout"
 
     if use_layout:
-        if verbose:
-            print(f"[Stage 5][Layout Mode] Cross-object question (relational=True): Synthesizing Tri-Pillar spatial canvas layout.")
-        # Group patches by source candidate image
-        by_img: Dict[int, List[BoundedPatch]] = {}
-        for p in effective_patches:
-            by_img.setdefault(p.img_idx, []).append(p)
+        enable_cont_enc = getattr(config, "enable_continuous_enclosure_subcanvas", True) if config else True
+        if enable_cont_enc:
+            stage5_mode_label = "continuous_enclosure"
+            if verbose:
+                print(f"[Stage 5][Continuous Enclosure Sub-Canvas] Cross-object question (relational=True): Synthesizing Continuous Enclosure Sub-Canvases (ceiling <= {max_canvas_dim}px).")
+            by_img: Dict[int, List[BoundedPatch]] = {}
+            for p in effective_patches:
+                by_img.setdefault(p.img_idx, []).append(p)
 
-        for img_idx, img_patches in by_img.items():
-            img_pil = candidate_images[img_idx]
-            # Pillar 1: Proximity-Graph Joint Interaction Crop (PG-JIC)
-            is_all_one_jic = False
-            if enable_jic and len(img_patches) > 1:
-                img_patches, is_all_one_jic = extract_joint_interaction_crops(
-                    img_patches,
-                    img_pil.size,
-                    prox_threshold=jic_prox,
-                    max_dim=jic_max_dim
+            for img_idx, img_patches in by_img.items():
+                img_pil = candidate_images[img_idx]
+                img_w, img_h = img_pil.size
+
+                # Step 1: Atomic Sibling Re-Fusion
+                seam_thresh = getattr(config, "seam_overlap_threshold", 0.10) if config else 0.10
+                atomic_candidates = perform_atomic_sibling_refusion(
+                    img_patches, seam_overlap_threshold=seam_thresh
                 )
 
-            if is_all_one_jic and len(img_patches) == 1:
-                p = img_patches[0]
-                box_ints = tuple(int(round(float(c))) for c in p.box)
-                crop = img_pil.crop(box_ints)
-                unified_pool.append(
-                    CandidateCrop(
-                        img_idx=img_idx,
-                        box=box_ints,
-                        crop_image=crop,
-                        score=p.confidence_score if p.confidence_score is not None else 1.0,
-                        source_branch="JointInteractionCrop",
-                        is_compressed_canvas=False,
-                        remapped_boxes=[(0, 0, crop.width, crop.height)],
-                        original_boxes=[box_ints]
-                    )
+                # Step 2 & 3: Continuous Enclosure Windowing & Sub-Canvas Dispatch
+                clusters = partition_continuous_enclosure_subcanvases(
+                    atomic_candidates, (img_w, img_h), max_dim=max_canvas_dim
                 )
-                if verbose:
-                    print(
-                        f"[Stage 5][PG-JIC Passthrough] Image {img_idx}: Proximate components merged into single "
-                        f"{crop.width}x{crop.height} un-split crop (bypassed canvas synthesis, 0px seam cuts)."
+
+                # Step 4: Extract Continuous Photographic Crops directly from source image
+                for cl in clusters:
+                    ux1 = min(p.box[0] for p in cl)
+                    uy1 = min(p.box[1] for p in cl)
+                    ux2 = max(p.box[2] for p in cl)
+                    uy2 = max(p.box[3] for p in cl)
+
+                    ux1 = max(0, min(img_w, ux1))
+                    uy1 = max(0, min(img_h, uy1))
+                    ux2 = max(0, min(img_w, ux2))
+                    uy2 = max(0, min(img_h, uy2))
+
+                    union_box = (ux1, uy1, ux2, uy2)
+                    crop_img = img_pil.crop(union_box)
+
+                    all_orig_boxes: List[Tuple[int, int, int, int]] = []
+                    for p in cl:
+                        if hasattr(p, "constituent_boxes") and p.constituent_boxes:
+                            all_orig_boxes.extend(p.constituent_boxes)
+                        else:
+                            all_orig_boxes.append(p.box)
+
+                    remapped = [
+                        (
+                            max(0, b[0] - ux1),
+                            max(0, b[1] - uy1),
+                            min(crop_img.width, b[2] - ux1),
+                            min(crop_img.height, b[3] - uy1)
+                        )
+                        for b in all_orig_boxes
+                    ]
+                    max_sc = max((p.confidence_score if p.confidence_score is not None else 1.0) for p in cl)
+
+                    unified_pool.append(
+                        CandidateCrop(
+                            img_idx=img_idx,
+                            box=union_box,
+                            crop_image=crop_img,
+                            score=max_sc,
+                            source_branch="ContinuousEnclosure",
+                            is_compressed_canvas=True,
+                            remapped_boxes=remapped,
+                            original_boxes=all_orig_boxes
+                        )
                     )
-            elif len(img_patches) == 1:
-                p = img_patches[0]
-                box_ints = tuple(int(round(float(c))) for c in p.box)
-                crop = img_pil.crop(box_ints)
-                if crop.width >= 4 and crop.height >= 4:
+
+            unified_pool.sort(key=lambda c: c.score, reverse=True)
+            max_subcanvases = getattr(config, "max_sub_canvases", 4) if config else 4
+            unified_pool = unified_pool[:max_subcanvases]
+        else:
+            if verbose:
+                print(f"[Stage 5][Layout Mode] Cross-object question (relational=True): Synthesizing Tri-Pillar spatial canvas layout.")
+            # Group patches by source candidate image
+            by_img: Dict[int, List[BoundedPatch]] = {}
+            for p in effective_patches:
+                by_img.setdefault(p.img_idx, []).append(p)
+
+            for img_idx, img_patches in by_img.items():
+                img_pil = candidate_images[img_idx]
+                # Pillar 1: Proximity-Graph Joint Interaction Crop (PG-JIC)
+                is_all_one_jic = False
+                if enable_jic and len(img_patches) > 1:
+                    img_patches, is_all_one_jic = extract_joint_interaction_crops(
+                        img_patches,
+                        img_pil.size,
+                        prox_threshold=jic_prox,
+                        max_dim=jic_max_dim
+                    )
+
+                if is_all_one_jic and len(img_patches) == 1:
+                    p = img_patches[0]
+                    box_ints = tuple(int(round(float(c))) for c in p.box)
+                    crop = img_pil.crop(box_ints)
                     unified_pool.append(
                         CandidateCrop(
                             img_idx=img_idx,
                             box=box_ints,
                             crop_image=crop,
                             score=p.confidence_score if p.confidence_score is not None else 1.0,
-                            source_branch="Direct",
+                            source_branch="JointInteractionCrop",
                             is_compressed_canvas=False,
                             remapped_boxes=[(0, 0, crop.width, crop.height)],
                             original_boxes=[box_ints]
                         )
                     )
-            else:
-                # Pillars 2 & 3: Water-Filling Resolution Allocation & Dynamic Gutters
-                boxes = [tuple(int(round(float(c))) for c in p.box) for p in img_patches]
-                box_roles = [getattr(p, "semantic_role", None) for p in img_patches]
-                canvas_img, remapped_boxes = create_spatial_compressed_canvas(
-                    img_pil,
-                    boxes,
-                    gutter_px=gutter_px,
-                    box_roles=box_roles,
-                    max_canvas_dim=max_canvas_dim,
-                    enable_dynamic_gutters=enable_dynamic_gutters,
-                    continuity_thresh=continuity_thresh,
-                    enable_water_filling=enable_water_filling,
-                    target_max_native_dim=target_max_native_dim
-                )
-                union_box = (
-                    min(b[0] for b in boxes),
-                    min(b[1] for b in boxes),
-                    max(b[2] for b in boxes),
-                    max(b[3] for b in boxes)
-                )
-                max_score = max(
-                    (p.confidence_score if p.confidence_score is not None else 1.0)
-                    for p in img_patches
-                )
-                unified_pool.append(
-                    CandidateCrop(
-                        img_idx=img_idx,
-                        box=union_box,
-                        crop_image=canvas_img,
-                        score=max_score,
-                        source_branch="SpatialCompressedCanvas",
-                        is_compressed_canvas=True,
-                        remapped_boxes=remapped_boxes,
-                        original_boxes=boxes
+                    if verbose:
+                        print(
+                            f"[Stage 5][PG-JIC Passthrough] Image {img_idx}: Proximate components merged into single "
+                            f"{crop.width}x{crop.height} un-split crop (bypassed canvas synthesis, 0px seam cuts)."
+                        )
+                elif len(img_patches) == 1:
+                    p = img_patches[0]
+                    box_ints = tuple(int(round(float(c))) for c in p.box)
+                    crop = img_pil.crop(box_ints)
+                    if crop.width >= 4 and crop.height >= 4:
+                        unified_pool.append(
+                            CandidateCrop(
+                                img_idx=img_idx,
+                                box=box_ints,
+                                crop_image=crop,
+                                score=p.confidence_score if p.confidence_score is not None else 1.0,
+                                source_branch="Direct",
+                                is_compressed_canvas=False,
+                                remapped_boxes=[(0, 0, crop.width, crop.height)],
+                                original_boxes=[box_ints]
+                            )
+                        )
+                else:
+                    # Pillars 2 & 3: Water-Filling Resolution Allocation & Dynamic Gutters
+                    boxes = [tuple(int(round(float(c))) for c in p.box) for p in img_patches]
+                    box_roles = [getattr(p, "semantic_role", None) for p in img_patches]
+                    canvas_img, remapped_boxes = create_spatial_compressed_canvas(
+                        img_pil,
+                        boxes,
+                        gutter_px=gutter_px,
+                        box_roles=box_roles,
+                        max_canvas_dim=max_canvas_dim,
+                        enable_dynamic_gutters=enable_dynamic_gutters,
+                        continuity_thresh=continuity_thresh,
+                        enable_water_filling=enable_water_filling,
+                        target_max_native_dim=target_max_native_dim
                     )
-                )
-                if verbose:
-                    print(
-                        f"[Stage 5][Tri-Pillar Canvas] Image {img_idx}: Compressed {len(img_patches)} patches into "
-                        f"{canvas_img.size[0]}x{canvas_img.size[1]} canvas (WF-ARA & Dynamic Gutters, max_dim<={max_canvas_dim})."
+                    union_box = (
+                        min(b[0] for b in boxes),
+                        min(b[1] for b in boxes),
+                        max(b[2] for b in boxes),
+                        max(b[3] for b in boxes)
                     )
+                    max_score = max(
+                        (p.confidence_score if p.confidence_score is not None else 1.0)
+                        for p in img_patches
+                    )
+                    unified_pool.append(
+                        CandidateCrop(
+                            img_idx=img_idx,
+                            box=union_box,
+                            crop_image=canvas_img,
+                            score=max_score,
+                            source_branch="SpatialCompressedCanvas",
+                            is_compressed_canvas=True,
+                            remapped_boxes=remapped_boxes,
+                            original_boxes=boxes
+                        )
+                    )
+                    if verbose:
+                        print(
+                            f"[Stage 5][Tri-Pillar Canvas] Image {img_idx}: Compressed {len(img_patches)} patches into "
+                            f"{canvas_img.size[0]}x{canvas_img.size[1]} canvas (WF-ARA & Dynamic Gutters, max_dim<={max_canvas_dim})."
+                        )
     else:
-        # Sort effective_patches by confidence score descending
+        stage5_mode_label = "crops_only"
+        seam_thresh = getattr(config, "seam_overlap_threshold", 0.10) if config else 0.10
+        healed_patches = perform_atomic_sibling_refusion(
+            effective_patches, seam_overlap_threshold=seam_thresh
+        )
+
+        # Sort effective_patches by confidence score, SigLIP alignment, and area (entropy purged)
         sorted_patches = sorted(
-            effective_patches,
+            healed_patches,
             key=lambda p: (
                 p.confidence_score if p.confidence_score is not None else 0.0,
                 getattr(p, "siglip_score", 0.0) if getattr(p, "siglip_score", None) is not None else 0.0,
-                getattr(p, "entropy", 0.0)
+                (p.box[2] - p.box[0]) * (p.box[3] - p.box[1])
             ),
             reverse=True
         )
@@ -962,6 +1212,7 @@ def run_resolution_screening(
             if cw < 4 or ch < 4:
                 continue
 
+            orig_boxes = getattr(patch, "constituent_boxes", [box_ints]) or [box_ints]
             unified_pool.append(
                 CandidateCrop(
                     img_idx=patch.img_idx,
@@ -971,7 +1222,7 @@ def run_resolution_screening(
                     source_branch="Direct",
                     is_compressed_canvas=False,
                     remapped_boxes=[(0, 0, crop.width, crop.height)],
-                    original_boxes=[box_ints]
+                    original_boxes=orig_boxes
                 )
             )
         if verbose:
@@ -982,7 +1233,7 @@ def run_resolution_screening(
         pre_aggregation_boxes=pre_aggregation_boxes,
         is_cross_object=bool(is_relational),
         is_relational=bool(is_relational),
-        stage5_mode="layout" if use_layout else "crops_only"
+        stage5_mode=stage5_mode_label
     )
 
     if verbose:

@@ -50,24 +50,40 @@ def group_patches_by_cosine_similarity(
 
     # 3. Agglomerative Clustering with distance threshold
     dist_threshold = max(0.01, 1.0 - sim_threshold)
-    try:
-        clustering = AgglomerativeClustering(
-            n_clusters=None,
-            distance_threshold=dist_threshold,
-            metric="precomputed",
-            linkage="average"
-        )
-        labels = clustering.fit_predict(dist_mat)
-    except Exception:
-        # Fallback each patch as its own group
-        groups_list = [[i] for i in range(n_patches)]
-        return (groups_list, sim_mat) if return_sim_mat else groups_list
+    if AgglomerativeClustering is not None:
+        try:
+            clustering = AgglomerativeClustering(
+                n_clusters=None,
+                distance_threshold=dist_threshold,
+                metric="precomputed",
+                linkage="average"
+            )
+            labels = clustering.fit_predict(dist_mat)
+            groups: Dict[int, List[int]] = {}
+            for idx, lbl in enumerate(labels):
+                groups.setdefault(lbl, []).append(idx)
+            groups_list = list(groups.values())
+            return (groups_list, sim_mat) if return_sim_mat else groups_list
+        except Exception:
+            pass
 
-    groups: Dict[int, List[int]] = {}
-    for idx, lbl in enumerate(labels):
-        groups.setdefault(lbl, []).append(idx)
-
-    groups_list = list(groups.values())
+    # Native graph-connected components clustering (stdlib + numpy)
+    visited = [False] * n_patches
+    groups_list: List[List[int]] = []
+    for i in range(n_patches):
+        if visited[i]:
+            continue
+        cluster = []
+        queue = [i]
+        visited[i] = True
+        while queue:
+            curr = queue.pop(0)
+            cluster.append(curr)
+            for j in range(n_patches):
+                if not visited[j] and sim_mat[curr, j] >= sim_threshold:
+                    visited[j] = True
+                    queue.append(j)
+        groups_list.append(cluster)
     return (groups_list, sim_mat) if return_sim_mat else groups_list
 
 
@@ -342,7 +358,7 @@ def run_feature_grouping_and_gating(
                 key=lambda i: (
                     1 if i in group_rep_set else 0,
                     bounded_patches[i].siglip_score if bounded_patches[i].siglip_score is not None else 0.0,
-                    bounded_patches[i].entropy
+                    (bounded_patches[i].box[2] - bounded_patches[i].box[0]) * (bounded_patches[i].box[3] - bounded_patches[i].box[1])
                 ),
                 reverse=True
             )
@@ -694,10 +710,53 @@ def run_feature_grouping_and_gating(
             if getattr(config, "enable_group_retention_caps", True):
                 if is_detection:
                     k_det = getattr(config, "max_patches_per_detected_group", 4)
-                    det_patch_indices = [d["patch_idx"] for d in group_detected_objects if d.get("patch_idx") in member_indices]
-                    other_indices = [i for i in member_indices if i not in det_patch_indices]
-                    other_sorted = sorted(other_indices, key=lambda i: bounded_patches[i].entropy, reverse=True)
-                    chosen_indices = (det_patch_indices + other_sorted)[:k_det]
+                    detected_members = []
+                    non_detected_members = []
+                    for i in member_indices:
+                        p = bounded_patches[i]
+                        cur_dets = [d for d in group_detected_objects if d.get("patch_idx") == i]
+                        if not cur_dets:
+                            cur_dets = patch_detections.get(i, [])
+                        if cur_dets:
+                            max_area = 0
+                            max_det_score = 0.0
+                            for d in cur_dets:
+                                dbox = d.get("local_box") or d.get("box") or d.get("global_box")
+                                if dbox and len(dbox) == 4:
+                                    dw = max(0, dbox[2] - dbox[0])
+                                    dh = max(0, dbox[3] - dbox[1])
+                                    darea = dw * dh
+                                else:
+                                    darea = 0
+                                if darea > max_area:
+                                    max_area = darea
+                                sc = float(d.get("score", 0.0))
+                                if sc > max_det_score:
+                                    max_det_score = sc
+                            siglip = float(p.siglip_score) if p.siglip_score is not None else 0.0
+                            detected_members.append((i, max_area, max_det_score, siglip))
+                        else:
+                            p_area = (p.box[2] - p.box[0]) * (p.box[3] - p.box[1])
+                            siglip = float(p.siglip_score) if p.siglip_score is not None else 0.0
+                            non_detected_members.append((i, siglip, p_area))
+
+                    # 1. Primary ranker: max detected bbox area desc, then det score desc, then siglip desc
+                    detected_sorted = [
+                        item[0] for item in sorted(
+                            detected_members,
+                            key=lambda x: (x[1], x[2], x[3]),
+                            reverse=True
+                        )
+                    ]
+                    # 2. Non-detection context fill: siglip_score desc, then larger patch area desc (no entropy!)
+                    non_detected_sorted = [
+                        item[0] for item in sorted(
+                            non_detected_members,
+                            key=lambda x: (x[1], x[2]),
+                            reverse=True
+                        )
+                    ]
+                    chosen_indices = (detected_sorted + non_detected_sorted)[:k_det]
                 else:
                     k_lat = getattr(config, "max_patches_per_latent_group", 1)
                     if rep_idx in member_indices:
@@ -739,12 +798,15 @@ def run_feature_grouping_and_gating(
             if config.verbose:
                 print(f"[Stage 4] Group {g_idx} ({len(member_indices)} patches): No target & latent < threshold -> [PRUNED] (Saved {len(member_indices)} downstream VLM calls).")
 
-    # Always rank retained patches by detection confidence, SigLIP semantic similarity, and entropy
+    # Rank retained patches by detection confidence, SigLIP semantic similarity, and inverse area (deeper zoom saccades)
+    def _patch_inv_area(p: BoundedPatch) -> float:
+        pw = max(1, p.box[2] - p.box[0])
+        ph = max(1, p.box[3] - p.box[1])
+        return 1.0 / float(pw * ph)
+
     if remaining_patches:
         metric = getattr(config, "retention_ranking_metric", "confidence_hybrid")
-        if metric == "entropy":
-            sorted_patches = sorted(remaining_patches, key=lambda p: p.entropy, reverse=True)
-        elif metric == "detection_first":
+        if metric == "detection_first":
             sorted_patches = sorted(remaining_patches, key=lambda p: (p.confidence_score or 0.0), reverse=True)
         else:  # "confidence_hybrid"
             sorted_patches = sorted(
@@ -752,27 +814,57 @@ def run_feature_grouping_and_gating(
                 key=lambda p: (
                     (p.confidence_score or 0.0),
                     (p.siglip_score if p.siglip_score is not None else 0.0),
-                    p.entropy
+                    _patch_inv_area(p)
                 ),
                 reverse=True
             )
 
         if getattr(config, "enable_retention_hard_cap", True) and len(sorted_patches) > config.max_retained_patches:
             k_cap = config.max_retained_patches
+            # Dynamic elasticity for tied cutoff candidates (count(identical) - 1)
+            cutoff_p = sorted_patches[k_cap - 1]
+            cutoff_profile = (
+                round(float(cutoff_p.confidence_score or 0.0), 4),
+                round(float(cutoff_p.siglip_score or 0.0), 4)
+            )
+            while k_cap < len(sorted_patches):
+                next_p = sorted_patches[k_cap]
+                next_profile = (
+                    round(float(next_p.confidence_score or 0.0), 4),
+                    round(float(next_p.siglip_score or 0.0), 4)
+                )
+                if next_profile == cutoff_profile:
+                    k_cap += 1
+                else:
+                    break
+
+            if config.verbose and k_cap > config.max_retained_patches:
+                delta_k = k_cap - config.max_retained_patches
+                print(f"[Stage 4][Dynamic Elasticity] Cutoff profile {cutoff_profile} tied: dynamically expanded retention budget by +{delta_k} (retaining {k_cap} patches).")
+
             pruned_by_cap = len(sorted_patches) - k_cap
-            if config.verbose:
-                print(f"[Stage 4][Budget Guard] Global retention hard cap triggered: reducing {len(sorted_patches)} retained patches to top-{k_cap} (metric: {metric}, pruned {pruned_by_cap} excess patches).")
+            if config.verbose and pruned_by_cap > 0:
+                print(f"[Stage 4][Budget Guard] Global retention cap applied: keeping {k_cap} patches (pruned {pruned_by_cap} excess patches).")
             remaining_patches = sorted_patches[:k_cap]
         else:
             remaining_patches = sorted_patches
 
-    # Safety fallback: if all groups got pruned, retain top highest entropy patches
+    # Safety fallback: if all groups got pruned, retain top patches by SigLIP score and larger area (entropy purged)
     if not remaining_patches and bounded_patches:
-        sorted_by_entropy = sorted(bounded_patches, key=lambda p: p.entropy, reverse=True)
-        fallback_k = max(1, min(len(bounded_patches) // 5, getattr(config, "max_retained_patches", 16)))
-        remaining_patches = sorted_by_entropy[:fallback_k]
+        def _patch_area(p: BoundedPatch) -> int:
+            return max(1, (p.box[2] - p.box[0]) * (p.box[3] - p.box[1]))
+        sorted_by_relevance = sorted(
+            bounded_patches,
+            key=lambda p: (
+                p.siglip_score if p.siglip_score is not None else 0.0,
+                _patch_area(p)
+            ),
+            reverse=True
+        )
+        fallback_k = max(1, min(len(bounded_patches), getattr(config, "max_retained_patches", 16)))
+        remaining_patches = sorted_by_relevance[:fallback_k]
         if config.verbose:
-            print(f"[Stage 4][Safety Fallback Trigger] All {len(groups)} groups were pruned! Fallback activated: keeping top {fallback_k} highest-entropy patches.")
+            print(f"[Stage 4][Safety Fallback Trigger] All {len(groups)} groups were pruned! Fallback activated: keeping top {fallback_k} most relevant patches (SigLIP/area, entropy purged).")
     elif config.verbose:
         pruned_count = len(bounded_patches) - len(remaining_patches)
         prune_pct = (pruned_count / max(1, len(bounded_patches))) * 100

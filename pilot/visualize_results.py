@@ -315,7 +315,7 @@ def is_sample_cross_object(rec: Dict[str, Any]) -> bool:
     if "is_relational" in rec:
         return bool(rec["is_relational"])
     s5_mode = rec.get("stage5_mode")
-    if s5_mode == "layout":
+    if s5_mode in ["layout", "continuous_enclosure"]:
         return True
     elif s5_mode == "crops_only":
         return False
@@ -327,7 +327,7 @@ def is_sample_cross_object(rec: Dict[str, Any]) -> bool:
             return bool(telemetry["is_cross_object"])
         if "is_relational" in telemetry:
             return bool(telemetry["is_relational"])
-        if telemetry.get("stage5_mode") == "layout":
+        if telemetry.get("stage5_mode") in ["layout", "continuous_enclosure"]:
             return True
         elif telemetry.get("stage5_mode") == "crops_only":
             return False

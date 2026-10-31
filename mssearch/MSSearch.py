@@ -468,6 +468,10 @@ class MultiSourceSearchEngine:
 
                         if local_child_patches:
                             replaced_parent_boxes.add((img_idx, parent_box))
+                            child_crops = []
+                            child_patch_objs = []
+                            tau_det = getattr(sub_config, "detection_score_threshold", 0.30)
+
                             for cp in local_child_patches:
                                 lx1, ly1, lx2, ly2 = cp.box
                                 child_global_box = (
@@ -476,17 +480,89 @@ class MultiSourceSearchEngine:
                                     parent_box[0] + lx2,
                                     parent_box[1] + ly2
                                 )
-                                child_bp = BoundedPatch(
-                                    img_idx=img_idx,
-                                    box=child_global_box,
-                                    feature_vector=cp.feature_vector,
-                                    entropy=cp.entropy,
-                                    confidence_score=max(1.5, (g.get("vlm_latent_score") or 0.0) + 1.0),
-                                    siglip_score=cp.siglip_score
-                                )
-                                setattr(child_bp, "is_fine_grain", True)
-                                setattr(child_bp, "is_recursive_child", True)
-                                repartitioned_patches.append(child_bp)
+                                c_crop = candidate_images[img_idx].crop(child_global_box)
+                                cw, ch = c_crop.size
+                                if cw >= 8 and ch >= 8:
+                                    child_crops.append(c_crop)
+                                    child_patch_objs.append((cp, child_global_box))
+
+                            # Evaluate child crops with SAM3 open-vocabulary detection
+                            surviving_children: List[BoundedPatch] = []
+                            if self.sam_model is not None and active_objects and child_crops:
+                                sam3_bs = getattr(sub_config, "sam3_batch_size", 4)
+                                if hasattr(self.sam_model, "batch_inference_multi_images") and sam3_bs > 1:
+                                    child_outputs = self.sam_model.batch_inference_multi_images(
+                                        child_crops, list(active_objects), batch_size=sam3_bs
+                                    )
+                                else:
+                                    child_outputs = []
+                                    for c_img in child_crops:
+                                        try:
+                                            import torch
+                                            if hasattr(torch, "inference_mode"):
+                                                with torch.inference_mode():
+                                                    child_outputs.append(self.sam_model.batch_inference(c_img, list(active_objects)))
+                                            else:
+                                                child_outputs.append(self.sam_model.batch_inference(c_img, list(active_objects)))
+                                        except Exception:
+                                            child_outputs.append((None, {}, []))
+
+                                for (cp, child_global_box), (_, processed_results, text_id) in zip(child_patch_objs, child_outputs):
+                                    child_dets = []
+                                    for tid in text_id:
+                                        obj_idx = (int(tid) - 1) if str(tid).isdigit() else 0
+                                        label_str = active_objects[obj_idx] if 0 <= obj_idx < len(active_objects) else str(tid)
+                                        res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
+                                        boxes = res.get('boxes', [])
+                                        scores = res.get('scores', [])
+                                        for b, s in zip(boxes, scores):
+                                            s_float = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
+                                            b_clean = [int(round(float(c))) for c in (b.tolist() if hasattr(b, 'tolist') else b)]
+                                            if s_float >= tau_det:
+                                                child_dets.append({
+                                                    "label": label_str,
+                                                    "score": round(s_float, 3),
+                                                    "local_box": b_clean,
+                                                    "global_box": [b_clean[0] + child_global_box[0], b_clean[1] + child_global_box[1],
+                                                                   b_clean[2] + child_global_box[0], b_clean[3] + child_global_box[1]]
+                                                })
+                                    if child_dets:
+                                        best_det_score = max(d["score"] for d in child_dets)
+                                        child_bp = BoundedPatch(
+                                            img_idx=img_idx,
+                                            box=child_global_box,
+                                            feature_vector=cp.feature_vector,
+                                            entropy=cp.entropy,
+                                            confidence_score=float(best_det_score), # Unboosted continuous score in [0.0, 1.0]
+                                            siglip_score=cp.siglip_score,
+                                            parent_id=parent_box,
+                                            level=getattr(cp, "level", 1) + 1
+                                        )
+                                        setattr(child_bp, "is_fine_grain", True)
+                                        setattr(child_bp, "is_recursive_child", True)
+                                        setattr(child_bp, "child_detections", child_dets)
+                                        surviving_children.append(child_bp)
+                            elif child_patch_objs:
+                                # Fallback when SAM3 is not loaded (e.g. testing)
+                                for cp, child_global_box in child_patch_objs:
+                                    child_bp = BoundedPatch(
+                                        img_idx=img_idx,
+                                        box=child_global_box,
+                                        feature_vector=cp.feature_vector,
+                                        entropy=cp.entropy,
+                                        confidence_score=float(min(1.0, g.get("vlm_latent_score") or 0.5)),
+                                        siglip_score=cp.siglip_score,
+                                        parent_id=parent_box,
+                                        level=getattr(cp, "level", 1) + 1
+                                    )
+                                    setattr(child_bp, "is_fine_grain", True)
+                                    setattr(child_bp, "is_recursive_child", True)
+                                    surviving_children.append(child_bp)
+
+                            if surviving_children:
+                                repartitioned_patches.extend(surviving_children)
+                            elif is_verbose:
+                                print(f"[Stage 4 -> Stage 3 Feedback] Re-partitioned parent {parent_box}: 0 detections above tau_det={tau_det}. Parent and children permanently pruned.")
 
                 if repartitioned_patches:
                     remaining_patches = [
@@ -494,7 +570,14 @@ class MultiSourceSearchEngine:
                         if (p.img_idx, tuple(int(round(float(c))) for c in p.box)) not in replaced_parent_boxes
                     ] + repartitioned_patches
                     if not is_quiet:
-                        print(f"[Stage 4 -> Stage 3 Feedback] Re-partitioned {len(replaced_parent_boxes)} high-latent patches into {len(repartitioned_patches)} fine sub-patches at 100% native resolution.")
+                        print(f"[Stage 4 -> Stage 3 Feedback] Re-partitioned {len(replaced_parent_boxes)} high-latent patches into {len(repartitioned_patches)} verified fine sub-patches at 100% native resolution.")
+                elif replaced_parent_boxes:
+                    remaining_patches = [
+                        p for p in remaining_patches
+                        if (p.img_idx, tuple(int(round(float(c))) for c in p.box)) not in replaced_parent_boxes
+                    ]
+                    if not is_quiet:
+                        print(f"[Stage 4 -> Stage 3 Feedback] Pruned {len(replaced_parent_boxes)} high-latent parents with 0 confirmed child detections.")
 
         # ---------------------------------------------------------------------
         # Stage 5: Resolution-Aware Screening & Spatial Optimization

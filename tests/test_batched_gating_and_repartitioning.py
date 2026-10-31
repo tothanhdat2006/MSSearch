@@ -246,7 +246,8 @@ class TestRelationalLayoutConditioning(unittest.TestCase):
         cfg.enable_spatial_compressed_canvas = True
         cfg.spatial_canvas_relational_only = True
 
-        # Cross object question: relational = True
+        # Default: Continuous Enclosure Sub-Canvas partitioning
+        # Distant patches (span 1400px > 1024px) are dispatched into 2 bounded sub-canvases
         pool = run_resolution_screening(
             remaining_patches=self.patches,
             candidate_images=[self.dummy_img],
@@ -256,13 +257,45 @@ class TestRelationalLayoutConditioning(unittest.TestCase):
             is_relational=True
         )
 
-        # Must synthesize 1 compressed spatial canvas preserving relative topology
-        self.assertEqual(len(pool), 1)
+        self.assertEqual(len(pool), 2)
         self.assertTrue(pool[0].is_compressed_canvas)
-        self.assertEqual(pool[0].source_branch, "SpatialCompressedCanvas")
+        self.assertEqual(pool[0].source_branch, "ContinuousEnclosure")
         self.assertTrue(pool.is_cross_object)
         self.assertTrue(pool.is_relational)
-        self.assertEqual(pool.stage5_mode, "layout")
+        self.assertEqual(pool.stage5_mode, "continuous_enclosure")
+
+        # Proximal patches (span <= 1024px) are packed into 1 continuous sub-canvas
+        prox_patches = [
+            BoundedPatch(img_idx=0, box=(100, 100, 300, 300), feature_vector=np.zeros(16), entropy=0.5, confidence_score=1.5),
+            BoundedPatch(img_idx=0, box=(400, 400, 600, 600), feature_vector=np.zeros(16), entropy=0.6, confidence_score=1.2),
+        ]
+        pool_prox = run_resolution_screening(
+            remaining_patches=prox_patches,
+            candidate_images=[self.dummy_img],
+            active_objects=["boat", "buoy"],
+            config=cfg,
+            question="What is the object to the left of the boat?",
+            is_relational=True
+        )
+        self.assertEqual(len(pool_prox), 1)
+        self.assertEqual(pool_prox[0].source_branch, "ContinuousEnclosure")
+
+        # Legacy fallback mode: Tri-Pillar layout engine
+        cfg_legacy = MSSearchConfig()
+        cfg_legacy.verbose = False
+        cfg_legacy.enable_continuous_enclosure_subcanvas = False
+        pool_legacy = run_resolution_screening(
+            remaining_patches=self.patches,
+            candidate_images=[self.dummy_img],
+            active_objects=["boat", "buoy"],
+            config=cfg_legacy,
+            question="What is the object to the left of the boat?",
+            is_relational=True
+        )
+        self.assertEqual(len(pool_legacy), 1)
+        self.assertTrue(pool_legacy[0].is_compressed_canvas)
+        self.assertEqual(pool_legacy[0].source_branch, "SpatialCompressedCanvas")
+        self.assertEqual(pool_legacy.stage5_mode, "layout")
 
     def test_is_relational_question_detection(self):
         from mssearch.stages.stage5_screening import is_relational_question, check_is_cross_object_llm
@@ -296,6 +329,7 @@ class TestRelationalLayoutConditioning(unittest.TestCase):
         self.assertTrue(is_sample_cross_object({"is_cross_object": True}))
         self.assertFalse(is_sample_cross_object({"is_cross_object": False}))
         self.assertTrue(is_sample_cross_object({"stage5_mode": "layout"}))
+        self.assertTrue(is_sample_cross_object({"stage5_mode": "continuous_enclosure"}))
         self.assertFalse(is_sample_cross_object({"stage5_mode": "crops_only"}))
 
         # Legacy questions without flags

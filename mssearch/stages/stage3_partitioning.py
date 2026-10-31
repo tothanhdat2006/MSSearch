@@ -49,6 +49,8 @@ class BoundedPatch:
     is_recursive_child: bool = False         # Flag indicating child patch from Stage 4 -> Stage 3 local re-partition
     matched_label: Optional[str] = None      # Target or anchor entity label matched during Stage 2/4
     semantic_role: Optional[str] = None      # "target" or "anchor" for Stage 5 asymmetric resolution allocation
+    parent_id: Optional[Tuple[int, int, int, int]] = None # Parent coordinates (x1, y1, x2, y2)
+    level: int = 0                          # Quadtree depth level (0 for root)
 
 
 def compute_spatial_entropy(
@@ -423,8 +425,10 @@ def partition_candidate_images(
         if target_img_indices is not None and img_idx not in target_img_indices:
             continue
         img_w, img_h = img_pil.size
-        # Queue of patches to evaluate: [((x1, y1, x2, y2), depth)]
-        work_queue: List[Tuple[Tuple[int, int, int, int], int]] = [((0, 0, img_w, img_h), 0)]
+        # Queue of patches to evaluate: [((x1, y1, x2, y2), depth, parent_box)]
+        work_queue: List[Tuple[Tuple[int, int, int, int], int, Optional[Tuple[int, int, int, int]]]] = [
+            ((0, 0, img_w, img_h), 0, None)
+        ]
 
         # Get cached feature map or default empty
         feat_map = stage2_feature_cache.get(img_idx, None)
@@ -440,7 +444,7 @@ def partition_candidate_images(
         discarded_candidates: List[Tuple[Tuple[int, int, int, int], float]] = []
 
         while work_queue:
-            box, depth = work_queue.pop(0)
+            box, depth, parent_box = work_queue.pop(0)
             box_ints = tuple(int(round(float(c))) for c in box)
             x1, y1, x2, y2 = box_ints
             pw, ph = x2 - x1, y2 - y1
@@ -573,10 +577,10 @@ def partition_candidate_images(
                     if config.verbose and depth <= 1:
                         print(f"[Stage 3][Routing] Patch {box_ints} (size {pw}x{ph}, depth={depth}) -> Direction-aware Split ({len(sub_boxes)} patches).")
 
-                # Push sub-boxes back to queue with incremented depth
+                # Push sub-boxes back to queue with incremented depth and current box as parent_id
                 for sb in sub_boxes:
                     sb_ints = tuple(int(round(float(c))) for c in sb)
-                    work_queue.append((sb_ints, depth + 1))
+                    work_queue.append((sb_ints, depth + 1, box_ints))
             else:
                 # Patch accepted as bounded leaf!
                 crop = img_pil.crop(box_ints)
@@ -596,7 +600,9 @@ def partition_candidate_images(
                         box=box_ints,
                         feature_vector=pooled_vec,
                         entropy=entropy,
-                        siglip_score=cached_siglip_score
+                        siglip_score=cached_siglip_score,
+                        parent_id=parent_box,
+                        level=depth
                     )
                 )
 
@@ -609,7 +615,9 @@ def partition_candidate_images(
                     img_idx=img_idx,
                     box=best_box,
                     feature_vector=pooled_vec,
-                    entropy=best_ent
+                    entropy=best_ent,
+                    parent_id=None,
+                    level=0
                 )
             )
             if config.verbose:

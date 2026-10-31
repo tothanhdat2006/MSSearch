@@ -96,5 +96,8 @@
     "enable_dynamic_gutters": true,
     "spatial_continuity_threshold_px": 2,
     "enable_water_filling_allocation": true,
-    "target_max_native_dim_px": 512
+    "target_max_native_dim_px": 512,
+    "enable_continuous_enclosure_subcanvas": true,
+    "max_sub_canvases": 4,
+    "seam_overlap_threshold": 0.1
 }

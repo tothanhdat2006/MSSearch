@@ -96,6 +96,9 @@ class MSSearchConfig:
     ios_containment_threshold: float = 0.95      # Intersection-over-Self (IoS) threshold for nested containment pruning
     enable_stage5_spatial_nms: bool = True       # Suppress duplicate/overlapping candidate crops on same image
     stage5_nms_iou_threshold: float = 0.60       # Spatial IoU threshold for candidate patch deduplication
+    enable_continuous_enclosure_subcanvas: bool = True # Group candidates into continuous un-sliced sub-canvases <= 1024px
+    max_sub_canvases: int = 4                    # Maximum number of sub-canvases to dispatch to Stage 6 (fits in single VLM batch)
+    seam_overlap_threshold: float = 0.10         # Minimum overlap ratio along quadtree seam to trigger atomic sibling re-fusion
     enable_spatial_compressed_canvas: bool = True # Excise empty rows/cols to form spatial compressed canvas for all samples
     spatial_compression_gutter_px: int = 28      # Visual separator gap (px) between non-contiguous compressed intervals
     spatial_canvas_relational_only: bool = True  # If True, synthesizes spatial compressed canvas layout ONLY for cross-object relational questions; uses individual crops for single-object questions
