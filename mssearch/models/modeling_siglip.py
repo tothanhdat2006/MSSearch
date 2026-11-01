@@ -135,6 +135,7 @@ class SigLIPScorer:
         else:
             text_features = self.model.get_text_features(text_inputs["input_ids"])
 
+        text_features = _extract_embedding_tensor(text_features)
         text_features = F.normalize(text_features.float(), dim=-1)
 
         # Extract image embeddings: [num_crops, D]
@@ -152,6 +153,7 @@ class SigLIPScorer:
         else:
             image_features = self.model.get_image_features(img_inputs["pixel_values"])
 
+        image_features = _extract_embedding_tensor(image_features)
         image_features = F.normalize(image_features.float(), dim=-1)
 
         # Pairwise global pooled cosine similarities: [num_crops, num_queries]
