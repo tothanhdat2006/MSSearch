@@ -22,10 +22,11 @@ import warnings
 import logging
 import contextlib
 
-# Enforce strict offline execution (local files only, no online downloads)
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["HF_DATASETS_OFFLINE"] = "1"
+# Optional strict offline execution (enabled via env MSS_OFFLINE=1 or CLI --offline)
+if os.environ.get("MSS_OFFLINE", "0") in ("1", "true", "True"):
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any, Set, Union
 
@@ -155,6 +156,28 @@ def discover_hrbench_dir(preferred_path: Optional[str]) -> Tuple[str, str]:
         )
 
     return resolved_base, annotation_path
+
+
+def resolve_checkpoint_path(
+    preferred_path: Optional[str],
+    search_paths: List[str],
+    file_pattern: Optional[str] = None,
+    dir_pattern: Optional[str] = None,
+) -> Optional[str]:
+    """Resolves local checkpoint from preferred path, known search paths, or /kaggle/input."""
+    if preferred_path and os.path.exists(preferred_path):
+        return preferred_path
+    for p in search_paths:
+        if p and os.path.exists(p):
+            return p
+    if os.path.exists("/kaggle/input"):
+        for root, dirs, files in os.walk("/kaggle/input"):
+            if file_pattern and file_pattern in files:
+                return os.path.join(root, file_pattern)
+            if dir_pattern and "config.json" in files:
+                if dir_pattern in root.lower():
+                    return root
+    return preferred_path
 
 
 def resolve_gt_letter(answer_obj: Any, cycle_idx: int = 0) -> str:
@@ -355,6 +378,14 @@ def execute_single_sample(
         "final_crop_boxes_before_aggregate": final_crop_boxes_before_aggregate,
         "stage6_patch_boxes": resp.get("stage6_patch_boxes", []),
     }
+
+    del candidate_images
+    del pool_items
+    del target_canvas
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
     return record
 
 
@@ -574,6 +605,15 @@ def execute_single_sample_direct(
         "final_crop_boxes_before_aggregate": [],
         "stage6_patch_boxes": [],
     }
+
+    del candidate_images
+    if "pool_items" in locals():
+        del pool_items
+    del target_canvas
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
     return record
 
 
@@ -697,10 +737,25 @@ def main():
         "--max_pixels",
         type=int,
         default=None,
-        help="Maximum image resolution in pixels (default: 12845056, ~12.8M pixels, 3584x3584; overridden to 4194304, ~4.2M pixels, 2048x2048 for 32B checkpoints to prevent OOM).",
+        help="Maximum image resolution in pixels (default: 1048576, ~1M pixels, 1024x1024; overridden to 4194304 for 32B checkpoints).",
+    )
+    parser.add_argument(
+        "--offline",
+        type=lambda x: str(x).lower() in ("true", "1", "yes"),
+        default=None,
+        help="Force offline execution (local files only, no online downloads).",
+    )
+    parser.add_argument(
+        "--sam3_iou_type",
+        type=str,
+        default="bbox",
+        choices=["bbox", "segm"],
+        help="SAM3 PostProcessImage IoU mode ('bbox' avoids massive 8K mask allocations; 'segm' generates full masks).",
     )
 
     # Key Pipeline Hyperparameter & Budget Overrides
+    parser.add_argument("--min_plateau_size", type=int, default=None, help="Stage 3: min plateau patch size.")
+    parser.add_argument("--max_plateau_size", type=int, default=None, help="Stage 3: max plateau patch size.")
     parser.add_argument("--max_patches_per_image", type=int, default=None, help="Stage 3 budget: max patches per image.")
     parser.add_argument("--max_partition_depth", type=int, default=None, help="Stage 3 budget: max recursion depth.")
     parser.add_argument("--max_sam3_eval_patches", type=int, default=None, help="Stage 4 budget: max SAM3 patch scans.")
@@ -708,6 +763,8 @@ def main():
     parser.add_argument("--max_patches_per_detected_group", type=int, default=None, help="Stage 4 budget: patches kept per detected group.")
     parser.add_argument("--max_patches_per_latent_group", type=int, default=None, help="Stage 4 budget: patches kept per latent group.")
     parser.add_argument("--max_retained_patches", type=int, default=None, help="Stage 4 budget: global hard cap on candidate pool.")
+    parser.add_argument("--enable_detection_bbox_area_ranking", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None, help="Stage 4: rank confirmed detection groups by max bbox area.")
+    parser.add_argument("--enable_dynamic_retention_elasticity", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None, help="Stage 4: expand retention budget dynamically on cutoff score ties.")
     parser.add_argument("--early_consensus_count", type=int, default=None, help="Stage 6 budget: consensus count before exit.")
     parser.add_argument("--enable_direct_answer", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
     parser.add_argument("--direct_answer_conf_threshold", type=float, default=None)
@@ -728,6 +785,10 @@ def main():
     parser.add_argument("--ios_containment_threshold", type=float, default=None)
     parser.add_argument("--enable_stage5_spatial_nms", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
     parser.add_argument("--stage5_nms_iou_threshold", type=float, default=None)
+    parser.add_argument("--enable_continuous_enclosure_subcanvas", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None, help="Stage 5: pack continuous sub-canvases <= 1024px with 0px gutters.")
+    parser.add_argument("--max_sub_canvases", type=int, default=None, help="Stage 5: maximum continuous sub-canvases.")
+    parser.add_argument("--seam_overlap_threshold", type=float, default=None, help="Stage 5: quadtree seam overlap threshold for sibling re-fusion.")
+    parser.add_argument("--enable_atomic_sibling_refusion", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None, help="Stage 5: atomically re-fuse adjacent quadtree siblings.")
     parser.add_argument("--enable_spatial_compressed_canvas", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
     parser.add_argument("--spatial_canvas_relational_only", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
     parser.add_argument("--enable_early_consensus_exit", type=lambda x: str(x).lower() in ("true", "1", "yes"), default=None)
@@ -772,6 +833,8 @@ def main():
 
     # 3. Apply CLI Overrides
     cli_overrides = [
+        "min_plateau_size",
+        "max_plateau_size",
         "max_patches_per_image",
         "max_partition_depth",
         "max_sam3_eval_patches",
@@ -779,6 +842,8 @@ def main():
         "max_patches_per_detected_group",
         "max_patches_per_latent_group",
         "max_retained_patches",
+        "enable_detection_bbox_area_ranking",
+        "enable_dynamic_retention_elasticity",
         "early_consensus_count",
         "enable_direct_answer",
         "direct_answer_conf_threshold",
@@ -799,6 +864,10 @@ def main():
         "ios_containment_threshold",
         "enable_stage5_spatial_nms",
         "stage5_nms_iou_threshold",
+        "enable_continuous_enclosure_subcanvas",
+        "max_sub_canvases",
+        "seam_overlap_threshold",
+        "enable_atomic_sibling_refusion",
         "enable_spatial_compressed_canvas",
         "spatial_canvas_relational_only",
         "enable_early_consensus_exit",
@@ -907,6 +976,50 @@ def main():
     if torch is None:
         raise ImportError("PyTorch is required for benchmark execution.")
 
+    if args.offline:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        os.environ["HF_DATASETS_OFFLINE"] = "1"
+
+    # Auto-discover weights from search paths or /kaggle/input if default paths absent
+    args.sam3_path = resolve_checkpoint_path(
+        args.sam3_path,
+        [
+            os.environ.get("SAM3_PATH", ""),
+            "/kaggle/input/datasets/thnhtt/vs-sam3/sam3/sam3/sam3.pt",
+            "/kaggle/input/sam3-weights/sam3.pt",
+            "D:/Research/VisualSearch/sam3/sam3.pt",
+            os.path.join(MSSEARCH_ROOT, "assets", "sam3.pt"),
+        ],
+        file_pattern="sam3.pt",
+    )
+
+    args.qwen_path = resolve_checkpoint_path(
+        args.qwen_path,
+        [
+            os.environ.get("MODEL_PATH", ""),
+            os.environ.get("QWEN_PATH", ""),
+            "/kaggle/input/qwen2-5-vl-7b-instruct",
+            "/kaggle/input/qwen2.5-vl-7b-instruct",
+            "/kaggle/input/datasets/thnhtt/qwen2.5-vl-7b-instruct",
+            "D:/Research/VisualSearch/Qwen2.5-VL-7B-Instruct",
+        ],
+        dir_pattern="qwen",
+    ) or "Qwen/Qwen2.5-VL-7B-Instruct"
+
+    args.siglip_name = resolve_checkpoint_path(
+        args.siglip_name,
+        [
+            os.environ.get("SIGLIP_NAME", ""),
+            os.environ.get("SIGLIP_PATH", ""),
+            "/kaggle/input/siglip-base-patch16-384",
+            "/kaggle/input/google-siglip-base-patch16-384",
+            "/kaggle/input/datasets/thnhtt/siglip-base-patch16-384",
+            "D:/Research/VisualSearch/siglip-base-patch16-384",
+        ],
+        dir_pattern="siglip",
+    ) or "google/siglip-base-patch16-384"
+
     num_gpus = torch.cuda.device_count()
     sam3_device = "cuda:1" if num_gpus > 1 else ("cuda:0" if num_gpus > 0 else "cpu")
     siglip_device = "cuda:0" if num_gpus > 0 else "cpu"
@@ -915,9 +1028,9 @@ def main():
     print("=" * 80)
     print(f"HARDWARE TOPOLOGY: {num_gpus} CUDA GPUs Available | Mode: {args.mode}")
     if not is_direct_mode:
-        print(f"  - SAM3 Engine      : {sam3_device}")
-        print(f"  - SigLIP Engine    : {siglip_device}")
-    print(f"  - Qwen2.5-VL Engine: {qwen_device}")
+        print(f"  - SAM3 Engine      : {sam3_device} (Checkpoint: {args.sam3_path})")
+        print(f"  - SigLIP Engine    : {siglip_device} (Source: {args.siglip_name})")
+    print(f"  - Qwen2.5-VL Engine: {qwen_device} (Source: {args.qwen_path})")
     print("=" * 80)
 
     if not is_direct_mode:
@@ -928,8 +1041,12 @@ def main():
         if get_mssearch_response is None:
             raise ImportError("MSSearch pipeline not installed; required for mode='e2e'.")
 
-        print(f"[Loading] SAM3 from '{args.sam3_path}' on {sam3_device}...")
-        sam3_engine = sam3_inference(model_path=args.sam3_path, device=sam3_device)
+        print(f"[Loading] SAM3 from '{args.sam3_path}' on {sam3_device} (iou_type={args.sam3_iou_type})...")
+        sam3_engine = sam3_inference(
+            model_path=args.sam3_path,
+            device=sam3_device,
+            iou_type=args.sam3_iou_type,
+        )
 
         print(f"[Loading] SigLIP '{args.siglip_name}' on {siglip_device}...")
         siglip_engine = SigLIPScorer(
@@ -945,23 +1062,24 @@ def main():
     if ModelQwenVL is None:
         raise ImportError("ModelQwenVL dependencies not installed; required for VLM evaluation.")
 
-    # Validate local model path exists (no online downloads)
-    if not os.path.exists(args.qwen_path):
+    is_local_qwen = os.path.isdir(str(args.qwen_path))
+    local_files_only = is_local_qwen if args.offline is None else args.offline
+    if local_files_only and not is_local_qwen:
         raise FileNotFoundError(
             f"Local model path '{args.qwen_path}' not found! "
-            f"Only local model directories are supported; online downloading is disabled."
+            f"Only local model directories are supported when offline mode is active."
         )
 
-    # Resolve visual pixel budget
+    # Resolve visual pixel budget: default to 1,048,576 (1024x1024 optical ceiling)
     if args.max_pixels is not None:
         resolved_max_pixels = args.max_pixels
     elif any(tag in str(args.qwen_path).lower() for tag in ["32b", "72b"]):
         resolved_max_pixels = 4194304
     else:
-        resolved_max_pixels = 12845056
+        resolved_max_pixels = 1048576
 
-    print(f"[Loading] Local VLM from '{args.qwen_path}' on {qwen_device}...")
-    guard_msg = "Large Model OOM-guard" if resolved_max_pixels == 4194304 else "full-scale"
+    print(f"[Loading] VLM from '{args.qwen_path}' on {qwen_device}...")
+    guard_msg = "Large Model OOM-guard" if resolved_max_pixels == 4194304 else "1024px optical ceiling"
     print(f"  • Pixel Budget: min_pixels={args.min_pixels} (56x56) | max_pixels={resolved_max_pixels} ({guard_msg})")
     qwen_engine = ModelQwenVL(
         model_path=args.qwen_path,
@@ -970,6 +1088,7 @@ def main():
         patch_scale=1.2,
         min_pixels=args.min_pixels,
         max_pixels=resolved_max_pixels,
+        local_files_only=local_files_only,
     )
 
     nlp_parser = None

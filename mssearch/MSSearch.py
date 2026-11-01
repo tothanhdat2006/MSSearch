@@ -604,13 +604,24 @@ class MultiSourceSearchEngine:
         telemetry["is_relational"] = is_cross_obj
         telemetry["is_cross_object"] = is_cross_obj
         has_compressed_canvas = any(getattr(c, "is_compressed_canvas", False) for c in unified_pool)
-        stage5_mode_val = "layout" if has_compressed_canvas else "crops_only"
+        has_continuous_enclosure = any("ContinuousEnclosure" in getattr(c, "source_branch", "") for c in unified_pool)
+        if has_continuous_enclosure:
+            stage5_mode_val = "continuous_enclosure"
+        elif has_compressed_canvas:
+            stage5_mode_val = "layout"
+        else:
+            stage5_mode_val = "crops_only"
         telemetry["stage5_mode"] = stage5_mode_val
         pre_agg_boxes = getattr(unified_pool, "pre_aggregation_boxes", [])
         telemetry["final_crop_boxes_before_aggregate"] = pre_agg_boxes
         telemetry["stages_executed"].append("stage5_screening")
         if not is_quiet:
-            mode_desc = "Layout (relational=True)" if has_compressed_canvas else "Crops Only (relational=False)"
+            if has_continuous_enclosure:
+                mode_desc = "Continuous Enclosure (relational=True)"
+            elif has_compressed_canvas:
+                mode_desc = "Layout (relational=True)"
+            else:
+                mode_desc = "Crops Only (relational=False)"
             print(f"[Stage 5: Screening & Aggregation] Decision: Mode={mode_desc} | Synthesized {len(unified_pool)} candidate crops from {len(pre_agg_boxes)} pre-aggregation bboxes (Latency: {lat_s5}s)")
 
         # ---------------------------------------------------------------------
