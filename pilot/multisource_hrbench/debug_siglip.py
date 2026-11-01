@@ -3,15 +3,17 @@
 Standalone SigLIP Inference & Calibration Diagnostic Script
 ============================================================
 Designed to run on Kaggle GPU, Colab, or remote server.
+Uses real HR-Bench 8K images and ground truth annotations from anno.json.
+
 Diagnoses:
 1. Model loading & processor compatibility (SigLIP v1 vs SigLIP 2).
 2. Prompt formatting comparisons (raw vs 'a photo of {q}' vs 'The photo of {label}.').
-3. Scoring calibration comparison:
+3. Scoring calibration comparison on real target crops:
    - Mode A: Native SigLIP Sigmoid: sigma(cos * exp(scale) + bias)
    - Mode B: Linear Calibrated Score: clamp((cos - 0.02) / 0.22, 0.0, 1.0)
    - Mode C: Raw Cosine Similarity: cos(I, T)
 4. Evaluates Ground Truth Bounding Boxes from anno.json (e.g. index 12: [1988, 3547, 1418, 384]).
-5. Stage 3 Saliency-Plateau Decision Simulation:
+5. Stage 3 Saliency-Plateau Decision Simulation on real target vs background crops:
    - Parent patch vs 4 child sub-patches
    - Delta S = max(S_children) - S_parent vs tau = 0.04
 """
@@ -24,7 +26,7 @@ from typing import List, Tuple, Dict, Any, Optional
 
 import torch
 import torch.nn.functional as F
-from PIL import Image, ImageDraw
+from PIL import Image
 
 # Ensure MSSearch root is in sys.path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,15 +42,6 @@ def resolve_checkpoint_path(default_name: str, candidate_dirs: List[str]) -> str
             print(f"[Discovery] Found local checkpoint at: {d}")
             return d
     return default_name
-
-
-def resolve_dataset_path(candidate_dirs: List[str]) -> Optional[str]:
-    """Finds HRBench base directory if available."""
-    for d in candidate_dirs:
-        if d and os.path.exists(d):
-            print(f"[Discovery] Found dataset root at: {d}")
-            return d
-    return None
 
 
 def resolve_anno_path(explicit_path: Optional[str], candidate_roots: List[str]) -> Optional[str]:
@@ -135,48 +128,30 @@ def extract_targets_and_bboxes(sample: Dict[str, Any], img_w: int, img_h: int) -
 
 
 def resolve_sample_image(input_image_rel: str, anno_path: str, candidate_roots: List[str]) -> Optional[str]:
-    """Finds image file on disk."""
+    """Finds image file on disk across specified directories without synthetic fallbacks."""
     candidates = []
-    anno_dir = os.path.dirname(os.path.abspath(anno_path))
-    candidates.append(os.path.join(anno_dir, input_image_rel))
-    candidates.append(os.path.join(anno_dir, os.path.basename(input_image_rel)))
+    base_name = os.path.basename(input_image_rel)
+
+    # Specific Kaggle HRBench 8K path
+    deep_kaggle_dir = "/kaggle/input/datasets/thnhtt/vs-dataset/hr-bench_8k/mnt/sdb/llp/datasets/zoom_eye_data/zoom_eye_data/hr-bench_8k/image"
+    candidates.append(os.path.join(deep_kaggle_dir, base_name))
+
     for r in candidate_roots:
         if r:
+            candidates.append(os.path.join(r, "image", base_name))
+            candidates.append(os.path.join(r, "images", base_name))
             candidates.append(os.path.join(r, input_image_rel))
-            candidates.append(os.path.join(r, "image", os.path.basename(input_image_rel)))
-            candidates.append(os.path.join(r, "images", os.path.basename(input_image_rel)))
+            candidates.append(os.path.join(r, base_name))
+
+    anno_dir = os.path.dirname(os.path.abspath(anno_path))
+    candidates.append(os.path.join(anno_dir, input_image_rel))
+    candidates.append(os.path.join(anno_dir, "image", base_name))
+    candidates.append(os.path.join(anno_dir, base_name))
 
     for c in candidates:
-        if c and os.path.exists(c):
+        if os.path.exists(c):
             return c
     return None
-
-
-def create_synthetic_test_crops() -> Tuple[Image.Image, List[Tuple[str, Image.Image]]]:
-    """Creates a synthetic canvas with distinct target and distractor shapes."""
-    canvas = Image.new("RGB", (1024, 1024), color=(240, 240, 240))
-    draw = ImageDraw.Draw(canvas)
-
-    # Target: A clear red car shape at top-left
-    draw.rectangle([100, 100, 350, 250], fill=(220, 30, 30))
-    draw.ellipse([140, 230, 190, 280], fill=(20, 20, 20))
-    draw.ellipse([260, 230, 310, 280], fill=(20, 20, 20))
-    draw.text((160, 140), "CAR #27", fill=(255, 255, 255))
-
-    # Distractor: Blue tree at bottom-right
-    draw.rectangle([700, 650, 740, 850], fill=(120, 70, 30))
-    draw.ellipse([630, 500, 810, 680], fill=(30, 160, 40))
-
-    # Background: empty region at top-right
-    draw.rectangle([600, 100, 900, 400], fill=(230, 230, 230))
-
-    crops = [
-        ("Target (Red Car)", canvas.crop((80, 80, 380, 300))),
-        ("Target Sub-Patch (Front Wheel)", canvas.crop((120, 180, 220, 290))),
-        ("Distractor (Tree)", canvas.crop((600, 480, 840, 860))),
-        ("Background (Empty)", canvas.crop((600, 100, 900, 400))),
-    ]
-    return canvas, crops
 
 
 def test_prompt_and_scoring(
@@ -406,7 +381,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 80)
-    print("MSSearch SigLIP Diagnostic Engine")
+    print("MSSearch SigLIP Real-Image Diagnostic Engine")
     print("=" * 80)
     print(f"Device: {args.device} | PyTorch: {torch.__version__}")
 
@@ -430,13 +405,9 @@ def main():
         print(f"[Loading Error] Failed to load model via AutoModel: {e}")
         return
 
-    # STEP 1: Synthetic Benchmark
-    synthetic_canvas, synthetic_crops = create_synthetic_test_crops()
-    test_queries = ["car", "wheel", "tree", "building"]
-    test_prompt_and_scoring(model, processor, synthetic_crops, test_queries, args.device, dtype, "SYNTHETIC CROPS BENCHMARK")
-
-    # STEP 2: Ground Truth anno.json Dataset Ingestion
+    # Real Dataset Ingestion: Prioritize explicit 8K deep Kaggle directory
     dataset_dirs = [
+        "/kaggle/input/datasets/thnhtt/vs-dataset/hr-bench_8k/mnt/sdb/llp/datasets/zoom_eye_data/zoom_eye_data/hr-bench_8k",
         "/kaggle/input/datasets/thnhtt/vs-dataset",
         "/kaggle/input/vs-dataset",
         "/kaggle/input/datasets/thnhtt/vs-dataset/hr-bench_8k",
@@ -445,101 +416,100 @@ def main():
         "D:/Research/VisualSearch/hr-bench_4k",
         "d:/Research/VisualSearch/hr-bench_8k",
     ]
-    ds_root = resolve_dataset_path(dataset_dirs)
     anno_path = resolve_anno_path(args.anno_path, dataset_dirs)
+    if not anno_path:
+        raise FileNotFoundError(f"Could not locate anno.json in candidates: {dataset_dirs}")
 
-    if anno_path:
-        print(f"\n[Dataset] Loading annotation records from: {anno_path}")
-        records = load_annotation_records(anno_path)
-        print(f"[Dataset] Total records loaded: {len(records)}")
+    print(f"\n[Dataset] Loading annotation records from: {anno_path}")
+    records = load_annotation_records(anno_path)
+    print(f"[Dataset] Total records loaded: {len(records)}")
 
-        # Find target sample
-        matched_records = []
-        for r in records:
-            if r.get("index") == args.sample_idx:
-                matched_records.append(r)
-        if not matched_records:
-            if 0 <= args.sample_idx < len(records):
-                matched_records.append(records[args.sample_idx])
-            else:
-                matched_records.append(records[0])
+    # Find target sample
+    matched_records = []
+    for r in records:
+        if r.get("index") == args.sample_idx:
+            matched_records.append(r)
+    if not matched_records:
+        if 0 <= args.sample_idx < len(records):
+            matched_records.append(records[args.sample_idx])
+        else:
+            matched_records.append(records[0])
 
-        # If user requested multiple samples
-        if args.num_samples > 1:
-            matched_records = records[:args.num_samples]
+    if args.num_samples > 1:
+        matched_records = records[:args.num_samples]
 
-        for s_idx, sample in enumerate(matched_records):
-            q_text = sample.get("question", "")
-            img_rel = sample.get("input_image", f"image/{args.sample_idx}.jpg")
-            rec_index = sample.get("index", s_idx)
-            img_path = resolve_sample_image(img_rel, anno_path, dataset_dirs)
+    for s_idx, sample in enumerate(matched_records):
+        q_text = sample.get("question", "")
+        img_rel = sample.get("input_image", f"image/{args.sample_idx}.jpg")
+        rec_index = sample.get("index", s_idx)
+        img_path = resolve_sample_image(img_rel, anno_path, dataset_dirs)
 
-            if not img_path:
-                print(f"[Warning] Could not locate image '{img_rel}' for sample index {rec_index}. Skipping.")
-                continue
+        if not img_path:
+            raise FileNotFoundError(
+                f"Could not locate real image '{img_rel}' on disk for sample index {rec_index}. "
+                f"Checked candidate roots: {dataset_dirs}"
+            )
 
-            real_img = Image.open(img_path).convert("RGB")
-            print("\n" + "#" * 80)
-            print(f"# SAMPLE {rec_index} (Image: {img_path}, Resolution: {real_img.size})")
-            print(f"# QUESTION: {q_text}")
-            print("#" * 80)
+        real_img = Image.open(img_path).convert("RGB")
+        print("\n" + "#" * 80)
+        print(f"# SAMPLE {rec_index} (Image: {img_path}, Resolution: {real_img.size})")
+        print(f"# QUESTION: {q_text}")
+        print("#" * 80)
 
-            # Extract ground truth target bboxes
-            target_entries = extract_targets_and_bboxes(sample, real_img.width, real_img.height)
-            print(f"[Targets] Extracted {len(target_entries)} target bounding boxes:")
-            for b_idx, (t_box, t_name) in enumerate(target_entries):
-                print(f"  Target #{b_idx}: '{t_name}' -> BBox: {t_box} (W={t_box[2]-t_box[0]}, H={t_box[3]-t_box[1]})")
+        # Extract ground truth target bboxes
+        target_entries = extract_targets_and_bboxes(sample, real_img.width, real_img.height)
+        print(f"[Targets] Extracted {len(target_entries)} target bounding boxes:")
+        for b_idx, (t_box, t_name) in enumerate(target_entries):
+            print(f"  Target #{b_idx}: '{t_name}' -> BBox: {t_box} (W={t_box[2]-t_box[0]}, H={t_box[3]-t_box[1]})")
 
-            # Fallback if no target bbox in record
-            if not target_entries:
-                default_box = (1940, 815, 2266, 993) if rec_index == 0 else (real_img.width//4, real_img.height//4, real_img.width//2, real_img.height//2)
-                target_entries = [(default_box, "target")]
+        if not target_entries:
+            raise ValueError(f"No bounding box found in annotation for sample {rec_index}!")
 
-            for b_idx, (target_bbox, target_name) in enumerate(target_entries):
-                # Evaluate direct crop on ground truth target vs background
-                gt_crop = real_img.crop(target_bbox)
-                bg_x1 = max(0, target_bbox[0] - (target_bbox[2] - target_bbox[0]) * 2)
-                bg_y1 = max(0, target_bbox[1] - (target_bbox[3] - target_bbox[1]) * 2)
-                bg_x2 = min(real_img.width, bg_x1 + (target_bbox[2] - target_bbox[0]))
-                bg_y2 = min(real_img.height, bg_y1 + (target_bbox[3] - target_bbox[1]))
-                bg_crop = real_img.crop((bg_x1, bg_y1, bg_x2, bg_y2))
+        for b_idx, (target_bbox, target_name) in enumerate(target_entries):
+            # Extract real crop on ground truth target and background context
+            gt_crop = real_img.crop(target_bbox)
+            bg_x1 = max(0, target_bbox[0] - (target_bbox[2] - target_bbox[0]) * 2)
+            bg_y1 = max(0, target_bbox[1] - (target_bbox[3] - target_bbox[1]) * 2)
+            bg_x2 = min(real_img.width, bg_x1 + (target_bbox[2] - target_bbox[0]))
+            bg_y2 = min(real_img.height, bg_y1 + (target_bbox[3] - target_bbox[1]))
+            bg_crop = real_img.crop((bg_x1, bg_y1, bg_x2, bg_y2))
 
-                # Compile test queries for this target
-                active_objs = [target_name]
-                if sample.get("target_object"):
-                    t_objs = sample["target_object"]
-                    if isinstance(t_objs, list):
-                        for to in t_objs:
-                            if to not in active_objs:
-                                active_objs.append(to)
-                    elif isinstance(t_objs, str) and t_objs not in active_objs:
-                        active_objs.append(t_objs)
+            # Compile test queries for this target
+            active_objs = [target_name]
+            if sample.get("target_object"):
+                t_objs = sample["target_object"]
+                if isinstance(t_objs, list):
+                    for to in t_objs:
+                        if to not in active_objs:
+                            active_objs.append(to)
+                elif isinstance(t_objs, str) and t_objs not in active_objs:
+                    active_objs.append(t_objs)
 
-                # Test 1: Direct GT crop vs Background
-                crop_pairs = [
-                    (f"GT Target Crop ({target_name[:24]})", gt_crop),
-                    ("Background Context Crop", bg_crop),
-                ]
-                test_prompt_and_scoring(
-                    model=model,
-                    processor=processor,
-                    crops=crop_pairs,
-                    queries=active_objs,
-                    device=args.device,
-                    dtype=dtype,
-                    title=f"SAMPLE {rec_index} - DIRECT GT CROP VS BACKGROUND"
-                )
+            # Test 1: Direct Real GT crop vs Background
+            crop_pairs = [
+                (f"GT Target Crop ({target_name[:24]})", gt_crop),
+                ("Background Context Crop", bg_crop),
+            ]
+            test_prompt_and_scoring(
+                model=model,
+                processor=processor,
+                crops=crop_pairs,
+                queries=active_objs,
+                device=args.device,
+                dtype=dtype,
+                title=f"SAMPLE {rec_index} - DIRECT REAL GT CROP VS BACKGROUND"
+            )
 
-                # Test 2: Stage 3 Quadtree Zoom Saliency-Plateau Simulation
-                test_stage3_plateau_simulation(
-                    model=model,
-                    processor=processor,
-                    image_pil=real_img,
-                    target_bbox=target_bbox,
-                    active_objects=active_objs,
-                    device=args.device,
-                    target_name=target_name,
-                )
+            # Test 2: Stage 3 Quadtree Zoom Saliency-Plateau Simulation
+            test_stage3_plateau_simulation(
+                model=model,
+                processor=processor,
+                image_pil=real_img,
+                target_bbox=target_bbox,
+                active_objects=active_objs,
+                device=args.device,
+                target_name=target_name,
+            )
 
     print("\n" + "=" * 80)
     print("DIAGNOSTIC SUMMARY & RECOMMENDATIONS")
