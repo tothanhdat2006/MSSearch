@@ -1,6 +1,6 @@
 """
-Lightweight SigLIP / CLIP Scorer for Branch B (Low-Resolution Screening).
-Runs on GPU 0 with fp16 precision to preserve memory headroom alongside Qwen2.5-VL.
+Lightweight SigLIP / CLIP Scorer for Branch B (Low-Resolution Screening)
+using native HuggingFace pipeline as specified in official model documentation.
 """
 
 import warnings
@@ -8,9 +8,9 @@ import logging
 from typing import List, Union, Any
 from PIL import Image
 import torch
-import torch.nn.functional as F
+from transformers import AutoModel, AutoProcessor, AutoConfig
 
-# Suppress harmless upstream config token ID mismatch warnings and dtype deprecation
+# Suppress upstream config token ID mismatch warnings and dtype deprecation
 logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message=r".*bos_token_id.*")
 warnings.filterwarnings("ignore", message=r".*eos_token_id.*")
@@ -19,7 +19,7 @@ warnings.filterwarnings("ignore", message=r".*`torch_dtype` is deprecated.*")
 
 def format_text_queries(text_queries: List[str], is_siglip: bool = True) -> List[str]:
     """
-    Formats text queries: SigLIP performs best with raw tags; CLIP benefits from natural language prefixes.
+    Formats text queries: SigLIP retains raw tags; CLIP benefits from natural language prefixes.
     """
     prompts = []
     for q in text_queries:
@@ -36,8 +36,8 @@ def format_text_queries(text_queries: List[str], is_siglip: bool = True) -> List
 
 def _extract_embedding_tensor(output: Any) -> torch.Tensor:
     """
-    Extracts the feature embedding tensor from model outputs across HuggingFace transformer variants.
-    Handles BaseModelOutputWithPooling, SiglipOutput, tuples, and raw torch.Tensor.
+    Extracts feature embedding tensor from model outputs across HuggingFace transformer variants.
+    Maintained for backward compatibility with external evaluators.
     """
     if isinstance(output, torch.Tensor):
         return output
@@ -54,7 +54,8 @@ def _extract_embedding_tensor(output: Any) -> torch.Tensor:
 
 class SigLIPScorer:
     """
-    SigLIP (or CLIP) inference wrapper for zero-shot text-image cosine similarity scoring.
+    SigLIP / CLIP inference wrapper for zero-shot text-image scoring
+    using official HuggingFace outputs.logits_per_image and torch.sigmoid.
     """
 
     def __init__(
@@ -62,59 +63,54 @@ class SigLIPScorer:
         model_name: str = "google/siglip-base-patch16-384",
         device: str = "cuda:0",
         torch_dtype: torch.dtype = torch.float16,
+        **kwargs,
     ):
-        self.model_name = model_name
+        self.model_name = kwargs.get("model_path", model_name)
         self.device = device if torch.cuda.is_available() else "cpu"
         self.dtype = torch_dtype if torch.cuda.is_available() else torch.float32
         self.model = None
         self.processor = None
-        self.is_siglip = "siglip" in model_name.lower()
+        self.is_siglip = "siglip" in self.model_name.lower()
 
     def _ensure_loaded(self):
         """Lazy loader to prevent unneeded GPU allocation until Stage 5 is invoked."""
         if self.model is None:
             print(f"[SigLIPScorer] Loading '{self.model_name}' on {self.device} ({self.dtype})...")
-            logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
-            if self.is_siglip:
-                from transformers import SiglipModel, SiglipProcessor, AutoConfig
-                cfg = AutoConfig.from_pretrained(self.model_name)
-                if hasattr(cfg, "text_config"):
-                    cfg.text_config.bos_token_id = None
-                    cfg.text_config.eos_token_id = None
-                cfg.bos_token_id = None
-                cfg.eos_token_id = None
+            cfg = AutoConfig.from_pretrained(self.model_name)
+            if hasattr(cfg, "text_config"):
+                cfg.text_config.bos_token_id = None
+                cfg.text_config.eos_token_id = None
+            cfg.bos_token_id = None
+            cfg.eos_token_id = None
 
-                self.model = SiglipModel.from_pretrained(
-                    self.model_name,
-                    config=cfg,
-                    torch_dtype=self.dtype,
-                    low_cpu_mem_usage=True,
-                ).to(self.device).eval()
-                self.processor = SiglipProcessor.from_pretrained(self.model_name)
-            else:
-                from transformers import CLIPModel, CLIPProcessor
-                self.model = CLIPModel.from_pretrained(
-                    self.model_name,
-                    torch_dtype=self.dtype,
-                    low_cpu_mem_usage=True,
-                ).to(self.device).eval()
-                self.processor = CLIPProcessor.from_pretrained(self.model_name)
+            self.model = AutoModel.from_pretrained(
+                self.model_name,
+                config=cfg,
+                torch_dtype=self.dtype,
+                low_cpu_mem_usage=True,
+            ).to(self.device).eval()
+            self.processor = AutoProcessor.from_pretrained(self.model_name)
 
     @torch.inference_mode()
     def score_crops(
         self,
         crops: List[Image.Image],
-        text_queries: List[str]
+        text_queries: List[str],
+        batch_size: int = 32,
     ) -> List[float]:
         """
-        Computes the maximum cosine alignment score across the active object queries.
-        
+        Computes maximum text-image alignment probability across active object queries
+        following the official HuggingFace SigLIP pipeline:
+            outputs = model(**inputs)
+            probs = torch.sigmoid(outputs.logits_per_image)
+            
         Args:
-            crops: List of PIL images (low-res candidate crops <= 336px).
+            crops: List of PIL images (low-res candidate crops).
             text_queries: List of active object strings (e.g. ['car', 'sign']).
+            batch_size: Mini-batch size for GPU memory management.
             
         Returns:
-            List of float scores in [0.0, 1.0], one per crop.
+            List of float probability scores in [0.0, 1.0], one per crop.
         """
         if not crops or not text_queries:
             return []
@@ -123,72 +119,32 @@ class SigLIPScorer:
 
         prompts = format_text_queries(text_queries, is_siglip=self.is_siglip)
 
-        # Extract text embeddings: [num_queries, D]
-        text_inputs = self.processor(
-            text=prompts,
-            padding="max_length" if self.is_siglip else True,
-            return_tensors="pt"
-        ).to(self.device)
+        scores: List[float] = []
+        for i in range(0, len(crops), batch_size):
+            batch_crops = crops[i : i + batch_size]
+            inputs = self.processor(
+                text=prompts,
+                images=batch_crops,
+                padding="max_length" if self.is_siglip else True,
+                return_tensors="pt",
+            )
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            if self.dtype == torch.float16 and "pixel_values" in inputs:
+                inputs["pixel_values"] = inputs["pixel_values"].to(self.dtype)
 
-        if self.is_siglip:
-            text_features = self.model.get_text_features(**text_inputs)
-        else:
-            text_features = self.model.get_text_features(text_inputs["input_ids"])
+            outputs = self.model(**inputs)
+            logits_per_image = outputs.logits_per_image
 
-        text_features = _extract_embedding_tensor(text_features)
-        text_features = F.normalize(text_features.float(), dim=-1)
+            if self.is_siglip:
+                probs = torch.sigmoid(logits_per_image)
+            else:
+                probs = torch.softmax(logits_per_image, dim=-1)
 
-        # Extract image embeddings: [num_crops, D]
-        img_inputs = self.processor(
-            images=crops,
-            return_tensors="pt"
-        ).to(self.device)
+            max_probs = probs.max(dim=-1).values
+            scores.extend(max_probs.cpu().tolist())
 
-        if self.dtype == torch.float16 and "pixel_values" in img_inputs:
-            img_inputs["pixel_values"] = img_inputs["pixel_values"].to(self.dtype)
-
-        # 1. Global pooled feature extraction
-        if self.is_siglip:
-            image_features = self.model.get_image_features(**img_inputs)
-        else:
-            image_features = self.model.get_image_features(img_inputs["pixel_values"])
-
-        image_features = _extract_embedding_tensor(image_features)
-        image_features = F.normalize(image_features.float(), dim=-1)
-
-        # Pairwise global pooled cosine similarities: [num_crops, num_queries]
-        pooled_sim = torch.matmul(image_features, text_features.T)
-
-        # 2. Dense Spatial Token-Max Matching (CLIP only, requires linear visual_projection layer)
-        # SigLIP uses multihead attention pooling (MAP) without a standalone token projection layer.
-        dense_sim = None
-        if not self.is_siglip and hasattr(self.model, "visual_projection") and self.model.visual_projection is not None:
-            vision_model = getattr(self.model, "vision_model", None)
-            if vision_model is not None:
-                vis_out = vision_model(pixel_values=img_inputs["pixel_values"])
-                if hasattr(vis_out, "last_hidden_state") and vis_out.last_hidden_state is not None:
-                    spatial_tokens = vis_out.last_hidden_state.float()
-                    spatial_tokens = self.model.visual_projection(spatial_tokens)
-                    if spatial_tokens.shape[-1] == text_features.shape[-1]:
-                        spatial_tokens = F.normalize(spatial_tokens, dim=-1)
-                        token_sims = torch.einsum("btd,qd->btq", spatial_tokens, text_features)
-                        dense_sim = token_sims.max(dim=1).values
-
-        if dense_sim is not None:
-            sim_matrix = torch.maximum(pooled_sim, dense_sim)
-        else:
-            sim_matrix = pooled_sim
-
-        # 3. Dynamic Range Calibration / SigLIP Native Sigmoid Probability
-        if self.is_siglip and hasattr(self.model, "logit_scale") and hasattr(self.model, "logit_bias"):
-            logits = sim_matrix * self.model.logit_scale.exp() + self.model.logit_bias
-            probs = torch.sigmoid(logits)
-            raw_max = probs.max(dim=1).values
-        else:
-            # CLIP fallback: maps raw contrastive range [0.02, 0.25] to [0.0, 1.0]
-            raw_max = sim_matrix.max(dim=1).values
-            raw_max = torch.clamp((raw_max - 0.02) / 0.22, 0.0, 1.0)
-        return [float(min(1.0, max(0.0, s))) for s in raw_max.cpu().tolist()]
+        # ponytail: clamp bounds to [0.0, 1.0] float contract
+        return [float(min(1.0, max(0.0, s))) for s in scores]
 
     def score_single(self, crop: Image.Image, text_queries: List[str]) -> float:
         """Helper to score a single crop."""
