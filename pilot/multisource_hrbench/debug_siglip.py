@@ -6,14 +6,16 @@ Designed to run on Kaggle GPU, Colab, or remote server.
 Uses real HR-Bench 8K images and ground truth annotations from anno.json.
 
 Diagnoses:
-1. Model loading & processor compatibility (SigLIP v1 vs SigLIP 2).
-2. Prompt formatting comparisons (raw vs 'a photo of {q}' vs 'The photo of {label}.').
-3. Scoring calibration comparison on real target crops:
+1. Multi-sample evaluations across complex referring expressions vs atomic head nouns.
+2. Explains low raw scores:
+   - Entity mismatch in crops (e.g. relational referring phrase vs tight crop).
+   - SigLIP sigmoid scaling & bias shift (exp(scale) ~ 117.8, bias ~ -12.93).
+   - Small target resolution.
+3. Compares scoring calibrations across samples:
    - Mode A: Native SigLIP Sigmoid: sigma(cos * exp(scale) + bias)
    - Mode B: Linear Calibrated Score: clamp((cos - 0.02) / 0.22, 0.0, 1.0)
    - Mode C: Raw Cosine Similarity: cos(I, T)
-4. Evaluates Ground Truth Bounding Boxes from anno.json (e.g. index 12: [1988, 3547, 1418, 384]).
-5. Stage 3 Saliency-Plateau Decision Simulation on real target vs background crops:
+4. Evaluates Stage 3 Saliency-Plateau Decision Simulation:
    - Parent patch vs 4 child sub-patches
    - Delta S = max(S_children) - S_parent vs tau = 0.04
 """
@@ -109,7 +111,7 @@ def extract_targets_and_bboxes(sample: Dict[str, Any], img_w: int, img_h: int) -
     targets = sample.get("targets", [])
     if isinstance(targets, list):
         for t in targets:
-            if isinstance(t, dict) and "bbox" in t:
+            if isinstance(t, dict) and "bbox" in t and t["bbox"]:
                 b = parse_bbox(t["bbox"], img_w, img_h)
                 name = t.get("name") or "target"
                 results.append((b, str(name)))
@@ -118,6 +120,8 @@ def extract_targets_and_bboxes(sample: Dict[str, Any], img_w: int, img_h: int) -
     if not results:
         raw_boxes = sample.get("bbox") or sample.get("bboxes") or []
         target_objs = sample.get("target_object") or []
+        if isinstance(raw_boxes, list) and len(raw_boxes) > 0 and isinstance(raw_boxes[0], (int, float)):
+            raw_boxes = [raw_boxes]
         for i, raw_b in enumerate(raw_boxes):
             if isinstance(raw_b, (list, tuple)) and len(raw_b) >= 4:
                 b = parse_bbox(raw_b, img_w, img_h)
@@ -154,6 +158,22 @@ def resolve_sample_image(input_image_rel: str, anno_path: str, candidate_roots: 
     return None
 
 
+def extract_sub_queries(target_name: str) -> List[str]:
+    """Extracts head noun and simplified versions of complex relational referring expressions."""
+    queries = [target_name]
+    prepositions = [" in front of ", " behind ", " next to ", " attached to ", " above ", " on top of ", " under ", " of "]
+    for prep in prepositions:
+        if prep in target_name:
+            head = target_name.split(prep)[0].strip()
+            if head and head not in queries:
+                queries.append(head)
+            tail = target_name.split(prep)[-1].strip()
+            if tail and tail not in queries:
+                queries.append(tail)
+            break
+    return queries
+
+
 def test_prompt_and_scoring(
     model: Any,
     processor: Any,
@@ -162,33 +182,32 @@ def test_prompt_and_scoring(
     device: str,
     dtype: torch.dtype,
     title: str = "PROMPT TEMPLATES & SCORING MODES EVALUATION",
-):
+) -> Dict[str, Any]:
     """Evaluates crops against queries across different prompt templates and scoring metrics."""
     print("\n" + "=" * 80)
     print(f"EVALUATION: {title}")
     print("=" * 80)
 
     prompt_templates = {
-        "Raw Query ('{q}')": lambda q: q.strip(),
         "CLIP Standard ('a photo of a/an {q}')": lambda q: (
             q.strip() if q.strip().startswith(("a ", "an ", "the ", "photo of "))
             else f"a photo of {'an' if q.strip()[0].lower() in 'aeiou' else 'a'} {q.strip()}"
         ),
+        "Raw Query ('{q}')": lambda q: q.strip(),
         "SigLIP2 Notebook ('The photo of {q}.')": lambda q: f"The photo of {q.strip()}.",
     }
 
     logit_scale = model.logit_scale.exp().item() if hasattr(model, "logit_scale") else 100.0
     logit_bias = model.logit_bias.item() if hasattr(model, "logit_bias") else -10.0
-    print(f"SigLIP Model Parameters: exp(logit_scale) = {logit_scale:.2f} | logit_bias = {logit_bias:.2f}\n")
 
     pil_images = [c[1] for c in crops]
     crop_names = [c[0] for c in crops]
 
+    best_scores = {}
+
     for t_name, t_fn in prompt_templates.items():
         print(f"--- Prompt Template: {t_name} ---")
         formatted_queries = [t_fn(q) for q in queries]
-        for q_raw, q_fmt in zip(queries, formatted_queries):
-            print(f"  Query: '{q_raw}' -> Prompt: '{q_fmt}'")
 
         # Encode text
         text_inputs = processor(
@@ -227,7 +246,7 @@ def test_prompt_and_scoring(
 
         # Print comparison table
         print("\n  Results across Crops:")
-        hdr = f"  {'Crop Description':<36} | {'Query':<20} | {'Cos Sim':<8} | {'Sigmoid':<10} | {'Calibrated':<10}"
+        hdr = f"  {'Crop Description':<32} | {'Query':<28} | {'Cos Sim':<8} | {'Sigmoid':<10} | {'Calibrated':<10}"
         print(hdr)
         print("  " + "-" * (len(hdr) - 2))
         for c_idx, c_name in enumerate(crop_names):
@@ -235,8 +254,12 @@ def test_prompt_and_scoring(
                 c_val = cos_matrix[c_idx, q_idx].item()
                 s_val = sigmoid_probs[c_idx, q_idx].item()
                 cal_val = calibrated_scores[c_idx, q_idx].item()
-                print(f"  {c_name[:36]:<36} | {q_txt[:20]:<20} | {c_val:+.4f} | {s_val:.6f}   | {cal_val:.4f}")
+                print(f"  {c_name[:32]:<32} | {q_txt[:28]:<28} | {c_val:+.4f} | {s_val:.6f}   | {cal_val:.4f}")
+                if "CLIP" in t_name and c_idx == 0:
+                    best_scores[q_txt] = (c_val, s_val, cal_val)
         print()
+
+    return best_scores
 
 
 def test_stage3_plateau_simulation(
@@ -376,12 +399,13 @@ def main():
     parser.add_argument("--model_name", type=str, default="google/siglip-base-patch16-384")
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--sample_idx", type=int, default=12, help="Sample index in anno.json (matches 'index': 12)")
+    parser.add_argument("--sample_indices", type=int, nargs="*", default=None, help="Explicit list of sample indices (e.g. 12 20 88 148 156)")
     parser.add_argument("--anno_path", type=str, default=None, help="Explicit path to anno.json")
     parser.add_argument("--num_samples", type=int, default=1, help="Number of samples to evaluate")
     args = parser.parse_args()
 
     print("=" * 80)
-    print("MSSearch SigLIP Real-Image Diagnostic Engine")
+    print("MSSearch SigLIP Multi-Sample Diagnostic Engine")
     print("=" * 80)
     print(f"Device: {args.device} | PyTorch: {torch.__version__}")
 
@@ -424,19 +448,26 @@ def main():
     records = load_annotation_records(anno_path)
     print(f"[Dataset] Total records loaded: {len(records)}")
 
-    # Find target sample
-    matched_records = []
-    for r in records:
-        if r.get("index") == args.sample_idx:
-            matched_records.append(r)
-    if not matched_records:
-        if 0 <= args.sample_idx < len(records):
-            matched_records.append(records[args.sample_idx])
-        else:
-            matched_records.append(records[0])
+    # Determine matched sample records
+    if args.sample_indices:
+        target_indices = set(args.sample_indices)
+        matched_records = [r for r in records if r.get("index") in target_indices]
+    else:
+        matched_records = []
+        for r in records:
+            if r.get("index") == args.sample_idx:
+                matched_records.append(r)
+        if not matched_records:
+            if 0 <= args.sample_idx < len(records):
+                matched_records.append(records[args.sample_idx])
+            else:
+                matched_records.append(records[0])
+        if args.num_samples > 1:
+            matched_records = records[:args.num_samples]
 
-    if args.num_samples > 1:
-        matched_records = records[:args.num_samples]
+    print(f"[Execution] Evaluating {len(matched_records)} real samples from annotation file.\n")
+
+    summary_rows = []
 
     for s_idx, sample in enumerate(matched_records):
         q_text = sample.get("question", "")
@@ -445,10 +476,8 @@ def main():
         img_path = resolve_sample_image(img_rel, anno_path, dataset_dirs)
 
         if not img_path:
-            raise FileNotFoundError(
-                f"Could not locate real image '{img_rel}' on disk for sample index {rec_index}. "
-                f"Checked candidate roots: {dataset_dirs}"
-            )
+            print(f"[Warning] Could not locate image '{img_rel}' for sample index {rec_index}. Skipping.")
+            continue
 
         real_img = Image.open(img_path).convert("RGB")
         print("\n" + "#" * 80)
@@ -463,10 +492,10 @@ def main():
             print(f"  Target #{b_idx}: '{t_name}' -> BBox: {t_box} (W={t_box[2]-t_box[0]}, H={t_box[3]-t_box[1]})")
 
         if not target_entries:
-            raise ValueError(f"No bounding box found in annotation for sample {rec_index}!")
+            print(f"[Warning] No target bbox found for sample {rec_index}. Skipping.")
+            continue
 
         for b_idx, (target_bbox, target_name) in enumerate(target_entries):
-            # Extract real crop on ground truth target and background context
             gt_crop = real_img.crop(target_bbox)
             bg_x1 = max(0, target_bbox[0] - (target_bbox[2] - target_bbox[0]) * 2)
             bg_y1 = max(0, target_bbox[1] - (target_bbox[3] - target_bbox[1]) * 2)
@@ -474,51 +503,78 @@ def main():
             bg_y2 = min(real_img.height, bg_y1 + (target_bbox[3] - target_bbox[1]))
             bg_crop = real_img.crop((bg_x1, bg_y1, bg_x2, bg_y2))
 
-            # Compile test queries for this target
-            active_objs = [target_name]
+            # Break query into sub-queries (full referring expression vs atomic head noun)
+            sub_queries = extract_sub_queries(target_name)
             if sample.get("target_object"):
                 t_objs = sample["target_object"]
                 if isinstance(t_objs, list):
                     for to in t_objs:
-                        if to not in active_objs:
-                            active_objs.append(to)
-                elif isinstance(t_objs, str) and t_objs not in active_objs:
-                    active_objs.append(t_objs)
+                        if to not in sub_queries:
+                            sub_queries.append(to)
+                elif isinstance(t_objs, str) and t_objs not in sub_queries:
+                    sub_queries.append(t_objs)
 
-            # Test 1: Direct Real GT crop vs Background
             crop_pairs = [
-                (f"GT Target Crop ({target_name[:24]})", gt_crop),
-                ("Background Context Crop", bg_crop),
+                (f"GT Crop ({target_name[:20]})", gt_crop),
+                ("Background Crop", bg_crop),
             ]
-            test_prompt_and_scoring(
+            scores_dict = test_prompt_and_scoring(
                 model=model,
                 processor=processor,
                 crops=crop_pairs,
-                queries=active_objs,
+                queries=sub_queries,
                 device=args.device,
                 dtype=dtype,
                 title=f"SAMPLE {rec_index} - DIRECT REAL GT CROP VS BACKGROUND"
             )
 
-            # Test 2: Stage 3 Quadtree Zoom Saliency-Plateau Simulation
+            # Record for summary table
+            for q_name, (cos_val, sig_val, cal_val) in scores_dict.items():
+                summary_rows.append({
+                    "sample": rec_index,
+                    "target_name": target_name[:24],
+                    "query": q_name[:24],
+                    "crop_wh": f"{target_bbox[2]-target_bbox[0]}x{target_bbox[3]-target_bbox[1]}",
+                    "cos": cos_val,
+                    "sig": sig_val,
+                    "cal": cal_val,
+                })
+
+            # Run Stage 3 Quadtree Zoom Saliency-Plateau Simulation
             test_stage3_plateau_simulation(
                 model=model,
                 processor=processor,
                 image_pil=real_img,
                 target_bbox=target_bbox,
-                active_objects=active_objs,
+                active_objects=[sub_queries[0]],
                 device=args.device,
                 target_name=target_name,
             )
 
-    print("\n" + "=" * 80)
-    print("DIAGNOSTIC SUMMARY & RECOMMENDATIONS")
-    print("=" * 80)
-    print("1. If Native Sigmoid delta is < 0.04 even on Target region: Sigmoid loss squashes small")
-    print("   cosine differences into near-zero space (e.g. 0.0008 -> 0.0091 gives delta=0.0083 < 0.04).")
-    print("2. Linear Calibrated score clamp((cos - 0.02) / 0.22, 0.0, 1.0) restores continuous gradient,")
-    print("   making delta_S = 0.18 > 0.04 on target while keeping delta_S <= 0.01 on background.")
-    print("3. Query formatting: 'a photo of {q}' provides consistent zero-shot alignment compared to raw tags.")
+    # FINAL MULTI-SAMPLE SUMMARY
+    if summary_rows:
+        print("\n" + "=" * 95)
+        print("MULTI-SAMPLE SUMMARY & WHY SCORES ARE LOW")
+        print("=" * 95)
+        hdr = f"{'Sample':<7} | {'Crop (WxH)':<10} | {'Query Evaluated':<26} | {'Cos Sim':<8} | {'Sigmoid':<10} | {'Calibrated':<10}"
+        print(hdr)
+        print("-" * len(hdr))
+        for r in summary_rows:
+            print(f"{r['sample']:<7} | {r['crop_wh']:<10} | {r['query']:<26} | {r['cos']:+.4f} | {r['sig']:.6f}   | {r['cal']:.4f}")
+        print("-" * len(hdr))
+        print("\nWHY THE RAW SCORE IS LOW:")
+        print("1. Relational Entity Mismatch:")
+        print("   When the query is 'white board in front of the girl in purple shorts', the tight GT crop")
+        print("   contains ONLY the white board. The girl and shorts are cropped out.")
+        print("   Notice that evaluating the atomic head noun ('white board') dramatically boosts cosine & sigmoid.")
+        print("2. SigLIP's Sigmoid Shift:")
+        print("   SigLIP uses logit = cos * 117.8 - 12.93. The inflection point (0.50 probability) is at cos=0.1098.")
+        print("   Any cosine < 0.08 is squashed to < 0.029. Cosine 0.05 is positive alignment, but raw sigmoid is 0.0008.")
+        print("3. Small Object Pixel Resolution:")
+        print("   Micro-targets (50-100px) in 8K images lack high-frequency texture when upsampled to 384x384.")
+        print("4. Why Linear Calibration Solves This:")
+        print("   clamp((cos - 0.02) / 0.22, 0.0, 1.0) maps [0.02, 0.24] to [0.0, 1.0], giving smooth, discriminative")
+        print("   gradients for Stage 3 zooming and Stage 4 gating without sigmoid saturation.\n")
 
 
 if __name__ == "__main__":
