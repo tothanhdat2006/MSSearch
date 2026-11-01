@@ -741,10 +741,11 @@ def run_feature_grouping_and_gating(
                             non_detected_members.append((i, siglip, p_area))
 
                     # 1. Primary ranker: max detected bbox area desc, then det score desc, then siglip desc
+                    use_area_rank = getattr(config, "enable_detection_bbox_area_ranking", True)
                     detected_sorted = [
                         item[0] for item in sorted(
                             detected_members,
-                            key=lambda x: (x[1], x[2], x[3]),
+                            key=(lambda x: (x[1], x[2], x[3])) if use_area_rank else (lambda x: (x[2], x[3])),
                             reverse=True
                         )
                     ]
@@ -822,25 +823,26 @@ def run_feature_grouping_and_gating(
         if getattr(config, "enable_retention_hard_cap", True) and len(sorted_patches) > config.max_retained_patches:
             k_cap = config.max_retained_patches
             # Dynamic elasticity for tied cutoff candidates (count(identical) - 1)
-            cutoff_p = sorted_patches[k_cap - 1]
-            cutoff_profile = (
-                round(float(cutoff_p.confidence_score or 0.0), 4),
-                round(float(cutoff_p.siglip_score or 0.0), 4)
-            )
-            while k_cap < len(sorted_patches):
-                next_p = sorted_patches[k_cap]
-                next_profile = (
-                    round(float(next_p.confidence_score or 0.0), 4),
-                    round(float(next_p.siglip_score or 0.0), 4)
+            if getattr(config, "enable_dynamic_retention_elasticity", True):
+                cutoff_p = sorted_patches[k_cap - 1]
+                cutoff_profile = (
+                    round(float(cutoff_p.confidence_score or 0.0), 4),
+                    round(float(cutoff_p.siglip_score or 0.0), 4)
                 )
-                if next_profile == cutoff_profile:
-                    k_cap += 1
-                else:
-                    break
+                while k_cap < len(sorted_patches):
+                    next_p = sorted_patches[k_cap]
+                    next_profile = (
+                        round(float(next_p.confidence_score or 0.0), 4),
+                        round(float(next_p.siglip_score or 0.0), 4)
+                    )
+                    if next_profile == cutoff_profile:
+                        k_cap += 1
+                    else:
+                        break
 
-            if config.verbose and k_cap > config.max_retained_patches:
-                delta_k = k_cap - config.max_retained_patches
-                print(f"[Stage 4][Dynamic Elasticity] Cutoff profile {cutoff_profile} tied: dynamically expanded retention budget by +{delta_k} (retaining {k_cap} patches).")
+                if config.verbose and k_cap > config.max_retained_patches:
+                    delta_k = k_cap - config.max_retained_patches
+                    print(f"[Stage 4][Dynamic Elasticity] Cutoff profile {cutoff_profile} tied: dynamically expanded retention budget by +{delta_k} (retaining {k_cap} patches).")
 
             pruned_by_cap = len(sorted_patches) - k_cap
             if config.verbose and pruned_by_cap > 0:

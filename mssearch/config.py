@@ -77,6 +77,8 @@ class MSSearchConfig:
     enable_group_retention_caps: bool = True     # Cap number of member patches retained per group
     max_patches_per_latent_group: int = 2        # Max patches kept for latent-retained groups
     max_patches_per_detected_group: int = 8      # Max patches kept for confirmed SAM3 detection groups
+    enable_detection_bbox_area_ranking: bool = True # Rank detected patches by max bbox area before det score
+    enable_dynamic_retention_elasticity: bool = True # Dynamically expand retention budget for tied cutoff items
     enable_retention_hard_cap: bool = True       # Cap total retained patches across all groups before Stage 5/6
     max_retained_patches: int = 20               # Global upper bound on candidate patches pool
     retention_ranking_metric: str = "confidence_hybrid"  # "confidence_hybrid", "entropy", "detection_first"
