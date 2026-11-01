@@ -57,7 +57,7 @@ except Exception as _e_guard:
 # ==============================================================================
 
 class sam3_inference():
-    def __init__(self, model_path, device=None):
+    def __init__(self, model_path, device=None, **kwargs):
         num_gpus = torch.cuda.device_count()
         if device is None:
             self.device = "cuda:1" if num_gpus >= 2 else ("cuda:0" if num_gpus == 1 else "cpu")
