@@ -5,160 +5,42 @@ If all |A_q| objects are detected with high VLM existence confidence (> 0.70),
 generates the answer immediately and caches vision features for Stage 3 reuse.
 """
 
-from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any
-from PIL import Image, ImageDraw
+from PIL import Image
 import numpy as np
+
 try:
     import torch
 except ImportError:
     torch = None
 
 from ..config import MSSearchConfig
+from .utils_stage2 import (
+    DirectAnswerResult,
+    FastPathResult,
+    compute_composite_bbox,
+    render_visual_prompt_bbox,
+    clamp_image_to_safe_resolution,
+    _query_vlm_response,
+    _query_vlm_existence,
+    build_direct_answer_prompt,
+)
 
-
-@dataclass
-class DirectAnswerResult:
-    """Telemetry and outcome container for Phase 1 Direct Global Answer."""
-    triggered: bool
-    answer: Optional[str] = None
-    raw_response: Optional[str] = None
-    confidence: float = 0.0
-    evidence_img_idx: Optional[int] = None
-    answers: List[str] = field(default_factory=list)
-    evidence_images: List[int] = field(default_factory=list)
-
-
-@dataclass
-class FastPathResult:
-    """Telemetry and outcome container for Stage 2 Fast Path."""
-    triggered: bool
-    answer: Optional[str] = None
-    raw_response: Optional[str] = None
-    evidence_img_idx: Optional[int] = None
-    confidence: float = 0.0
-    bypass_reason: Optional[str] = None
-    detected_boxes: List[Tuple[int, int, int, int]] = field(default_factory=list)
-    # Caches dense SAM3 feature maps {img_idx: np.ndarray [C, H_f, W_f]} for zero-overhead reuse in Stage 3
-    feature_cache: Dict[int, np.ndarray] = field(default_factory=dict)
-    answers: List[str] = field(default_factory=list)
-    evidence_images: List[int] = field(default_factory=list)
-    boxes_by_image: Dict[int, List[Tuple[int, int, int, int]]] = field(default_factory=dict)
-
-
-def compute_composite_bbox(
-    boxes: List[Any],
-    img_w: int,
-    img_h: int,
-    margin_ratio: float = 0.10
-) -> Tuple[int, int, int, int]:
-    """Computes the union bounding box enclosing all detected targets with safety margin, guaranteed pure Python ints."""
-    clean_boxes = []
-    for b in boxes:
-        if isinstance(b, torch.Tensor):
-            b = b.detach().cpu().tolist()
-        elif isinstance(b, np.ndarray):
-            b = b.tolist()
-        clean_boxes.append([float(coord) for coord in b])
-
-    x1 = min(b[0] for b in clean_boxes)
-    y1 = min(b[1] for b in clean_boxes)
-    x2 = max(b[2] for b in clean_boxes)
-    y2 = max(b[3] for b in clean_boxes)
-
-    pad_w = (x2 - x1) * margin_ratio
-    pad_h = (y2 - y1) * margin_ratio
-
-    cx1 = max(0, int(round(x1 - pad_w)))
-    cy1 = max(0, int(round(y1 - pad_h)))
-    cx2 = min(img_w, int(round(x2 + pad_w)))
-    cy2 = min(img_h, int(round(y2 + pad_h)))
-
-    return (int(cx1), int(cy1), int(cx2), int(cy2))
-
-
-def render_visual_prompt_bbox(
-    crop_img: Image.Image,
-    local_boxes: List[Any],
-    color: str = "red",
-    width: int = 3
-) -> Image.Image:
-    """Draws colored bounding boxes on the composite crop as visual prompts for the VLM."""
-    annotated = crop_img.copy()
-    draw = ImageDraw.Draw(annotated)
-    for box in local_boxes:
-        if torch is not None and isinstance(box, torch.Tensor):
-            box = box.detach().cpu().tolist()
-        elif isinstance(box, np.ndarray):
-            box = box.tolist()
-        clean_box = [int(round(float(coord))) for coord in box]
-        draw.rectangle(clean_box, outline=color, width=width)
-    return annotated
-
-
-def _query_vlm_response(zoom_model, image_pil: Image.Image, question: str, max_new_tokens: int = 128) -> str:
-    """Safely invokes VLM response generation across model APIs with resolution safety shield."""
-    safe_img = image_pil
-    if max(image_pil.width, image_pil.height) > 1024:
-        scale = 1024.0 / max(image_pil.width, image_pil.height)
-        safe_img = image_pil.resize(
-            (int(round(image_pil.width * scale)), int(round(image_pil.height * scale))),
-            Image.Resampling.BILINEAR
-        )
-    if hasattr(zoom_model, "generate_response"):
-        resp = zoom_model.generate_response(image_pil=safe_img, question=question, max_new_tokens=max_new_tokens)
-    elif hasattr(zoom_model, "free_form_using_nodes"):
-        resp = zoom_model.free_form_using_nodes(image_pil=safe_img, question=question, searched_nodes=[], max_new_tokens=max_new_tokens)
-    elif hasattr(zoom_model, "generate"):
-        resp = zoom_model.generate(image_pil=safe_img, question=question, max_new_tokens=max_new_tokens)
-    else:
-        resp = str(zoom_model(image_pil=safe_img, question=question))
-    if torch is not None and torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    return resp
-
-
-def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str) -> float:
-    """Safely invokes VLM existence confidence query across model APIs with resolution safety shield."""
-    if hasattr(zoom_model, "get_confidence_value"):
-        # Physical resolution shield: clamp image to max 1024px to prevent 27.79 GiB SDPA OOM
-        safe_img = image_pil
-        if max(image_pil.width, image_pil.height) > 1024:
-            scale = 1024.0 / max(image_pil.width, image_pil.height)
-            safe_img = image_pil.resize(
-                (int(round(image_pil.width * scale)), int(round(image_pil.height * scale))),
-                Image.Resampling.BILINEAR
-            )
-        conf = 0.0
-        for kwarg in [{"node": None}, {"node_list": None}, {}]:
-            try:
-                conf = zoom_model.get_confidence_value(
-                    image_pil=safe_img,
-                    confidence_type="existence",
-                    input_ele=query,
-                    **kwarg
-                )
-                if isinstance(conf, torch.Tensor):
-                    conf = conf.item()
-                conf = float(conf)
-                break
-            except TypeError:
-                continue
-            except Exception as e:
-                print(f"[Stage 2][VLM Confidence Notice] {e}")
-                conf = 0.0
-                break
-        if torch is not None and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        return conf
-    return 0.0
+__all__ = [
+    "DirectAnswerResult",
+    "FastPathResult",
+    "compute_composite_bbox",
+    "render_visual_prompt_bbox",
+    "run_direct_global_assessment",
+    "run_tool_based_fast_path",
+]
 
 
 def run_direct_global_assessment(
     candidate_images: List[Image.Image],
     question: str,
     zoom_model,
-    config: MSSearchConfig
+    config: MSSearchConfig,
 ) -> DirectAnswerResult:
     """
     Phase 1: Probes whether the question can be confidently answered directly from
@@ -183,25 +65,13 @@ def run_direct_global_assessment(
     vlm_batch_size = max(1, getattr(config, "vlm_batch_size", 4))
     conf_scores: Optional[List[float]] = None
     if hasattr(zoom_model, "batch_get_confidence_values") and vlm_batch_size > 1 and len(candidate_images) > 1:
-        safe_imgs = []
-        for img_pil in candidate_images:
-            if max(img_pil.width, img_pil.height) > 1024:
-                scale = 1024.0 / max(img_pil.width, img_pil.height)
-                safe_imgs.append(
-                    img_pil.resize(
-                        (int(round(img_pil.width * scale)), int(round(img_pil.height * scale))),
-                        Image.Resampling.BILINEAR
-                    )
-                )
-            else:
-                safe_imgs.append(img_pil)
-
+        safe_imgs = [clamp_image_to_safe_resolution(img, 1024) for img in candidate_images]
         try:
             conf_scores = zoom_model.batch_get_confidence_values(
                 image_list=safe_imgs,
                 confidence_type="answering",
                 input_ele=question,
-                batch_size=vlm_batch_size
+                batch_size=vlm_batch_size,
             )
         except Exception as e:
             if config.verbose:
@@ -209,26 +79,19 @@ def run_direct_global_assessment(
             conf_scores = None
 
     for img_idx, img_pil in enumerate(candidate_images):
-        # 1. Probe answering confidence c_q on the root view (clamped to 1024px for safety)
         if conf_scores is not None and img_idx < len(conf_scores):
             conf = float(conf_scores[img_idx])
         else:
             conf = 0.0
             if hasattr(zoom_model, "get_confidence_value"):
                 try:
-                    safe_img = img_pil
-                    if max(img_pil.width, img_pil.height) > 1024:
-                        scale = 1024.0 / max(img_pil.width, img_pil.height)
-                        safe_img = img_pil.resize(
-                            (int(round(img_pil.width * scale)), int(round(img_pil.height * scale))),
-                            Image.Resampling.BILINEAR
-                        )
+                    safe_img = clamp_image_to_safe_resolution(img_pil, 1024)
                     val = zoom_model.get_confidence_value(
                         node=[],
                         image_pil=safe_img,
                         confidence_type="answering",
                         input_ele=question,
-                        root_anyres=False
+                        root_anyres=False,
                     )
                     if isinstance(val, torch.Tensor):
                         val = val.item()
@@ -242,39 +105,12 @@ def run_direct_global_assessment(
         if config.verbose:
             print(f"[Phase 1][Direct Answer] Image {img_idx}: answering confidence = {conf:.3f} (Threshold = {threshold:.2f})")
 
-        # 2. Check threshold gate
+        # Check threshold gate
         if conf > threshold:
-            if getattr(config, "prompt_directed_final_answer", True):
-                answer_mode = getattr(config, "answer_type", "free_form")
-                if answer_mode in ["option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"] or "Options:\n" in question:
-                    prompt = (
-                        f"{question}\n\n"
-                        "Select the best option from the choices above that answers the question.\n"
-                        "State ONLY the option letter and concise choice (e.g. <answer>(A)</answer> or <answer>A. choice text</answer>).\n"
-                        "Do NOT write conversational filler, reasoning, or explanations.\n"
-                        "If the target object or requested text/information is NOT clearly visible in this crop, output strictly:\n"
-                        "<answer>None</answer>\n\n"
-                        "Otherwise, output the option letter inside <answer>...</answer> tags:\n"
-                        "<answer>(A)</answer>"
-                    )
-                else:
-                    prompt = (
-                        f"{question}\n\n"
-                        "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                        "<answer>None</answer>\n\n"
-                        "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
-                        "<answer>concise answer</answer>"
-                    )
-            else:
-                prompt = (
-                    f"{question}\n\n"
-                    "If the target object or requested text/information is NOT clearly visible in this crop, output: <answer>None</answer>"
-                )
-
+            prompt = build_direct_answer_prompt(question, config)
             raw_answer = _query_vlm_response(zoom_model, img_pil, prompt, max_new_tokens=getattr(config, "max_vlm_tokens", 128))
             final_ans = extract_final_answer(raw_answer) if getattr(config, "prompt_directed_final_answer", True) else raw_answer
 
-            # Safety check: bypass if answer is a refusal / unanswerable
             if is_negative_or_unanswerable(raw_answer) or (final_ans and is_negative_or_unanswerable(final_ans)):
                 if config.verbose:
                     print(f"[Phase 1][Direct Answer Refusal] Global response was uninformative ('{raw_answer}'); bypassing Phase 1.")
@@ -282,12 +118,12 @@ def run_direct_global_assessment(
 
             if len(candidate_images) > 1:
                 if config.verbose:
-                    print(f"[Phase 1][Direct Answer Confirmed] Image {img_idx} (conf={conf:.3f}): '{final_ans}'. Continuing scan for remaining candidate images...")
+                    print(f"[Phase 1][Direct Answer Confirmed] Image {img_idx} (conf={conf:.3f}): '{final_ans}'. Continuing scan...")
                 collected_direct.append({
                     "answer": final_ans,
                     "raw_response": raw_answer,
                     "confidence": conf,
-                    "img_idx": img_idx
+                    "img_idx": img_idx,
                 })
                 continue
 
@@ -300,7 +136,7 @@ def run_direct_global_assessment(
                 confidence=conf,
                 evidence_img_idx=img_idx,
                 answers=[final_ans],
-                evidence_images=[img_idx]
+                evidence_images=[img_idx],
             )
 
     if collected_direct:
@@ -322,7 +158,7 @@ def run_direct_global_assessment(
             confidence=max_c,
             evidence_img_idx=ev_imgs[0],
             answers=ans_list,
-            evidence_images=ev_imgs
+            evidence_images=ev_imgs,
         )
 
     return DirectAnswerResult(triggered=False, confidence=max_observed_conf)
@@ -335,7 +171,7 @@ def run_tool_based_fast_path(
     sam_model,
     zoom_model,
     config: MSSearchConfig,
-    active_img_indices: Optional[List[int]] = None
+    active_img_indices: Optional[List[int]] = None,
 ) -> FastPathResult:
     """
     Executes the Tool-Based Fast Path across the pool of candidate images.
@@ -347,9 +183,9 @@ def run_tool_based_fast_path(
         return FastPathResult(triggered=False, feature_cache=feature_cache)
 
     if sam_model is None:
-        raise RuntimeError("[Stage 2 Error] sam_model (SAM3) is None. Tool Fast Path requires a loaded SAM3 model; fallback execution is strictly disabled.")
+        raise RuntimeError("[Stage 2 Error] sam_model (SAM3) is None. Tool Fast Path requires a loaded SAM3 model.")
     if zoom_model is None:
-        raise RuntimeError("[Stage 2 Error] zoom_model (Qwen2.5-VL) is None. Tool Fast Path requires a loaded VLM model; fallback execution is strictly disabled.")
+        raise RuntimeError("[Stage 2 Error] zoom_model (Qwen2.5-VL) is None. Tool Fast Path requires a loaded VLM model.")
 
     target_indices = active_img_indices if active_img_indices is not None else list(range(len(candidate_images)))
     if config.verbose:
@@ -375,7 +211,7 @@ def run_tool_based_fast_path(
                 print(f"[Stage 2][Error Fallback] SAM3 canvas inference failed on image {img_idx} ({e}); continuing.")
             continue
 
-        # 2. Extract and cache vision feature map for Stage 3 reuse (Zero-recompute invariant)
+        # 2. Extract and cache vision feature map for Stage 3 reuse
         if config.reuse_stage2_features and 'vision_features' in backbone_out:
             feat = backbone_out['vision_features']
             if isinstance(feat, torch.Tensor):
@@ -384,7 +220,6 @@ def run_tool_based_fast_path(
                 feat_np = np.squeeze(feat, axis=0)
             feature_cache[img_idx] = feat_np
 
-        # Immediate GPU memory release: drop SAM3 backbone outputs
         del backbone_out
         if torch is not None and torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -398,7 +233,6 @@ def run_tool_based_fast_path(
             boxes = res_for_t.get('boxes', [])
             scores = res_for_t.get('scores', [])
 
-            # Convert to CPU Python lists
             if isinstance(boxes, torch.Tensor):
                 boxes = boxes.detach().cpu().tolist()
             elif isinstance(boxes, np.ndarray):
@@ -422,7 +256,7 @@ def run_tool_based_fast_path(
                 all_objects_found = False
                 break
             else:
-                matched_boxes_by_obj.append(confident_boxes[0])  # Take highest scoring detection
+                matched_boxes_by_obj.append(confident_boxes[0])
 
         if not all_objects_found or len(matched_boxes_by_obj) < len(active_objects):
             if config.verbose:
@@ -434,7 +268,7 @@ def run_tool_based_fast_path(
 
         targets_detected_on_any_image = True
 
-        # 4. Construct composite crop encompassing all active target detections (guaranteed pure ints)
+        # 4. Construct composite crop encompassing all active target detections
         composite_box = compute_composite_bbox(matched_boxes_by_obj, img_w, img_h)
         crop_pil = img_pil.crop(composite_box)
         cw, ch = crop_pil.size
@@ -445,29 +279,28 @@ def run_tool_based_fast_path(
                 torch.cuda.empty_cache()
             continue
 
-        # Compute coordinates relative to crop origin (guaranteed pure ints)
         x_min, y_min = composite_box[0], composite_box[1]
         local_boxes = [
             (
                 int(round(float(b[0]) - x_min)),
                 int(round(float(b[1]) - y_min)),
                 int(round(float(b[2]) - x_min)),
-                int(round(float(b[3]) - y_min))
+                int(round(float(b[3]) - y_min)),
             )
             for b in matched_boxes_by_obj
         ]
 
-        # 5. Apply Visual Prompt Bounding Box (controlled by config flag)
+        # 5. Visual prompt annotation if enabled
         vlm_crop = crop_pil
         if config.enable_visual_prompt_bbox:
             vlm_crop = render_visual_prompt_bbox(
                 crop_pil,
                 local_boxes,
                 color=config.visual_prompt_bbox_color,
-                width=config.visual_prompt_bbox_width
+                width=config.visual_prompt_bbox_width,
             )
 
-        # 6. Build Textual Prompt Coordinates (controlled by config flag)
+        # 6. Textual coordinates prompt hint if enabled
         text_coords_hint = ""
         if config.enable_textual_prompt_coords:
             coord_strs = [
@@ -485,35 +318,9 @@ def run_tool_based_fast_path(
         if config.verbose:
             print(f"[Stage 2] Image {img_idx}: All targets detected! VLM existence conf = {existence_conf:.3f} (Threshold = {config.fast_path_conf_threshold:.2f})")
 
-        # 8. Fast Path Decision Gate (> 0.70)
+        # 8. Fast Path Decision Gate
         if existence_conf > config.fast_path_conf_threshold:
-            # High existence confidence confirmed -> Generate final answer immediately!
-            if getattr(config, "prompt_directed_final_answer", True):
-                answer_mode = getattr(config, "answer_type", "free_form")
-                if answer_mode in ["option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"] or "Options:\n" in question:
-                    answer_prompt = (
-                        f"{question}{text_coords_hint}\n\n"
-                        "Select the best option from the choices above that answers the question.\n"
-                        "State ONLY the option letter and concise choice (e.g. <answer>(A)</answer> or <answer>A. choice text</answer>).\n"
-                        "Do NOT write conversational filler, reasoning, or explanations.\n"
-                        "If the target object or requested text/information is NOT clearly visible in this crop, output strictly:\n"
-                        "<answer>None</answer>\n\n"
-                        "Otherwise, output the option letter inside <answer>...</answer> tags:\n"
-                        "<answer>(A)</answer>"
-                    )
-                else:
-                    answer_prompt = (
-                        f"{question}{text_coords_hint}\n\n"
-                        "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-                        "<answer>None</answer>\n\n"
-                        "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
-                        "<answer>concise answer</answer>"
-                    )
-            else:
-                answer_prompt = (
-                    f"{question}{text_coords_hint}\n\n"
-                    "If the target object or requested text/information is NOT clearly visible in this crop, output: <answer>None</answer>"
-                )
+            answer_prompt = build_direct_answer_prompt(f"{question}{text_coords_hint}", config)
             answer_text = _query_vlm_response(zoom_model, vlm_crop, answer_prompt, max_new_tokens=config.max_vlm_tokens)
 
             from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer, deduplicate_answers
@@ -530,13 +337,13 @@ def run_tool_based_fast_path(
 
             if len(candidate_images) > 1:
                 if config.verbose:
-                    print(f"[Stage 2][Fast Path Confirmed] Image {img_idx} (conf={existence_conf:.3f}): '{final_ans}'. Continuing scan for remaining candidate images...")
+                    print(f"[Stage 2][Fast Path Confirmed] Image {img_idx} (conf={existence_conf:.3f}): '{final_ans}'. Continuing scan...")
                 collected_fp.append({
                     "answer": final_ans,
                     "raw_response": answer_text,
                     "img_idx": img_idx,
                     "confidence": float(existence_conf),
-                    "boxes": matched_boxes_by_obj
+                    "boxes": matched_boxes_by_obj,
                 })
                 del processed_results
                 del vlm_crop
@@ -557,7 +364,7 @@ def run_tool_based_fast_path(
                 feature_cache=feature_cache,
                 answers=[final_ans],
                 evidence_images=[img_idx],
-                boxes_by_image={img_idx: matched_boxes_by_obj}
+                boxes_by_image={img_idx: matched_boxes_by_obj},
             )
         else:
             if config.verbose:
@@ -591,11 +398,11 @@ def run_tool_based_fast_path(
             feature_cache=feature_cache,
             answers=ans_list,
             evidence_images=ev_imgs,
-            boxes_by_image={r["img_idx"]: r["boxes"] for r in collected_fp}
+            boxes_by_image={r["img_idx"]: r["boxes"] for r in collected_fp},
         )
 
     if config.verbose:
-        print(f"[Stage 2][Fallback to Stage 3] Fast Path did not trigger across all candidate images. Switching to Visual Search Branch. (Cached {len(feature_cache)} feature maps).")
+        print(f"[Stage 2][Fallback to Stage 3] Fast Path did not trigger across candidate images. Switching to Visual Search Branch. (Cached {len(feature_cache)} feature maps).")
 
     bypass_reason = "low_existence_confidence" if targets_detected_on_any_image else "targets_not_detected"
     conf_out = max_observed_existence_conf if targets_detected_on_any_image else 0.0
@@ -603,5 +410,5 @@ def run_tool_based_fast_path(
         triggered=False,
         confidence=conf_out,
         bypass_reason=bypass_reason,
-        feature_cache=feature_cache
+        feature_cache=feature_cache,
     )
