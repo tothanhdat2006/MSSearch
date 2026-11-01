@@ -126,7 +126,7 @@ class SigLIPScorer:
         # Extract text embeddings: [num_queries, D]
         text_inputs = self.processor(
             text=prompts,
-            padding=True,
+            padding="max_length" if self.is_siglip else True,
             return_tensors="pt"
         ).to(self.device)
 
