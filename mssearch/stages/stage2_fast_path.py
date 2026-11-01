@@ -522,9 +522,8 @@ def run_tool_based_fast_path(
                 if config.verbose:
                     print(f"[Stage 2][Negative Fast Path] Fast path answer was uninformative/refusal ('{answer_text}'); bypassing fast path.")
                 del processed_results
+                del vlm_crop
                 del crop_pil
-                if 'vlm_crop' in locals() and vlm_crop is not crop_pil:
-                    del vlm_crop
                 if torch is not None and torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 continue
@@ -540,9 +539,8 @@ def run_tool_based_fast_path(
                     "boxes": matched_boxes_by_obj
                 })
                 del processed_results
+                del vlm_crop
                 del crop_pil
-                if 'vlm_crop' in locals() and vlm_crop is not crop_pil:
-                    del vlm_crop
                 if torch is not None and torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 continue
@@ -565,9 +563,8 @@ def run_tool_based_fast_path(
             if config.verbose:
                 print(f"[Stage 2][Fallback Trigger] Existence confidence {existence_conf:.3f} did not exceed {config.fast_path_conf_threshold:.2f}; falling back from instant exit.")
             del processed_results
+            del vlm_crop
             del crop_pil
-            if 'vlm_crop' in locals() and vlm_crop is not crop_pil:
-                del vlm_crop
             if torch is not None and torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
