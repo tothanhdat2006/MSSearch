@@ -179,10 +179,16 @@ class SigLIPScorer:
         else:
             sim_matrix = pooled_sim
 
-        # 3. Dynamic Range Calibration (maps raw contrastive range [0.02, 0.25] to [0.0, 1.0])
-        raw_max = sim_matrix.max(dim=1).values
-        calibrated_scores = torch.clamp((raw_max - 0.02) / 0.22, 0.0, 1.0)
-        return [float(min(1.0, max(0.0, s))) for s in calibrated_scores.cpu().tolist()]
+        # 3. Dynamic Range Calibration / SigLIP Native Sigmoid Probability
+        if self.is_siglip and hasattr(self.model, "logit_scale") and hasattr(self.model, "logit_bias"):
+            logits = sim_matrix * self.model.logit_scale.exp() + self.model.logit_bias
+            probs = torch.sigmoid(logits)
+            raw_max = probs.max(dim=1).values
+        else:
+            # CLIP fallback: maps raw contrastive range [0.02, 0.25] to [0.0, 1.0]
+            raw_max = sim_matrix.max(dim=1).values
+            raw_max = torch.clamp((raw_max - 0.02) / 0.22, 0.0, 1.0)
+        return [float(min(1.0, max(0.0, s))) for s in raw_max.cpu().tolist()]
 
     def score_single(self, crop: Image.Image, text_queries: List[str]) -> float:
         """Helper to score a single crop."""
