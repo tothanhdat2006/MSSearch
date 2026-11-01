@@ -8,8 +8,13 @@ import warnings
 import logging
 from typing import List, Union, Optional, Any
 from PIL import Image
-import torch
-import torch.nn.functional as F
+
+try:
+    import torch
+    import torch.nn.functional as F
+except ImportError:
+    torch = None
+    F = None
 
 # Suppress harmless upstream config token ID mismatch warnings and dtype deprecation
 logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
@@ -18,12 +23,35 @@ warnings.filterwarnings("ignore", message=r".*eos_token_id.*")
 warnings.filterwarnings("ignore", message=r".*`torch_dtype` is deprecated.*")
 
 
-def _extract_embedding_tensor(output: Any) -> torch.Tensor:
+def _inference_mode_decorator(fn):
+    if torch is not None and hasattr(torch, "inference_mode"):
+        return torch.inference_mode()(fn)
+    return fn
+
+
+def format_text_queries(text_queries: List[str], is_siglip: bool = True) -> List[str]:
+    """
+    Formats text queries: SigLIP performs best with raw tags; CLIP benefits from natural language prefixes.
+    """
+    prompts = []
+    for q in text_queries:
+        q_clean = q.strip()
+        if is_siglip:
+            prompts.append(q_clean)
+        elif q_clean.startswith(("a ", "an ", "the ", "photo of ")):
+            prompts.append(q_clean)
+        else:
+            art = "an" if q_clean[0].lower() in "aeiou" else "a"
+            prompts.append(f"a photo of {art} {q_clean}")
+    return prompts
+
+
+def _extract_embedding_tensor(output: Any) -> Any:
     """
     Extracts the feature embedding tensor from model outputs across HuggingFace transformer variants.
     Handles BaseModelOutputWithPooling, SiglipOutput, tuples, and raw torch.Tensor.
     """
-    if isinstance(output, torch.Tensor):
+    if torch is not None and isinstance(output, torch.Tensor):
         return output
     if hasattr(output, "pooler_output") and output.pooler_output is not None:
         return output.pooler_output
@@ -33,7 +61,7 @@ def _extract_embedding_tensor(output: Any) -> torch.Tensor:
         return output.logits
     if isinstance(output, (tuple, list)) and len(output) > 0:
         first = output[0]
-        if isinstance(first, torch.Tensor):
+        if torch is not None and isinstance(first, torch.Tensor):
             return first
     raise TypeError(f"Cannot extract tensor embedding from output of type {type(output).__name__}")
 
@@ -47,11 +75,14 @@ class SigLIPScorer:
         self,
         model_name: str = "google/siglip-base-patch16-384",
         device: str = "cuda:0",
-        torch_dtype=torch.float16,
+        torch_dtype=None,
     ):
         self.model_name = model_name
-        self.device = device if torch.cuda.is_available() else "cpu"
-        self.dtype = torch_dtype if torch.cuda.is_available() else torch.float32
+        self.device = device if (torch is not None and torch.cuda.is_available()) else "cpu"
+        if torch is not None:
+            self.dtype = torch_dtype if torch_dtype is not None else (torch.float16 if torch.cuda.is_available() else torch.float32)
+        else:
+            self.dtype = None
         self.model = None
         self.processor = None
         self.is_siglip = "siglip" in model_name.lower()
@@ -120,7 +151,7 @@ class SigLIPScorer:
                     ).to(self.device).eval()
                 self.processor = CLIPProcessor.from_pretrained(self.model_name)
 
-    @torch.inference_mode()
+    @_inference_mode_decorator
     def score_crops(
         self,
         crops: List[Image.Image],
@@ -141,11 +172,8 @@ class SigLIPScorer:
 
         self._ensure_loaded()
 
-        # Format prompt with descriptive templates to avoid zero-shot vocabulary shift
-        prompts = [
-            q if q.startswith(("a ", "an ", "the ", "photo of")) else f"a photo of {q}"
-            for q in text_queries
-        ]
+        # Format text queries: SigLIP performs best with raw tags; CLIP benefits from natural language prefixes
+        prompts = format_text_queries(text_queries, is_siglip=self.is_siglip)
 
         # Extract text embeddings: [num_queries, D]
         text_inputs = self.processor(
@@ -159,7 +187,8 @@ class SigLIPScorer:
         else:
             text_features = self.model.get_text_features(text_inputs["input_ids"])
 
-        text_features = _extract_embedding_tensor(text_features)
+        if not isinstance(text_features, torch.Tensor):
+            text_features = _extract_embedding_tensor(text_features)
         text_features = F.normalize(text_features.float(), dim=-1)
 
         # Extract image embeddings: [num_crops, D]
@@ -177,29 +206,31 @@ class SigLIPScorer:
         else:
             image_features = self.model.get_image_features(img_inputs["pixel_values"])
 
-        image_features = _extract_embedding_tensor(image_features)
+        if not isinstance(image_features, torch.Tensor):
+            image_features = _extract_embedding_tensor(image_features)
         image_features = F.normalize(image_features.float(), dim=-1)
 
         # Pairwise global pooled cosine similarities: [num_crops, num_queries]
         pooled_sim = torch.matmul(image_features, text_features.T)
 
-        # 2. Dense Spatial Token-Max Matching (prevents micro-targets from being diluted)
+        # 2. Dense Spatial Token-Max Matching (CLIP only, requires linear visual_projection layer)
+        # SigLIP uses multihead attention pooling (MAP) without a standalone token projection layer.
         dense_sim = None
-        try:
-            vision_model = getattr(self.model, "vision_model", None)
-            if vision_model is not None:
-                vis_out = vision_model(pixel_values=img_inputs["pixel_values"])
-                if hasattr(vis_out, "last_hidden_state") and vis_out.last_hidden_state is not None:
-                    spatial_tokens = vis_out.last_hidden_state.float()  # [num_crops, num_tokens, D_vis]
-                    if hasattr(self.model, "visual_projection") and self.model.visual_projection is not None:
+        if not self.is_siglip and hasattr(self.model, "visual_projection") and self.model.visual_projection is not None:
+            try:
+                vision_model = getattr(self.model, "vision_model", None)
+                if vision_model is not None:
+                    vis_out = vision_model(pixel_values=img_inputs["pixel_values"])
+                    if hasattr(vis_out, "last_hidden_state") and vis_out.last_hidden_state is not None:
+                        spatial_tokens = vis_out.last_hidden_state.float()  # [num_crops, num_tokens, D_vis]
                         spatial_tokens = self.model.visual_projection(spatial_tokens)
-                    if spatial_tokens.shape[-1] == text_features.shape[-1]:
-                        spatial_tokens = F.normalize(spatial_tokens, dim=-1)
-                        # [num_crops, num_tokens, num_queries] -> max over tokens -> [num_crops, num_queries]
-                        token_sims = torch.einsum("btd,qd->btq", spatial_tokens, text_features)
-                        dense_sim = token_sims.max(dim=1).values
-        except Exception:
-            dense_sim = None
+                        if spatial_tokens.shape[-1] == text_features.shape[-1]:
+                            spatial_tokens = F.normalize(spatial_tokens, dim=-1)
+                            # [num_crops, num_tokens, num_queries] -> max over tokens -> [num_crops, num_queries]
+                            token_sims = torch.einsum("btd,qd->btq", spatial_tokens, text_features)
+                            dense_sim = token_sims.max(dim=1).values
+            except Exception:
+                dense_sim = None
 
         if dense_sim is not None:
             # Fuse global gestalt and peak local token alignment
