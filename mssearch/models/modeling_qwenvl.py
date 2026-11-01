@@ -24,9 +24,9 @@ class ModelQwenVL:
         if num_gpus >= 2:
             device_map = "auto"
             max_memory = {
-                0: "8.5GiB",   # GPU 0 hosts Vision Tower + Layers 0-14 (~7.8GB), leaves ~6.7GB dynamic headroom for 16.5K visual tokens
-                1: "7.0GiB",   # GPU 1 hosts Layers 15-27 + Head (~6.5GB), leaves ~5.5GB for SAM3
-                "cpu": "30GiB"
+                0: "8.5GiB",   # GPU 0 hosts Vision Tower + Layers 0-14 (~7.8GB), leaves dynamic headroom for visual tokens
+                1: "7.0GiB",   # GPU 1 hosts Layers 15-27 + Head (~6.5GB), leaves headroom for SAM3
+                "cpu": "12GiB" # Bounded CPU ceiling to prevent Linux host OOM kill
             }
         else:
             device_map = device
@@ -98,10 +98,11 @@ class ModelQwenVL:
 
         # Visual pixel budget:
         # - min_pixels: 3136 (corresponds to 56 x 56 minimum patch resolution).
-        # - max_pixels: Default 12,845,056 (~12.8M pixels, roughly 3584 x 3584).
-        #   Overridden to 4,194,304 (~4.2M pixels, 2048 x 2048) for 32B checkpoints to prevent OOM.
+        # - max_pixels: Default 1,048,576 (~1M pixels, 1024 x 1024, ~1344 visual tokens).
+        #   Strictly enforces the <= 1024px subcanvas optical resolution ceiling, preventing
+        #   unbounded SDPA memory allocations and CPU RAM exhaustion on 16K visual tokens.
         min_pixels = kwargs.get("min_pixels", 3136)
-        default_max_pixels = 4194304 if "32b" in str(model_path).lower() else 12845056
+        default_max_pixels = 1048576
         max_pixels = kwargs.get("max_pixels", default_max_pixels)
         print("[ModelQwenVL] max_pixels capped at:", max_pixels)
         print("[ModelQwenVL] min_pixels:", min_pixels)
@@ -414,8 +415,12 @@ class ModelQwenVL:
             if not (model_inputs.attention_mask == 0).any():
                 model_inputs.pop("attention_mask", None)
         outputs = self.model(**model_inputs)
-
-        return self._cal_confidence(outputs)
+        conf = self._cal_confidence(outputs)
+        del model_inputs
+        del outputs
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return conf
 
     @torch.no_grad()
     def _cal_confidence(self, outputs):
@@ -462,6 +467,11 @@ class ModelQwenVL:
             out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)
         ]
         outputs = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True,clean_up_tokenization_spaces=False)[0]
+
+        del model_inputs
+        del generated_ids
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         if return_zoomed_view:
             response = {'text': outputs, 'output_image': image_list[1] if len(image_list) > 1 else image_list[0]}
@@ -564,6 +574,10 @@ class ModelQwenVL:
                 probs = torch.softmax(logits_yesno, dim=-1)[:, 0]
                 confidences = (2 * (probs - 0.5)).tolist()
                 results.extend(confidences)
+                del model_inputs
+                del outputs
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             except Exception:
                 # Safe single-item fallback if batch forward pass fails
                 for img, q_str, tmpl in zip(chunk, chunk_queries, chunk_templates):

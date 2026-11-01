@@ -103,15 +103,19 @@ def _query_vlm_response(zoom_model, image_pil: Image.Image, question: str, max_n
         scale = 1024.0 / max(image_pil.width, image_pil.height)
         safe_img = image_pil.resize(
             (int(round(image_pil.width * scale)), int(round(image_pil.height * scale))),
-            Image.Resampling.LANCZOS
+            Image.Resampling.BILINEAR
         )
     if hasattr(zoom_model, "generate_response"):
-        return zoom_model.generate_response(image_pil=safe_img, question=question, max_new_tokens=max_new_tokens)
+        resp = zoom_model.generate_response(image_pil=safe_img, question=question, max_new_tokens=max_new_tokens)
     elif hasattr(zoom_model, "free_form_using_nodes"):
-        return zoom_model.free_form_using_nodes(image_pil=safe_img, question=question, searched_nodes=[], max_new_tokens=max_new_tokens)
+        resp = zoom_model.free_form_using_nodes(image_pil=safe_img, question=question, searched_nodes=[], max_new_tokens=max_new_tokens)
     elif hasattr(zoom_model, "generate"):
-        return zoom_model.generate(image_pil=safe_img, question=question, max_new_tokens=max_new_tokens)
-    return str(zoom_model(image_pil=safe_img, question=question))
+        resp = zoom_model.generate(image_pil=safe_img, question=question, max_new_tokens=max_new_tokens)
+    else:
+        resp = str(zoom_model(image_pil=safe_img, question=question))
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return resp
 
 
 def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str) -> float:
@@ -123,8 +127,9 @@ def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str) -> floa
             scale = 1024.0 / max(image_pil.width, image_pil.height)
             safe_img = image_pil.resize(
                 (int(round(image_pil.width * scale)), int(round(image_pil.height * scale))),
-                Image.Resampling.LANCZOS
+                Image.Resampling.BILINEAR
             )
+        conf = 0.0
         for kwarg in [{"node": None}, {"node_list": None}, {}]:
             try:
                 conf = zoom_model.get_confidence_value(
@@ -135,12 +140,17 @@ def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str) -> floa
                 )
                 if isinstance(conf, torch.Tensor):
                     conf = conf.item()
-                return float(conf)
+                conf = float(conf)
+                break
             except TypeError:
                 continue
             except Exception as e:
                 print(f"[Stage 2][VLM Confidence Notice] {e}")
-                return 0.0
+                conf = 0.0
+                break
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return conf
     return 0.0
 
 
@@ -374,6 +384,11 @@ def run_tool_based_fast_path(
                 feat_np = np.squeeze(feat, axis=0)
             feature_cache[img_idx] = feat_np
 
+        # Immediate GPU memory release: drop SAM3 backbone outputs
+        del backbone_out
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         # 3. Check detection coverage across all Active Objects
         all_objects_found = True
         matched_boxes_by_obj: List[Tuple[int, int, int, int]] = []
@@ -412,6 +427,9 @@ def run_tool_based_fast_path(
         if not all_objects_found or len(matched_boxes_by_obj) < len(active_objects):
             if config.verbose:
                 print(f"[Stage 2] Image {img_idx}: Detected {len(matched_boxes_by_obj)}/{len(active_objects)} objects -> missing targets, fast path bypass.")
+            del processed_results
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
             continue
 
         targets_detected_on_any_image = True
@@ -421,6 +439,10 @@ def run_tool_based_fast_path(
         crop_pil = img_pil.crop(composite_box)
         cw, ch = crop_pil.size
         if cw < 8 or ch < 8:
+            del processed_results
+            del crop_pil
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
             continue
 
         # Compute coordinates relative to crop origin (guaranteed pure ints)
@@ -499,6 +521,12 @@ def run_tool_based_fast_path(
             if is_negative_or_unanswerable(answer_text) or (final_ans and is_negative_or_unanswerable(final_ans)):
                 if config.verbose:
                     print(f"[Stage 2][Negative Fast Path] Fast path answer was uninformative/refusal ('{answer_text}'); bypassing fast path.")
+                del processed_results
+                del crop_pil
+                if 'vlm_crop' in locals() and vlm_crop is not crop_pil:
+                    del vlm_crop
+                if torch is not None and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 continue
 
             if len(candidate_images) > 1:
@@ -511,6 +539,12 @@ def run_tool_based_fast_path(
                     "confidence": float(existence_conf),
                     "boxes": matched_boxes_by_obj
                 })
+                del processed_results
+                del crop_pil
+                if 'vlm_crop' in locals() and vlm_crop is not crop_pil:
+                    del vlm_crop
+                if torch is not None and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 continue
 
             if config.verbose:
@@ -530,6 +564,12 @@ def run_tool_based_fast_path(
         else:
             if config.verbose:
                 print(f"[Stage 2][Fallback Trigger] Existence confidence {existence_conf:.3f} did not exceed {config.fast_path_conf_threshold:.2f}; falling back from instant exit.")
+            del processed_results
+            del crop_pil
+            if 'vlm_crop' in locals() and vlm_crop is not crop_pil:
+                del vlm_crop
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     if collected_fp:
         raw_ans_list = [r["answer"] for r in collected_fp]

@@ -143,7 +143,7 @@ class MSSearchConfig:
     # Visual Pixel Budget & Resolution Controls
     # -------------------------------------------------------------------------
     min_pixels: int = 3136                       # Corresponds to 56 x 56 minimum patch resolution
-    max_pixels: int = 12845056                   # Default 12,845,056 (~12.8M pixels, roughly 3584 x 3584); 4,194,304 (~4.2M pixels, 2048 x 2048) for 32B models
+    max_pixels: int = 1048576                    # Default 1,048,576 (~1M pixels, 1024 x 1024, ~1344 visual tokens) enforces <=1024px subcanvas ceiling and prevents OOM
 
     # -------------------------------------------------------------------------
     # Diagnostic & Logging Controls

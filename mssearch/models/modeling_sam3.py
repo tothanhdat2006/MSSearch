@@ -88,11 +88,12 @@ class sam3_inference():
                         ]
                     )
 
+        iou_mode = kwargs.get("iou_type", "bbox")
         self.postprocessor = PostProcessImage(
                             max_dets_per_img=-1,       # if this number is positive, the processor will return topk. For this demo we instead limit by confidence, see below
-                            iou_type="segm",           # we want masks
+                            iou_type=iou_mode,         # default to bbox to prevent massive 8K mask allocations; use kwargs iou_type='segm' only if masks required
                             use_original_sizes_box=True,   # our boxes should be resized to the image size
-                            use_original_sizes_mask=True,   # our masks should be resized to the image size
+                            use_original_sizes_mask=(iou_mode == "segm"),   # only resize masks if segm mode is active
                             convert_mask_to_rle=False, # the postprocessor supports efficient conversion to RLE format. In this demo we prefer the binary format for easy plotting
                             detection_threshold=0.5,   # Only return confident detections
                             to_cpu=False,
@@ -160,6 +161,11 @@ class sam3_inference():
 
         output, backbone_out = self.model(batch)
         processed_results = self.postprocessor.process_results(output, batch.find_metadatas)
+        del output
+        del batch
+        del datapoint
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return backbone_out, processed_results, text_id
 
@@ -207,6 +213,11 @@ class sam3_inference():
                 batch = copy_data_to_device(batch, torch.device(self.device), non_blocking=True)
                 output, backbone_out = self.model(batch)
                 processed_results = self.postprocessor.process_results(output, batch.find_metadatas)
+                del output
+                del batch
+                del datapoints
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
                 for img_local_idx, t_ids in enumerate(chunk_meta):
                     img_results = {}
