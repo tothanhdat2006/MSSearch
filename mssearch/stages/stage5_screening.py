@@ -58,7 +58,9 @@ def run_resolution_screening(
     config: Optional[MSSearchConfig] = None,
     question: str = "",
     is_relational: Optional[bool] = None,
-    zoom_model = None
+    zoom_model = None,
+    is_cross_object: Optional[bool] = None,
+    **kwargs
 ) -> List[CandidateCrop]:
     """
     Aggregates surviving candidate patches into the Unified Candidate Pool P:
@@ -96,6 +98,9 @@ def run_resolution_screening(
         )
 
     # 2. Candidate Pool Aggregation: Crops Only (Single-Object) vs. Spatial Layout (Cross-Object)
+    if is_relational is None and is_cross_object is not None:
+        is_relational = is_cross_object
+
     if is_relational is None:
         is_relational = is_relational_question(active_objects, question=question, zoom_model=zoom_model)
 

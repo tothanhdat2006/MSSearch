@@ -281,6 +281,23 @@ def partition_candidate_images(
                 indices = [int(i * step) for i in range(config.max_patches_per_image)]
                 img_patches = [img_patches[i] for i in indices]
 
+        # Ensure all surviving bounded patches have siglip_score populated when siglip_model is available
+        if siglip_model is not None and active_objects:
+            unscored = [p for p in img_patches if p.siglip_score is None]
+            if unscored:
+                try:
+                    crops = [img_pil.crop(tuple(int(round(float(c))) for c in p.box)) for p in unscored]
+                    bs = getattr(config, "siglip_budget_batch_size", 32)
+                    scores = []
+                    for b_i in range(0, len(crops), bs):
+                        batch_crops = crops[b_i:b_i + bs]
+                        scores.extend(siglip_model.score_crops(batch_crops, active_objects))
+                    for p, s in zip(unscored, scores):
+                        p.siglip_score = float(s)
+                except Exception as e:
+                    if config.verbose:
+                        print(f"[Stage 3][SigLIP Leaf Scoring Notice] SigLIP scoring failed ({e}).")
+
         bounded_patches.extend(img_patches)
 
     if config.verbose:
