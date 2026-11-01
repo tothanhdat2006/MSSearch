@@ -34,13 +34,14 @@ class ModelQwenVL:
 
         # SDPA backend for NVIDIA T4 (Turing sm_75 cannot run FlashAttention-2)
         actual_attn_implementation = "sdpa"
+        local_files_only = kwargs.get("local_files_only", os.path.isdir(str(model_path)))
         print(f"[ModelQwenVL] Multi-GPU device_map: {device_map} | max_memory: {max_memory}")
-        print(f"[ModelQwenVL] Attention Backend: {actual_attn_implementation} | Precision: {self.dtype}")
+        print(f"[ModelQwenVL] Attention Backend: {actual_attn_implementation} | Precision: {self.dtype} | Local files only: {local_files_only}")
 
         self.processor = AutoProcessor.from_pretrained(
             model_path,
             trust_remote_code=True,
-            local_files_only=True,
+            local_files_only=local_files_only,
         )
         self.tokenizer = self.processor.tokenizer
         try:
@@ -52,7 +53,7 @@ class ModelQwenVL:
                 max_memory=max_memory,
                 low_cpu_mem_usage=True,
                 trust_remote_code=True,
-                local_files_only=True,
+                local_files_only=local_files_only,
             )
         except (TypeError, ValueError, AttributeError, Exception):
             try:
@@ -64,7 +65,7 @@ class ModelQwenVL:
                     max_memory=max_memory,
                     low_cpu_mem_usage=True,
                     trust_remote_code=True,
-                    local_files_only=True,
+                    local_files_only=local_files_only,
                 )
             except Exception:
                 try:
@@ -77,7 +78,7 @@ class ModelQwenVL:
                         max_memory=max_memory,
                         low_cpu_mem_usage=True,
                         trust_remote_code=True,
-                        local_files_only=True,
+                        local_files_only=local_files_only,
                     )
                 except Exception:
                     from transformers import AutoModelForVision2Seq
@@ -89,7 +90,7 @@ class ModelQwenVL:
                         max_memory=max_memory,
                         low_cpu_mem_usage=True,
                         trust_remote_code=True,
-                        local_files_only=True,
+                        local_files_only=local_files_only,
                     )
 
         self.model.eval()
