@@ -31,8 +31,8 @@ class FinalSearchResult:
 
 def extract_final_answer(text: str) -> str:
     """
-    Extracts the clean, concise final answer strictly from '<answer>...</answer>' tags.
-    Returns empty string if no <answer> tag is found.
+    Extracts the clean, concise final answer. Checks '<answer>...</answer>' tags first;
+    falls back to stripped text if no tags are present (e.g. when prompt_directed_final_answer=False).
     """
     if not text:
         return ""
@@ -41,7 +41,10 @@ def extract_final_answer(text: str) -> str:
         val = m.group(1).strip()
         val = re.sub(r'^[\*\[\"\'\s]+|[\*\]\"\'\.\s]+$', '', val).strip()
         return val
-    return ""
+    # Fallback to direct text stripping if no XML tags are present
+    cleaned = text.strip()
+    cleaned = re.sub(r'^[\*\[\"\'\s]+|[\*\]\"\'\.\s]+$', '', cleaned).strip()
+    return cleaned
 
 
 def expand_bounding_box(
