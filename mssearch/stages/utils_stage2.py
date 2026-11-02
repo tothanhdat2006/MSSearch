@@ -150,29 +150,7 @@ def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str) -> floa
     return 0.0
 
 
-def build_direct_answer_prompt(question: str, config: MSSearchConfig) -> str:
-    """Constructs prompt for Phase 1 Direct Answer."""
-    if getattr(config, "prompt_directed_final_answer", True):
-        answer_mode = getattr(config, "answer_type", "free_form")
-        if answer_mode in ["option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"] or "Options:\n" in question:
-            return (
-                f"{question}\n\n"
-                "Select the best option from the choices above that answers the question.\n"
-                "State ONLY the option letter and concise choice (e.g. <answer>(A)</answer> or <answer>A. choice text</answer>).\n"
-                "Do NOT write conversational filler, reasoning, or explanations.\n"
-                "If the target object or requested text/information is NOT clearly visible in this crop, output strictly:\n"
-                "<answer>None</answer>\n\n"
-                "Otherwise, output the option letter inside <answer>...</answer> tags:\n"
-                "<answer>(A)</answer>"
-            )
-        return (
-            f"{question}\n\n"
-            "If the target object or requested text/information is NOT clearly visible in this crop, output:\n"
-            "<answer>None</answer>\n\n"
-            "Otherwise, answer the question concisely inside <answer>...</answer> tags:\n"
-            "<answer>concise answer</answer>"
-        )
-    return (
-        f"{question}\n\n"
-        "If the target object or requested text/information is NOT clearly visible in this crop, output: <answer>None</answer>"
-    )
+def build_direct_answer_prompt(question: str, config: Optional[MSSearchConfig] = None) -> str:
+    """Constructs clean concise prompt (<image>\\n<question>) for Phase 1 Direct Answer."""
+    clean_q = question[len("<image>\n"):].strip() if question.startswith("<image>\n") else question.strip()
+    return f"<image>\n{clean_q}"

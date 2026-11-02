@@ -84,6 +84,22 @@ class TestStage6Reading(unittest.TestCase):
         self.assertEqual(parsed[0]["content"][0], {"type": "image"})
         self.assertEqual(parsed[0]["content"][1], {"type": "text", "text": "Which store is on the corner?"})
 
+    def test_direct_answer_prompt_and_extraction(self):
+        from mssearch.stages.utils_stage2 import build_direct_answer_prompt
+        from mssearch.stages.utils_stage6 import extract_final_answer
+
+        # Test prompt creation
+        p1 = build_direct_answer_prompt("What color is the car?")
+        self.assertEqual(p1, "<image>\nWhat color is the car?")
+
+        p2 = build_direct_answer_prompt("<image>\nWhat color is the car?")
+        self.assertEqual(p2, "<image>\nWhat color is the car?")
+
+        # Test answer extraction (raw text and legacy XML tags)
+        self.assertEqual(extract_final_answer("  **Blue**  "), "Blue")
+        self.assertEqual(extract_final_answer("<answer>Red</answer>"), "Red")
+        self.assertEqual(extract_final_answer("(A)"), "A")
+
 
 if __name__ == "__main__":
     unittest.main()

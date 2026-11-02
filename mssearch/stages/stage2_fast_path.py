@@ -109,7 +109,7 @@ def run_direct_global_assessment(
         if conf > threshold:
             prompt = build_direct_answer_prompt(question, config)
             raw_answer = _query_vlm_response(zoom_model, img_pil, prompt, max_new_tokens=getattr(config, "max_vlm_tokens", 128))
-            final_ans = extract_final_answer(raw_answer) if getattr(config, "prompt_directed_final_answer", True) else raw_answer
+            final_ans = extract_final_answer(raw_answer)
 
             if is_negative_or_unanswerable(raw_answer) or (final_ans and is_negative_or_unanswerable(final_ans)):
                 if config.verbose:
@@ -324,7 +324,7 @@ def run_tool_based_fast_path(
             answer_text = _query_vlm_response(zoom_model, vlm_crop, answer_prompt, max_new_tokens=config.max_vlm_tokens)
 
             from .stage6_foveated_reader import is_negative_or_unanswerable, extract_final_answer, deduplicate_answers
-            final_ans = extract_final_answer(answer_text) if getattr(config, "prompt_directed_final_answer", True) else answer_text
+            final_ans = extract_final_answer(answer_text)
             if is_negative_or_unanswerable(answer_text) or (final_ans and is_negative_or_unanswerable(final_ans)):
                 if config.verbose:
                     print(f"[Stage 2][Negative Fast Path] Fast path answer was uninformative/refusal ('{answer_text}'); bypassing fast path.")

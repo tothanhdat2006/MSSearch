@@ -102,40 +102,7 @@ def run_foveated_vlm_reading(
 
         # VLM Answer Prompt (<image>\n<question> matching CVSearch standard)
         clean_q = question[len("<image>\n"):].strip() if question.startswith("<image>\n") else question.strip()
-        if getattr(config, "prompt_directed_final_answer", False):
-            if answer_mode == "attribute_list":
-                prompt = (
-                    f"<image>\n{clean_q}\n\n"
-                    "State ONLY the specific attribute values asked in the question (e.g. brand, color, type, text, name).\n"
-                    "Do NOT write full sentences, conversational filler, or explanations.\n"
-                    "If multiple values are present, separate them with commas (e.g. <answer>item1, item2</answer>).\n"
-                    "If the target object or requested information is NOT clearly visible or identifiable in this crop, output strictly:\n"
-                    "<answer>None</answer>\n\n"
-                    "Otherwise, output the exact attributes inside <answer>...</answer> tags:\n"
-                    "<answer>concise answer</answer>"
-                )
-            elif answer_mode in ["option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"] or "Options:\n" in clean_q:
-                prompt = (
-                    f"<image>\n{clean_q}\n\n"
-                    "Select the best option from the choices above that answers the question.\n"
-                    "State ONLY the option letter and concise choice (e.g. <answer>(A)</answer> or <answer>A. choice text</answer>).\n"
-                    "Do NOT write conversational filler, reasoning, or explanations.\n"
-                    "If the target object or requested information is NOT clearly visible in this crop, output strictly:\n"
-                    "<answer>None</answer>\n\n"
-                    "Otherwise, output the option letter inside <answer>...</answer> tags:\n"
-                    "<answer>(A)</answer>"
-                )
-            else:
-                prompt = (
-                    f"<image>\n{clean_q}\n\n"
-                    "State ONLY the direct factual answer (1 to 5 words). Do NOT write conversational filler or explanations.\n"
-                    "If the target object or requested text/information is NOT clearly visible in this crop, output strictly:\n"
-                    "<answer>None</answer>\n\n"
-                    "Otherwise, output the concise answer inside <answer>...</answer> tags:\n"
-                    "<answer>concise answer</answer>"
-                )
-        else:
-            prompt = f"<image>\n{clean_q}"
+        prompt = f"<image>\n{clean_q}"
 
         prepared_crops.append({
             "c_idx": c_idx,
@@ -238,7 +205,7 @@ def run_foveated_vlm_reading(
                 )
                 evidence_indices.add(img_idx)
                 if config.verbose:
-                    print(f"[Stage 6][Evidence Found] Crop {c_idx} (Image {img_idx}, {item.source_branch}): <answer>: '{final_ans}' (Raw: '{raw_answer[:60]}...')")
+                    print(f"[Stage 6][Evidence Found] Crop {c_idx} (Image {img_idx}, {item.source_branch}): Answer: '{final_ans}' (Raw: '{raw_answer[:60]}...')")
 
                 # Consensus stopping & query-adaptive dynamic halting
                 enable_halting = getattr(config, "enable_early_consensus_exit", True) or (

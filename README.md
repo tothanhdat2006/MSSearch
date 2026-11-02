@@ -70,8 +70,8 @@ flowchart TD
 4. **Zero Redundant Feature Computation**:
    - The dense vision feature map $\mathbf{H}_e \in \mathbb{R}^{256 \times 72 \times 72}$ extracted during Stage 2 canvas detection is cached per image. Stage 3 SAM3-SGAP directly slices $\mathbf{H}_e$ without re-running the SAM3 image encoder.
    - Stage 3 computes average-pooled feature vectors for all bounded patches. Stage 4 cosine grouping clusters these vectors with zero neural network forward passes.
-5. **Universal Zero-Shot XML Grounding**:
-   - Eliminates fragile fixed-vocabulary lists in favor of universal grammatical premise subtraction, prompt-directed XML format extraction (`<answer>...</answer>`), and negative escape grounding (`<answer>None</answer>`).
+5. **Clean Foveated Reading Pipeline**:
+   - Strictly conforms to concise `<image>\n<question>` query formatting without artificial visual bounding box distortions or fragile prompt tags.
 6. **Zero-Heuristic Path Resolution**:
    - Strictly direct path concatenation (`os.path.join(base_data_dir, img_rel)`), preventing ambiguous fuzzy matching across nested Kaggle datasets.
 7. **Verbose Diagnostic Tracing**:

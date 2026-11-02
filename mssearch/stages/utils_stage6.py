@@ -31,20 +31,17 @@ class FinalSearchResult:
 
 def extract_final_answer(text: str) -> str:
     """
-    Extracts the clean, concise final answer. Checks '<answer>...</answer>' tags first;
-    falls back to stripped text if no tags are present (e.g. when prompt_directed_final_answer=False).
+    Extracts the clean, concise final answer from model output text.
+    Strips markdown wrappers, parentheses, brackets, and quotes directly.
     """
     if not text:
         return ""
     m = re.search(r'<answer>([\s\S]*?)</answer>', text, flags=re.IGNORECASE)
     if m:
         val = m.group(1).strip()
-        val = re.sub(r'^[\*\[\"\'\s]+|[\*\]\"\'\.\s]+$', '', val).strip()
-        return val
-    # Fallback to direct text stripping if no XML tags are present
+        return re.sub(r'^[\*\(\[\"\'\s]+|[\*\)\]\"\'\.\s]+$', '', val).strip()
     cleaned = text.strip()
-    cleaned = re.sub(r'^[\*\[\"\'\s]+|[\*\]\"\'\.\s]+$', '', cleaned).strip()
-    return cleaned
+    return re.sub(r'^[\*\(\[\"\'\s]+|[\*\)\]\"\'\.\s]+$', '', cleaned).strip()
 
 
 def expand_bounding_box(

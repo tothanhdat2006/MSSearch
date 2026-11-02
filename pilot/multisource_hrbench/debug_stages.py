@@ -221,7 +221,7 @@ def extract_predicted_option(pred_str: Optional[str], options_raw: Any = None) -
     if not clean_pred or clean_pred.lower() in ("no answer found", "none", "n/a", "[error: image not found]"):
         return None
 
-    # 0. XML tag extraction <answer>...</answer> (exact match with Stage 6 XML format directive)
+    # 0. Optional XML tag extraction <answer>...</answer> (backward compatibility)
     xml_m = re.search(r"<answer>(.*?)</answer>", clean_pred, re.DOTALL | re.IGNORECASE)
     if xml_m:
         inside = xml_m.group(1).strip()
@@ -547,26 +547,8 @@ def execute_single_sample_direct(
     else:
         base_question = real_question
 
-    if opt_str or "Options:" in real_question:
-        prompt_text = (
-            f"{base_question}\n\n"
-            "Select the best option from the choices above that answers the question.\n"
-            "State ONLY the option letter and concise choice (e.g. <answer>(A)</answer> or <answer>A. choice text</answer>).\n"
-            "Do NOT write conversational filler, reasoning, or explanations.\n"
-            "If the target object or requested information is NOT clearly visible, output strictly:\n"
-            "<answer>None</answer>\n\n"
-            "Otherwise, output the option letter inside <answer>...</answer> tags:\n"
-            "<answer>(A)</answer>"
-        )
-    else:
-        prompt_text = (
-            f"{real_question}\n\n"
-            "State ONLY the direct factual answer (1 to 5 words). Do NOT write conversational filler or explanations.\n"
-            "If the target object or requested text/information is NOT clearly visible, output strictly:\n"
-            "<answer>None</answer>\n\n"
-            "Otherwise, output the concise answer inside <answer>...</answer> tags:\n"
-            "<answer>concise answer</answer>"
-        )
+    clean_base = base_question[len("<image>\n"):].strip() if base_question.startswith("<image>\n") else base_question.strip()
+    prompt_text = f"<image>\n{clean_base}"
 
     # 4. Direct VLM Query
     t0 = time.perf_counter()
