@@ -297,6 +297,7 @@ def run_feature_grouping_and_gating(
             "best_det_box": best_det_box,
             "group_detected_objects": group_detected_objects,
             "max_det_score": max_det_score,
+            "max_siglip_score": max_siglip_score,
             "is_repart_candidate": is_repart_candidate,
         }
         group_states.append(state)
@@ -441,6 +442,7 @@ def run_feature_grouping_and_gating(
         best_det_box = state["best_det_box"]
         group_detected_objects = state["group_detected_objects"]
         max_det_score = state["max_det_score"]
+        max_siglip_score = state.get("max_siglip_score", max([bounded_patches[mem_i].siglip_score or 0.0 for mem_i in member_indices], default=0.0))
         is_repart_candidate = state["is_repart_candidate"]
 
         if sim_mat.size > 0 and len(member_indices) > 0:
