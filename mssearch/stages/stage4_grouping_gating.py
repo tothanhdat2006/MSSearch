@@ -18,6 +18,7 @@ from ..config import MSSearchConfig
 from .stage3_partitioning import BoundedPatch
 from .utils_stage4 import (
     group_patches_by_cosine_similarity,
+    find_group_representative,
     compute_target_coverage_ratio,
     target_center_in_patch,
     bbox_intersects,
@@ -28,6 +29,7 @@ from .utils_stage4 import (
 
 __all__ = [
     "group_patches_by_cosine_similarity",
+    "find_group_representative",
     "compute_target_coverage_ratio",
     "target_center_in_patch",
     "bbox_intersects",
@@ -117,15 +119,10 @@ def run_feature_grouping_and_gating(
     # Step 2b: Prioritized Candidate Patch Selection for SAM3 crop inference
     if sam_model is not None and active_objects:
         if getattr(config, "enable_prioritized_sam3_scanning", True):
-            group_rep_set = set()
-            for member_indices in groups:
-                if len(member_indices) == 1:
-                    group_rep_set.add(member_indices[0])
-                else:
-                    g_feats = np.stack([bounded_patches[i].feature_vector for i in member_indices], axis=0)
-                    centroid = g_feats.mean(axis=0, keepdims=True)
-                    dists = np.linalg.norm(g_feats - centroid, axis=1)
-                    group_rep_set.add(member_indices[int(np.argmin(dists))])
+            group_rep_set = {
+                find_group_representative(member_indices, bounded_patches)
+                for member_indices in groups
+            }
 
             candidate_pool = sorted(
                 list(range(len(bounded_patches))),
@@ -203,14 +200,7 @@ def run_feature_grouping_and_gating(
     latent_queue: List[Dict[str, Any]] = []
 
     for g_idx, member_indices in enumerate(groups):
-        if len(member_indices) == 1:
-            rep_idx = member_indices[0]
-        else:
-            group_feats = np.stack([bounded_patches[i].feature_vector for i in member_indices], axis=0)
-            centroid = group_feats.mean(axis=0, keepdims=True)
-            dists = np.linalg.norm(group_feats - centroid, axis=1)
-            rep_idx = member_indices[int(np.argmin(dists))]
-
+        rep_idx = find_group_representative(member_indices, bounded_patches)
         rep_patch = bounded_patches[rep_idx]
         rep_box_ints = tuple(int(round(float(c))) for c in rep_patch.box)
         rep_img = candidate_images[rep_patch.img_idx].crop(rep_box_ints)

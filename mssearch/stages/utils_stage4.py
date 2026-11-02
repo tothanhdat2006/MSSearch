@@ -15,6 +15,33 @@ from ..config import MSSearchConfig
 from .stage3_partitioning import BoundedPatch
 
 
+def find_group_representative(
+    member_indices: List[int],
+    bounded_patches: List[BoundedPatch]
+) -> int:
+    """
+    Selects the representative patch for a group:
+    Primary: highest siglip_score.
+    Tiebreaker: minimum Euclidean distance to group feature centroid in embedding space.
+    """
+    if len(member_indices) == 1:
+        return member_indices[0]
+
+    g_feats = np.stack([bounded_patches[i].feature_vector for i in member_indices], axis=0)
+    centroid = g_feats.mean(axis=0, keepdims=True)
+    dists = np.linalg.norm(g_feats - centroid, axis=1)
+
+    sorted_members = sorted(
+        zip(member_indices, dists),
+        key=lambda pair: (
+            bounded_patches[pair[0]].siglip_score if bounded_patches[pair[0]].siglip_score is not None else 0.0,
+            -pair[1]
+        ),
+        reverse=True
+    )
+    return sorted_members[0][0]
+
+
 def group_patches_by_cosine_similarity(
     patches: List[BoundedPatch],
     sim_threshold: float = 0.80,
