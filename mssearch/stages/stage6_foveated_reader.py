@@ -11,7 +11,6 @@ from PIL import Image
 
 from ..config import MSSearchConfig
 from .stage5_screening import CandidateCrop
-from .stage2_fast_path import render_visual_prompt_bbox
 from .utils_stage6 import (
     EvidenceExtraction,
     FinalSearchResult,
@@ -64,10 +63,6 @@ def run_foveated_vlm_reading(
     # 1. Prepare and pre-filter all crop inputs
     prepared_crops: List[Dict[str, Any]] = []
     answer_mode = getattr(config, "answer_type", "free_form")
-    bbox_note = (
-        "Focus inside the red box(es) (the box is a marker, not an object).\n"
-        if config.enable_visual_prompt_bbox else ""
-    )
 
     for c_idx, item in enumerate(unified_pool):
         img_idx = item.img_idx
@@ -79,29 +74,12 @@ def run_foveated_vlm_reading(
             foveated_crop = item.crop_image
             exp_box = item.box
             local_target_boxes = getattr(item, "remapped_boxes", []) or []
-            vlm_input_crop = foveated_crop
-
-            if config.enable_visual_prompt_bbox and local_target_boxes:
-                vlm_input_crop = render_visual_prompt_bbox(
-                    foveated_crop,
-                    local_target_boxes,
-                    color=config.visual_prompt_bbox_color,
-                    width=config.visual_prompt_bbox_width
-                )
-
             if local_target_boxes:
                 local_target_box = local_target_boxes[0]
             else:
                 fcw, fch = foveated_crop.size
                 local_target_box = (0, 0, fcw, fch)
                 local_target_boxes = [local_target_box]
-
-            text_coords_hint = ""
-            if config.enable_textual_prompt_coords and local_target_boxes:
-                boxes_str = "; ".join([f"[{b[0]}, {b[1]}, {b[2]}, {b[3]}]" for b in local_target_boxes[:4]])
-                text_coords_hint = f" Focal region(s): {boxes_str}."
-
-            vlm_image_input: Union[Image.Image, List[Image.Image]] = vlm_input_crop
         else:
             # Expand bounding box independently by 1.25x
             exp_box = expand_bounding_box(
@@ -113,7 +91,6 @@ def run_foveated_vlm_reading(
             if fcw < 8 or fch < 8:
                 continue
 
-            vlm_input_crop = foveated_crop
             x1, y1 = exp_box[0], exp_box[1]
             local_target_box = (
                 item.box[0] - x1, item.box[1] - y1,
@@ -121,27 +98,14 @@ def run_foveated_vlm_reading(
             )
             local_target_boxes = [local_target_box]
 
-            if config.enable_visual_prompt_bbox:
-                vlm_input_crop = render_visual_prompt_bbox(
-                    foveated_crop,
-                    [local_target_box],
-                    color=config.visual_prompt_bbox_color,
-                    width=config.visual_prompt_bbox_width
-                )
+        vlm_image_input: Image.Image = foveated_crop
 
-            text_coords_hint = ""
-            if config.enable_textual_prompt_coords:
-                text_coords_hint = f" Focal region: [{local_target_box[0]}, {local_target_box[1]}, {local_target_box[2]}, {local_target_box[3]}]."
-
-            vlm_image_input = vlm_input_crop
-
-        # Concise Final VLM Answer Prompt
-        if getattr(config, "prompt_directed_final_answer", True):
+        # VLM Answer Prompt (<image>\n<question> matching CVSearch standard)
+        clean_q = question[len("<image>\n"):].strip() if question.startswith("<image>\n") else question.strip()
+        if getattr(config, "prompt_directed_final_answer", False):
             if answer_mode == "attribute_list":
                 prompt = (
-                    f"{question}{text_coords_hint}\n\n"
-                    "Carefully inspect this crop.\n"
-                    f"{bbox_note}"
+                    f"<image>\n{clean_q}\n\n"
                     "State ONLY the specific attribute values asked in the question (e.g. brand, color, type, text, name).\n"
                     "Do NOT write full sentences, conversational filler, or explanations.\n"
                     "If multiple values are present, separate them with commas (e.g. <answer>item1, item2</answer>).\n"
@@ -150,11 +114,9 @@ def run_foveated_vlm_reading(
                     "Otherwise, output the exact attributes inside <answer>...</answer> tags:\n"
                     "<answer>concise answer</answer>"
                 )
-            elif answer_mode in ["option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"] or "Options:\n" in question:
+            elif answer_mode in ["option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"] or "Options:\n" in clean_q:
                 prompt = (
-                    f"{question}{text_coords_hint}\n\n"
-                    "Carefully inspect this crop.\n"
-                    f"{bbox_note}"
+                    f"<image>\n{clean_q}\n\n"
                     "Select the best option from the choices above that answers the question.\n"
                     "State ONLY the option letter and concise choice (e.g. <answer>(A)</answer> or <answer>A. choice text</answer>).\n"
                     "Do NOT write conversational filler, reasoning, or explanations.\n"
@@ -165,9 +127,7 @@ def run_foveated_vlm_reading(
                 )
             else:
                 prompt = (
-                    f"{question}{text_coords_hint}\n\n"
-                    "Carefully inspect this crop.\n"
-                    f"{bbox_note}"
+                    f"<image>\n{clean_q}\n\n"
                     "State ONLY the direct factual answer (1 to 5 words). Do NOT write conversational filler or explanations.\n"
                     "If the target object or requested text/information is NOT clearly visible in this crop, output strictly:\n"
                     "<answer>None</answer>\n\n"
@@ -175,11 +135,7 @@ def run_foveated_vlm_reading(
                     "<answer>concise answer</answer>"
                 )
         else:
-            prompt = (
-                f"{question}{text_coords_hint}\n\n"
-                f"{bbox_note}"
-                "If the target object or requested text/information is NOT clearly visible in this crop, output: <answer>None</answer>"
-            )
+            prompt = f"<image>\n{clean_q}"
 
         prepared_crops.append({
             "c_idx": c_idx,

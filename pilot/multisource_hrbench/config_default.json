@@ -89,7 +89,7 @@
   "enable_early_consensus_exit": false,
   "early_consensus_count": 2,
   "early_consensus_threshold": 0.75,
-  "prompt_directed_final_answer": true,
+  "prompt_directed_final_answer": false,
   "answer_dedup_similarity": 0.85,
   "include_options_in_prompt": false,
   "answer_type": "option_list",

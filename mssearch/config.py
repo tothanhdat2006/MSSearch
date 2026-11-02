@@ -122,7 +122,7 @@ class MSSearchConfig:
     enable_early_consensus_exit: bool = False    # Stop evaluating crops once 2 identical/near-identical answers are extracted
     early_consensus_count: int = 2               # Minimum consensus extractions to trigger early exit
     early_consensus_threshold: float = 0.75      # String similarity threshold on extracted core answers
-    prompt_directed_final_answer: bool = True    # Instruct VLM to conclude with 'Final Answer: <concise answer>'
+    prompt_directed_final_answer: bool = False   # False: concise <image>\n<question> standard; True: XML answer tag prompt
     answer_dedup_similarity: float = 0.85        # Semantic deduplication threshold
 
     # -------------------------------------------------------------------------

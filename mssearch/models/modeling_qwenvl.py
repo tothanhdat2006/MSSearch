@@ -438,7 +438,7 @@ class ModelQwenVL:
             image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
             if len(image_list) > 1:
                 raw_image_resize, croped_view, zoom_view = image_list
-                image_input = [raw_image_resize, zoom_view]
+                image_input = [zoom_view]
             else:
                 image_input = image_list
 
@@ -448,7 +448,10 @@ class ModelQwenVL:
         else:
             pre_information = "pre_information_image1"
 
-        qs = self.prompts[prompt_tag][pre_information] + question
+        if question.startswith("<image>\n"):
+            qs = question
+        else:
+            qs = self.prompts[prompt_tag][pre_information] + question
         prompt = self.get_prompt_from_qs(qs)
         model_inputs = self.processor(
             text=[prompt],
@@ -626,7 +629,10 @@ class ModelQwenVL:
                 for img_inp, q in zip(chunk_imgs, chunk_qs):
                     is_multi_img = isinstance(img_inp, (list, tuple)) and len(img_inp) > 1
                     pre_info = "pre_information_image2" if is_multi_img else "pre_information_image1"
-                    qs_full = self.prompts["search"][pre_info] + q
+                    if q.startswith("<image>\n"):
+                        qs_full = q
+                    else:
+                        qs_full = self.prompts["search"][pre_info] + q
                     prompts.append(self.get_prompt_from_qs(qs_full))
 
                 model_inputs = self.processor(
@@ -700,7 +706,10 @@ class ModelQwenVL:
         else:
             pre_information = "pre_information_image1"
 
-        qs = self.prompts[prompt_tag][pre_information] + question
+        if question.startswith("<image>\n"):
+            qs = question
+        else:
+            qs = self.prompts[prompt_tag][pre_information] + question
         prompt = self.get_prompt_from_qs(qs)
 
         model_inputs = self.processor(
