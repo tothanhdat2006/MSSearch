@@ -16,7 +16,7 @@ models_volume = modal.Volume.from_name("mssearch-models", create_if_missing=True
     image=download_image,
     volumes={"/data": data_volume, "/models": models_volume},
     timeout=86400,
-    secrets=[modal.Secret.from_dict({"HF_TOKEN": os.environ.get("HF_TOKEN", "")})]
+    secrets=[modal.Secret.from_name("huggingface-secret")]
 )
 def download_remote_assets(
     download_dataset: bool = True,
