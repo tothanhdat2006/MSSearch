@@ -10,13 +10,16 @@ eval_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("git", "ffmpeg", "libsm6", "libxext6")
     .pip_install(
-        "torch>=2.2.0",
+        "torch",
         "torchvision",
-        "transformers>=4.45.0",
-        "accelerate>=0.28.0",
-        "pillow>=10.0.0",
+        extra_index_url="https://download.pytorch.org/whl/cu124"
+    )
+    .pip_install(
+        "transformers==4.53.0",
+        "accelerate",
+        "pillow",
         "sentencepiece",
-        "spacy>=3.7.0",
+        "spacy",
         "scikit-learn",
         "huggingface_hub"
     )
