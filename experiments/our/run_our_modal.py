@@ -120,7 +120,16 @@ def evaluate_our_modal(
             os.makedirs("/models/sam3", exist_ok=True)
             tar_tmp = "/models/sam3.tar.gz"
             import urllib.request, tarfile
-            urllib.request.urlretrieve("https://www.modelscope.cn/models/llp1995/sam3/resolve/master/sam3.tar.gz", tar_tmp)
+
+            def _hook(count, block_size, total_size):
+                if total_size > 0 and count % 5000 == 0:
+                    pct = min(100, count * block_size * 100 // total_size)
+                    mb = count * block_size // (1024 * 1024)
+                    tot_mb = total_size // (1024 * 1024)
+                    print(f"[Modal Worker] Fetching sam3.tar.gz: {pct}% ({mb}MB / {tot_mb}MB)")
+
+            urllib.request.urlretrieve("https://www.modelscope.cn/models/llp1995/sam3/resolve/master/sam3.tar.gz", tar_tmp, reporthook=_hook)
+            print("[Modal Worker] Extracting sam3.tar.gz...")
             with tarfile.open(tar_tmp, "r:*") as tar:
                 tar.extractall("/models/sam3")
             if os.path.exists(tar_tmp):
