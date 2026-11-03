@@ -13,7 +13,7 @@ eval_image = (
     .pip_install(
         "torch",
         "torchvision",
-        extra_index_url="https://download.pytorch.org/whl/cu124"
+        extra_index_url="https://download.pytorch.org/whl/cu126"
     )
     .pip_install(
         "transformers==4.53.0",
