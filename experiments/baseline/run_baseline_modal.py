@@ -53,7 +53,9 @@ def evaluate_baseline_modal(
     start_idx: int = None,
     end_idx: int = None,
     max_samples: int = None,
-    resume: bool = True
+    resume: bool = True,
+    min_pixels: int = 3136,
+    max_pixels: int = 1048576,
 ):
     import sys, os, torch
     for p in ["/root/experiments/baseline", os.path.abspath(os.path.join(os.path.dirname(__file__), "experiments/baseline")), os.path.dirname(__file__)]:
@@ -107,7 +109,7 @@ def evaluate_baseline_modal(
 
     local_model_path = os.path.join("/models", m_clean)
     resolved_model = local_model_path if os.path.isdir(local_model_path) else model_name
-    engine = load_vlm_engine(resolved_model, device="cuda:0")
+    engine = load_vlm_engine(resolved_model, device="cuda:0", min_pixels=min_pixels, max_pixels=max_pixels)
 
     with open(results_file, "a", encoding="utf-8") as out_f:
         for idx, (s_idx, sample, p_name, pool_info) in enumerate(remaining_tasks):
@@ -182,7 +184,9 @@ def main(
     start_idx: int = None,
     end_idx: int = None,
     max_samples: int = None,
-    resume: bool = True
+    resume: bool = True,
+    min_pixels: int = 3136,
+    max_pixels: int = 1048576,
 ):
     gpu_type = select_gpu(model)
     print(f"Launching Modal Baseline Evaluation for model: {model} on {gpu_type} (Pool: {pool_mode})")
@@ -196,5 +200,7 @@ def main(
         start_idx=start_idx,
         end_idx=end_idx,
         max_samples=max_samples,
-        resume=resume
+        resume=resume,
+        min_pixels=min_pixels,
+        max_pixels=max_pixels,
     )

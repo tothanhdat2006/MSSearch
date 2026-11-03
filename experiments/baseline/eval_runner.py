@@ -38,6 +38,10 @@ def parse_args():
     parser.add_argument("--resume", action="store_true", default=False)
     parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--min_pixels", type=int, default=3136,
+                        help="Minimum patch pixel floor for QwenVL/AutoProcessor. Default: 3136 (56x56).")
+    parser.add_argument("--max_pixels", type=int, default=1048576,
+                        help="Maximum pixel ceiling per candidate image. Default: 1048576 (1024x1024).")
     return parser.parse_args()
 
 def main():
@@ -69,7 +73,12 @@ def main():
     print(f"[Task Queue] Total: {len(eval_tasks)} | Done: {len(completed_keys)} | Remaining: {len(remaining_tasks)}")
 
     # Load model engine
-    engine = load_vlm_engine(args.model_path, device=args.device)
+    engine = load_vlm_engine(
+        args.model_path,
+        device=args.device,
+        min_pixels=args.min_pixels,
+        max_pixels=args.max_pixels
+    )
 
     # Execution loop
     with open(results_file, "a", encoding="utf-8") as out_f:

@@ -36,7 +36,13 @@ def create_vertical_panel_canvas(images: List[Image.Image]) -> Image.Image:
         cur_y += (gap_px - border_px)
     return canvas
 
-def load_vlm_engine(model_path_or_name: str, device: str = "cuda:0", attn_implementation: str = "sdpa") -> Any:
+def load_vlm_engine(
+    model_path_or_name: str,
+    device: str = "cuda:0",
+    attn_implementation: str = "sdpa",
+    min_pixels: int = 3136,
+    max_pixels: int = 1048576,
+) -> Any:
     """Loads appropriate VLM engine from local directory or Hugging Face repository."""
     from mssearch.models import ModelQwenVL, ModelInternvl, ModelYiVL, ModelLlavaHR, ModelGlobalLocal
     m_str = str(model_path_or_name).lower()
@@ -51,10 +57,10 @@ def load_vlm_engine(model_path_or_name: str, device: str = "cuda:0", attn_implem
         try:
             return ModelGlobalLocal(model_path=model_path_or_name, device=device)
         except Exception:
-            return ModelQwenVL(model_path=model_path_or_name, device=device, attn_implementation=attn_implementation)
+            return ModelQwenVL(model_path=model_path_or_name, device=device, attn_implementation=attn_implementation, min_pixels=min_pixels, max_pixels=max_pixels)
     else:
         # Defaults to QwenVL/AutoProcessor engine (handles Qwen2.5-VL, Qwen3-VL, LLaVA-OneVision)
-        return ModelQwenVL(model_path=model_path_or_name, device=device, attn_implementation=attn_implementation)
+        return ModelQwenVL(model_path=model_path_or_name, device=device, attn_implementation=attn_implementation, min_pixels=min_pixels, max_pixels=max_pixels)
 
 def format_baseline_prompt(num_images: int, question: str) -> str:
     """Formats exact multi-image prompt requesting valid JSON image_id and answer."""
