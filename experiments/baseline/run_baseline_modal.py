@@ -26,16 +26,16 @@ data_volume = modal.Volume.from_name("mssearch-data", create_if_missing=True)
 models_volume = modal.Volume.from_name("mssearch-models", create_if_missing=True)
 results_volume = modal.Volume.from_name("mssearch-results", create_if_missing=True)
 
-def select_gpu(model_name: str):
+def select_gpu(model_name: str) -> str:
     """Assigns A10G (24GB) for <=8B and L40S (48GB) for 13B-38B variants."""
     m_lower = model_name.lower()
     if any(tag in m_lower for tag in ["13b", "32b", "34b", "38b", "72b"]):
-        return modal.gpu.L40S()
-    return modal.gpu.A10G()
+        return "L40S"
+    return "A10G"
 
 @app.function(
     image=eval_image,
-    gpu=modal.gpu.A10G(),  # Default dynamically overridden per invocation or fixed
+    gpu="A10G",
     volumes={"/data": data_volume, "/models": models_volume, "/results": results_volume},
     timeout=86400,
     secrets=[modal.Secret.from_name("huggingface-secret", required=False)]
@@ -166,8 +166,9 @@ def main(
     max_samples: int = None,
     resume: bool = True
 ):
-    print(f"Launching Modal Baseline Evaluation for model: {model} (Pool: {pool_mode})")
-    evaluate_baseline_modal.remote(
+    gpu_type = select_gpu(model)
+    print(f"Launching Modal Baseline Evaluation for model: {model} on {gpu_type} (Pool: {pool_mode})")
+    evaluate_baseline_modal.with_options(gpu=gpu_type).remote(
         model_name=model,
         pool_mode=pool_mode,
         eval_strategy=eval_strategy,
