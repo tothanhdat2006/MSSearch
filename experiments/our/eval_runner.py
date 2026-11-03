@@ -20,10 +20,10 @@ def parse_args():
                         help="Path or HF ID for SigLIP.")
     parser.add_argument("--nlp_model", type=str, default="/data/shared/cvpr/dat/models/spacy/en_core_web_sm-3.8.0",
                         help="Path or name of spaCy model.")
-    parser.add_argument("--dataset_path", type=str, default="/data/shared/cvpr/dat/simple/data/200_samples.json",
-                        help="Path to 200_samples.json.")
-    parser.add_argument("--image_dir", type=str, default="/data/shared/cvpr/dat/simple/data/images",
-                        help="Directory containing <image_id>.jpg.")
+    parser.add_argument("--dataset_path", type=str, default="/data/STASHBench/annotations_part1234_merged.json",
+                        help="Path to annotations_part1234_merged.json or 200_samples.json.")
+    parser.add_argument("--image_dir", type=str, default="/data/STASHBench/pool",
+                        help="Directory containing candidate images or pool.")
     parser.add_argument("--output_dir", type=str, default="./results_our",
                         help="Directory to save JSONL logs.")
     parser.add_argument("--config", type=str, default=None,
@@ -81,11 +81,25 @@ def main():
     with open(results_file, "a", encoding="utf-8") as out_f:
         for idx, (s_idx, sample, pool_name, pool_info) in enumerate(remaining_tasks):
             sample_id = sample.get("sample_id", f"sample_{s_idx}")
-            question = sample.get("query", {}).get("question", "")
-            gt_list = sample.get("answer", {}).get("list", [])
+            question = sample.get("question") or sample.get("query", {}).get("question", "")
+
+            ans_field = sample.get("answer")
+            if isinstance(ans_field, dict):
+                gt_list = ans_field.get("list", [])
+            elif isinstance(ans_field, list):
+                gt_list = ans_field
+            elif isinstance(ans_field, str):
+                gt_list = [ans_field]
+            else:
+                gt_list = []
+            if "references" in sample and isinstance(sample["references"], list):
+                for ref in sample["references"]:
+                    if ref and str(ref).strip() and str(ref).strip() not in gt_list:
+                        gt_list.append(str(ref).strip())
+
             candidate_meta = pool_info.get("images", [])
 
-            images = [resolve_image(m["image_id"], args.image_dir) for m in candidate_meta]
+            images = [resolve_image(m, args.image_dir) for m in candidate_meta]
 
             t0 = time.perf_counter()
             resp = run_our_pipeline(engines, images, sample, s_idx)

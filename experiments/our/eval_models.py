@@ -73,14 +73,19 @@ def run_our_pipeline(
     from mssearch.MSSearch import get_mssearch_response
 
     sample_id = sample_data.get("sample_id", f"sample_{sample_idx}")
-    query_info = sample_data.get("query", {})
-    question = query_info.get("question", "")
+    question = sample_data.get("question") or sample_data.get("query", {}).get("question", "")
+    query_info = sample_data.get("query") or {
+        "question": question,
+        "question_type": sample_data.get("question_type", "Attribute"),
+        "target_object": sample_data.get("target_object", ""),
+    }
 
     annotation = {
         "question": question,
         "sample_id": sample_id,
-        "answer_type": "attribute_list",
+        "answer_type": sample_data.get("answer_type", "attribute_list"),
         "query": query_info,
+        "target_bbox": sample_data.get("target_bbox"),
     }
 
     resp = get_mssearch_response(

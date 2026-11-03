@@ -17,12 +17,12 @@ OUR_MODELS = [
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Unified Downloader for MSSearch Benchmarks.")
-    parser.add_argument("--data_dir", type=str, default="/data/shared/cvpr/dat/simple/data",
+    parser.add_argument("--data_dir", type=str, default="/data/shared/cvpr/dat/simple/data/STASHBench",
                         help="Target dataset directory.")
     parser.add_argument("--base_model_dir", type=str, default="/data/shared/cvpr/dat/models",
                         help="Target base models directory.")
     parser.add_argument("--download_data", action="store_true", default=True,
-                        help="Download 200_samples.json and image archive.")
+                        help="Download STASHBench annotations and image archive.")
     parser.add_argument("--download_auxiliary", action="store_true", default=True,
                         help="Download SAM3, SigLIP, and spaCy.")
     parser.add_argument("--models", nargs="*", default=[],

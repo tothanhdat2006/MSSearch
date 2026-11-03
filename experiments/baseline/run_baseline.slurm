@@ -20,8 +20,8 @@ mkdir -p logs
 # ==============================================================================
 VENV_PATH="/data/shared/cvpr/dat/.venv/bin/activate"                           # EDIT: Virtual environment
 DEFAULT_MODEL_DIR="/data/shared/cvpr/dat/models"                               # EDIT: Base model weights directory
-DEFAULT_DATASET_PATH="/data/shared/cvpr/dat/simple/data/200_samples.json"     # EDIT: Dataset JSON path
-DEFAULT_IMAGE_DIR="/data/shared/cvpr/dat/simple/data/images"                   # EDIT: Image directory
+DEFAULT_DATASET_PATH="/data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json"     # EDIT: Dataset JSON path
+DEFAULT_IMAGE_DIR="/data/shared/cvpr/dat/simple/data/STASHBench/pool"                                   # EDIT: Image directory
 # ==============================================================================
 
 if [ -f "${VENV_PATH}" ]; then

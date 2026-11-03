@@ -7,16 +7,16 @@ import zipfile
 import shutil
 from typing import Optional
 
-DEFAULT_DATA_DIR = os.environ.get("DATA_DIR", "/data/shared/cvpr/dat/simple/data")
+DEFAULT_DATA_DIR = os.environ.get("DATA_DIR", "/data/shared/cvpr/dat/simple/data/STASHBench")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Download and validate evaluation dataset.")
     parser.add_argument("--data_dir", type=str, default=DEFAULT_DATA_DIR,
-                        help="Target directory to place 200_samples.json and images/")
+                        help="Target directory to place annotations_part1234_merged.json and pool/")
     parser.add_argument("--dataset_url", type=str, default=None,
-                        help="Remote URL or cloud mirror for 200_samples.json")
+                        help="Remote URL or cloud mirror for dataset annotations")
     parser.add_argument("--images_url", type=str, default=None,
-                        help="Remote URL or zip archive containing pilot images")
+                        help="Remote URL or zip archive containing pool images")
     return parser.parse_args()
 
 def download_file(url: str, dest_path: str):
@@ -35,27 +35,37 @@ def main():
     args = parse_args()
     target_data_dir = os.path.abspath(args.data_dir)
     os.makedirs(target_data_dir, exist_ok=True)
-    samples_file = os.path.join(target_data_dir, "200_samples.json")
-    images_dir = os.path.join(target_data_dir, "images")
+    samples_file = os.path.join(target_data_dir, "annotations_part1234_merged.json")
+    images_dir = os.path.join(target_data_dir, "pool")
 
-    # 1. Download or verify 200_samples.json
+    # 1. Download or verify annotations file
     if not os.path.exists(samples_file):
-        if args.dataset_url:
+        legacy_file = os.path.join(target_data_dir, "200_samples.json")
+        if os.path.exists(legacy_file):
+            samples_file = legacy_file
+            images_dir = os.path.join(target_data_dir, "images") if not os.path.exists(images_dir) else images_dir
+        elif args.dataset_url:
             download_file(args.dataset_url, samples_file)
         else:
+            # Check for local STASHBench or workspace dataset
+            local_stash = "D:/MachineLearning/Datasets/STASHBench/annotations_part1234_merged.json"
             local_fallback = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../datasets/200_samples.json"))
-            if os.path.exists(local_fallback):
+            if os.path.exists(local_stash):
+                print(f"[Copy] Found STASHBench at '{local_stash}'. Copying to '{samples_file}'...")
+                shutil.copyfile(local_stash, samples_file)
+            elif os.path.exists(local_fallback):
                 print(f"[Copy] Found workspace dataset at '{local_fallback}'. Copying to '{samples_file}'...")
                 shutil.copyfile(local_fallback, samples_file)
             else:
-                raise FileNotFoundError(f"[ERROR] 200_samples.json missing at '{samples_file}' and no --dataset_url provided.")
+                raise FileNotFoundError(f"[ERROR] Dataset annotations missing at '{samples_file}' and no --dataset_url provided.")
     else:
         print(f"[Verified] Dataset file exists at '{samples_file}'.")
 
     # Validate dataset structure
     with open(samples_file, "r", encoding="utf-8") as f:
         data = json.load(f)
-    print(f"[Validated] Loaded {len(data)} evaluation samples from '{samples_file}'.")
+    samples_count = len(data.get("samples", [])) if isinstance(data, dict) else len(data)
+    print(f"[Validated] Loaded {samples_count} evaluation samples from '{samples_file}'.")
 
     # 2. Images folder validation
     os.makedirs(images_dir, exist_ok=True)

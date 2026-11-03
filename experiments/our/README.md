@@ -1,6 +1,6 @@
-# MSSearch V2 Evaluation Suite (200 Samples)
+# MSSearch V2 Evaluation Suite (STASHBench)
 
-Evaluation suite for the unified Multi-Source Visual Search pipeline (`METHOD_SPECIFICATION_V2.md`) on `200_samples.json` under candidate pool `N_20` (default) across varying ground-truth evidence cardinalities ($K \in [1, 5]$).
+Evaluation suite for the unified Multi-Source Visual Search pipeline (`METHOD_SPECIFICATION_V2.md`) on STASHBench (`annotations_part1234_merged.json`, 336 samples) under candidate pool `N_20` (default, `gt_image` + `other_images[N20]`) across varying ground-truth evidence cardinalities ($K \in [1, 5]$).
 
 ---
 

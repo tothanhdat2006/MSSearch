@@ -8,8 +8,8 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 CONDA_ENV_NAME="hrsearch"                                                      # EDIT: Conda environment name
 DEFAULT_MODEL_DIR="/data/shared/cvpr/dat/models"                               # EDIT: Root folder for local model checkpoints
-DEFAULT_DATASET_PATH="/data/shared/cvpr/dat/simple/data/200_samples.json"     # EDIT: Path to 200_samples.json
-DEFAULT_IMAGE_DIR="/data/shared/cvpr/dat/simple/data/images"                   # EDIT: Path to images directory
+DEFAULT_DATASET_PATH="/data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json"     # EDIT: Path to STASHBench annotations
+DEFAULT_IMAGE_DIR="/data/shared/cvpr/dat/simple/data/STASHBench/pool"                                   # EDIT: Path to pool images directory
 DEFAULT_OUTPUT_DIR="./results_baseline_a6000"                                  # EDIT: Output directory
 # ==============================================================================
 

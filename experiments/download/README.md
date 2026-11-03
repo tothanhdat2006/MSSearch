@@ -7,11 +7,11 @@ Unified download and asset preparation tools for evaluation datasets, auxiliary 
 ## Component Scripts
 
 1. `download_data.py`:
-   - Validates or downloads `200_samples.json`.
-   - Populates and checks the image repository directory `<DATA_DIR>/images`.
+   - Validates or downloads STASHBench dataset (`annotations_part1234_merged.json`).
+   - Populates and checks the image pool directory `<DATA_DIR>/pool`.
    - Usage:
      ```bash
-     python download_data.py --data_dir /data/shared/cvpr/dat/simple/data
+     python download_data.py --data_dir /data/shared/cvpr/dat/simple/data/STASHBench
      ```
 
 2. `download_auxiliary.py`:

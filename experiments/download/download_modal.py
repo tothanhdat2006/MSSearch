@@ -27,15 +27,24 @@ def download_remote_assets(
 ):
     import urllib.request
     import tarfile
+    import zipfile
     from huggingface_hub import snapshot_download
 
     # 1. Dataset
     if download_dataset:
-        print("[Modal] Setting up dataset in /data...")
-        os.makedirs("/data/images", exist_ok=True)
+        print("[Modal] Setting up STASHBench dataset in /data...")
+        os.makedirs("/data/STASHBench/pool", exist_ok=True)
         if dataset_url:
-            print(f"[Modal] Downloading dataset from {dataset_url}...")
-            urllib.request.urlretrieve(dataset_url, "/data/200_samples.json")
+            print(f"[Modal] Downloading dataset annotations from {dataset_url}...")
+            urllib.request.urlretrieve(dataset_url, "/data/STASHBench/annotations_part1234_merged.json")
+        if images_url:
+            print(f"[Modal] Downloading image archive from {images_url}...")
+            zip_tmp = "/data/STASHBench/pool.zip"
+            urllib.request.urlretrieve(images_url, zip_tmp)
+            with zipfile.ZipFile(zip_tmp, "r") as zf:
+                zf.extractall("/data/STASHBench/pool")
+            if os.path.exists(zip_tmp):
+                os.remove(zip_tmp)
         data_volume.commit()
 
     # 2. Auxiliary models

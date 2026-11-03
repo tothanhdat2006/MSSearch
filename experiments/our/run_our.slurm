@@ -23,8 +23,8 @@ DEFAULT_MODEL_DIR="/data/shared/cvpr/dat/models"                               #
 DEFAULT_SAM3_PATH="/data/shared/cvpr/dat/models/sam3/sam3.pt"                  # EDIT: SAM3 checkpoint
 DEFAULT_SIGLIP_NAME="/data/shared/cvpr/dat/models/siglip-base-patch16-384"     # EDIT: SigLIP checkpoint
 DEFAULT_NLP_MODEL="/data/shared/cvpr/dat/models/spacy/en_core_web_sm-3.8.0"    # EDIT: spaCy pipeline
-DEFAULT_DATASET_PATH="/data/shared/cvpr/dat/simple/data/200_samples.json"     # EDIT: Dataset JSON path
-DEFAULT_IMAGE_DIR="/data/shared/cvpr/dat/simple/data/images"                   # EDIT: Image directory
+DEFAULT_DATASET_PATH="/data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json"     # EDIT: Dataset JSON path
+DEFAULT_IMAGE_DIR="/data/shared/cvpr/dat/simple/data/STASHBench/pool"                                   # EDIT: Image directory
 # ==============================================================================
 
 if [ -f "${VENV_PATH}" ]; then

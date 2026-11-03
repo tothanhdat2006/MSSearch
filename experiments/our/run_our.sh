@@ -11,8 +11,8 @@ DEFAULT_MODEL_DIR="/data/shared/cvpr/dat/models"                               #
 DEFAULT_SAM3_PATH="/data/shared/cvpr/dat/models/sam3/sam3.pt"                  # EDIT: Path to sam3.pt
 DEFAULT_SIGLIP_NAME="/data/shared/cvpr/dat/models/siglip-base-patch16-384"     # EDIT: Path to SigLIP weights
 DEFAULT_NLP_MODEL="/data/shared/cvpr/dat/models/spacy/en_core_web_sm-3.8.0"    # EDIT: Path to spaCy pipeline
-DEFAULT_DATASET_PATH="/data/shared/cvpr/dat/simple/data/200_samples.json"     # EDIT: Path to 200_samples.json
-DEFAULT_IMAGE_DIR="/data/shared/cvpr/dat/simple/data/images"                   # EDIT: Path to images directory
+DEFAULT_DATASET_PATH="/data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json"     # EDIT: Path to STASHBench annotations
+DEFAULT_IMAGE_DIR="/data/shared/cvpr/dat/simple/data/STASHBench/pool"                                   # EDIT: Path to pool images directory
 DEFAULT_OUTPUT_DIR="./results_our_a6000"                                       # EDIT: Output directory
 # ==============================================================================
 

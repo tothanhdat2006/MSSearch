@@ -15,10 +15,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Baseline VLM Benchmark Runner.")
     parser.add_argument("--model_path", type=str, default="Qwen/Qwen2.5-VL-7B-Instruct",
                         help="Path or HuggingFace ID of VLM checkpoint.")
-    parser.add_argument("--dataset_path", type=str, default="/data/shared/cvpr/dat/simple/data/200_samples.json",
-                        help="Path to 200_samples.json.")
-    parser.add_argument("--image_dir", type=str, default="/data/shared/cvpr/dat/simple/data/images",
-                        help="Directory containing <image_id>.jpg.")
+    parser.add_argument("--dataset_path", type=str, default="/data/STASHBench/annotations_part1234_merged.json",
+                        help="Path to annotations_part1234_merged.json or 200_samples.json.")
+    parser.add_argument("--image_dir", type=str, default="/data/STASHBench/pool",
+                        help="Directory containing candidate images or pool.")
     parser.add_argument("--output_dir", type=str, default="./results_baseline",
                         help="Output directory for results.")
     parser.add_argument("--pool_mode", type=str, choices=["N_5", "N_10", "N_20", "ALL"], default="N_20",
@@ -70,12 +70,26 @@ def main():
     with open(results_file, "a", encoding="utf-8") as out_f:
         for idx, (s_idx, sample, pool_name, pool_info) in enumerate(remaining_tasks):
             sample_id = sample.get("sample_id", f"sample_{s_idx}")
-            question = sample.get("query", {}).get("question", "")
-            gt_list = sample.get("answer", {}).get("list", [])
+            question = sample.get("question") or sample.get("query", {}).get("question", "")
+
+            ans_field = sample.get("answer")
+            if isinstance(ans_field, dict):
+                gt_list = ans_field.get("list", [])
+            elif isinstance(ans_field, list):
+                gt_list = ans_field
+            elif isinstance(ans_field, str):
+                gt_list = [ans_field]
+            else:
+                gt_list = []
+            if "references" in sample and isinstance(sample["references"], list):
+                for ref in sample["references"]:
+                    if ref and str(ref).strip() and str(ref).strip() not in gt_list:
+                        gt_list.append(str(ref).strip())
+
             candidate_meta = pool_info.get("images", [])
 
             # Load candidate images
-            images = [resolve_image(img_meta["image_id"], args.image_dir) for img_meta in candidate_meta]
+            images = [resolve_image(img_meta, args.image_dir) for img_meta in candidate_meta]
 
             t0 = time.perf_counter()
             pred_text, raw_list = run_vlm_baseline_inference(
