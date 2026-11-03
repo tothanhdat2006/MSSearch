@@ -26,8 +26,8 @@ def parse_args():
                         help="Directory containing candidate images or pool.")
     parser.add_argument("--output_dir", type=str, default="./results_baseline",
                         help="Output directory for results.")
-    parser.add_argument("--pool_mode", type=str, choices=["N_5", "N_10", "N_20", "ALL"], default="N_20",
-                        help="Candidate pool size. Default: N_20.")
+    parser.add_argument("--pool_mode", type=str, choices=["N_5", "N_10", "N_20", "crop", "N_crop", "ALL"], default="N_20",
+                        help="Candidate pool size: N_5, N_10, N_20, crop, or ALL.")
     parser.add_argument("--eval_strategy", type=str, choices=["multi_image", "one_by_one"], default="multi_image",
                         help="Evaluation strategy: multi_image (native or composite canvas) or one_by_one.")
     parser.add_argument("--sample_idx", type=int, default=None)
