@@ -19,7 +19,7 @@ eval_image = (
         "sentencepiece",
         "huggingface_hub"
     )
-    .add_local_python_source("mssearch")
+    .add_local_python_source("mssearch", "experiments")
 )
 
 data_volume = modal.Volume.from_name("mssearch-data", create_if_missing=True)
@@ -53,9 +53,14 @@ def evaluate_baseline_modal(
     resume: bool = True
 ):
     import torch
-    from experiments.baseline.eval_dataset import load_and_slice_dataset, resolve_image
-    from experiments.baseline.eval_metrics import evaluate_predictions
-    from experiments.baseline.eval_models import load_vlm_engine, run_vlm_baseline_inference
+    try:
+        from experiments.baseline.eval_dataset import load_and_slice_dataset, resolve_image
+        from experiments.baseline.eval_metrics import evaluate_predictions
+        from experiments.baseline.eval_models import load_vlm_engine, run_vlm_baseline_inference
+    except ModuleNotFoundError:
+        from eval_dataset import load_and_slice_dataset, resolve_image
+        from eval_metrics import evaluate_predictions
+        from eval_models import load_vlm_engine, run_vlm_baseline_inference
 
     if not os.path.exists(dataset_path):
         for alt in ["/data/annotations_part1234_merged.json", "/data/STASHBench/annotations_part1234_merged.json", "/data/200_samples.json"]:

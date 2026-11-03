@@ -21,7 +21,7 @@ eval_image = (
         "huggingface_hub"
     )
     .run_commands("python -m spacy download en_core_web_sm")
-    .add_local_python_source("mssearch")
+    .add_local_python_source("mssearch", "experiments")
 )
 
 data_volume = modal.Volume.from_name("mssearch-data", create_if_missing=True)
@@ -47,9 +47,14 @@ def evaluate_our_modal(
     resume: bool = True
 ):
     import torch
-    from experiments.our.eval_dataset import load_and_slice_dataset, resolve_image
-    from experiments.our.eval_metrics import evaluate_predictions
-    from experiments.our.eval_models import load_our_engines, run_our_pipeline
+    try:
+        from experiments.our.eval_dataset import load_and_slice_dataset, resolve_image
+        from experiments.our.eval_metrics import evaluate_predictions
+        from experiments.our.eval_models import load_our_engines, run_our_pipeline
+    except ModuleNotFoundError:
+        from eval_dataset import load_and_slice_dataset, resolve_image
+        from eval_metrics import evaluate_predictions
+        from eval_models import load_our_engines, run_our_pipeline
 
     if not os.path.exists(dataset_path):
         for alt in ["/data/annotations_part1234_merged.json", "/data/STASHBench/annotations_part1234_merged.json", "/data/200_samples.json"]:
