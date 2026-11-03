@@ -62,16 +62,18 @@ def load_vlm_engine(model_path_or_name: str, device: str = "cuda:0", attn_implem
         return ModelQwenVL(model_path=model_path_or_name, device=device, attn_implementation=attn_implementation)
 
 def format_baseline_prompt(num_images: int, question: str) -> str:
-    """Formats exact multi-image prompt requesting valid JSON image_id and answer."""
+    """Formats exact multi-image prompt requesting valid JSON image_ids and answer."""
     lines = [f"Image {idx + 1}: <image>\n" for idx in range(num_images)]
     lines.append(f"\nQuestion: {question}\n\n")
-    lines.append("Identify the image that contains the evidence and answer the question.\n")
+    lines.append("Identify the image(s) containing sufficient visual evidence\n")
+    lines.append("to answer the question. Select only images that actually\n")
+    lines.append("support the answer. Do not assume multiple images are relevant.\n\n")
     lines.append("Return only valid JSON:\n")
-    lines.append('{"image_id": 1, "answer": "your answer"}')
+    lines.append('{"image_ids": [], "answer": ""}')
     return "".join(lines)
 
-def parse_baseline_json_response(raw_resp: str, candidate_meta: List[Dict[str, Any]] = None) -> Tuple[Any, Any, Any, str]:
-    """Extracts (raw_image_id, actual_image_id, image_index_1based, free_form_answer)."""
+def parse_baseline_json_response(raw_resp: str, candidate_meta: List[Dict[str, Any]] = None) -> Tuple[List[Any], List[Any], List[int], str]:
+    """Extracts (raw_image_ids, actual_image_ids, image_indices_1based, free_form_answer)."""
     import re, json
     cleaned = raw_resp.strip()
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
@@ -80,40 +82,57 @@ def parse_baseline_json_response(raw_resp: str, candidate_meta: List[Dict[str, A
         match = re.search(r"(\{.*?\})", cleaned, re.DOTALL)
         json_str = match.group(1) if match else cleaned
 
-    pred_img_id = None
+    raw_ids = []
     pred_ans = ""
     try:
         data = json.loads(json_str)
-        pred_img_id = data.get("image_id")
+        val = data.get("image_ids")
+        if val is None:
+            val = data.get("image_id")
+        if isinstance(val, list):
+            raw_ids = val
+        elif val is not None:
+            raw_ids = [val]
         pred_ans = str(data.get("answer", "")).strip()
     except Exception:
-        id_m = re.search(r"[\"']image_id[\"']\s*:\s*([0-9]+|[\"'][^\"']+[\"'])", raw_resp)
+        ids_m = re.search(r"[\"']image_ids?[\"']\s*:\s*\[([^\]]*)\]", raw_resp)
+        if ids_m:
+            raw_ids = [x.strip().strip("\"'") for x in ids_m.group(1).split(",") if x.strip()]
+        else:
+            id_m = re.search(r"[\"']image_ids?[\"']\s*:\s*([0-9]+|[\"'][^\"']+[\"'])", raw_resp)
+            if id_m:
+                raw_ids = [id_m.group(1).strip("\"'")]
         ans_m = re.search(r"[\"']answer[\"']\s*:\s*[\"']([^\"']+)[\"']", raw_resp)
-        if id_m:
-            raw_id = id_m.group(1).strip("\"'")
-            try:
-                pred_img_id = int(raw_id)
-            except ValueError:
-                pred_img_id = raw_id
         pred_ans = ans_m.group(1).strip() if ans_m else raw_resp.strip()
 
-    pred_img_idx = None
-    actual_img_id = None
+    pred_indices = []
+    actual_image_ids = []
     if candidate_meta:
-        if isinstance(pred_img_id, int) and 1 <= pred_img_id <= len(candidate_meta):
-            pred_img_idx = pred_img_id
-            actual_img_id = candidate_meta[pred_img_id - 1].get("image_id")
-        elif pred_img_id is not None:
-            for idx, c in enumerate(candidate_meta):
-                if str(c.get("image_id")) == str(pred_img_id):
-                    pred_img_idx = idx + 1
-                    actual_img_id = c.get("image_id")
-                    break
-    if not actual_img_id and pred_img_id is not None:
-        actual_img_id = pred_img_id
+        for r_id in raw_ids:
+            try:
+                idx_int = int(r_id)
+            except (ValueError, TypeError):
+                idx_int = None
+
+            if idx_int is not None and 1 <= idx_int <= len(candidate_meta):
+                pred_indices.append(idx_int)
+                actual_image_ids.append(candidate_meta[idx_int - 1].get("image_id"))
+            else:
+                matched = False
+                for idx, c in enumerate(candidate_meta):
+                    if str(c.get("image_id")) == str(r_id):
+                        pred_indices.append(idx + 1)
+                        actual_image_ids.append(c.get("image_id"))
+                        matched = True
+                        break
+                if not matched and r_id is not None:
+                    actual_image_ids.append(r_id)
+    else:
+        actual_image_ids = raw_ids
+
     if not pred_ans:
         pred_ans = raw_resp.strip()
-    return pred_img_id, actual_img_id, pred_img_idx, pred_ans
+    return raw_ids, actual_image_ids, pred_indices, pred_ans
 
 def run_vlm_baseline_inference(
     engine: Any,
@@ -163,9 +182,11 @@ def run_vlm_baseline_inference(
     composite_qs = (
         f"Image 1 to Image {len(images)} are stacked vertically in the provided image.\n\n"
         f"Question: {question}\n\n"
-        f"Identify the image that contains the evidence and answer the question.\n"
+        f"Identify the image(s) containing sufficient visual evidence\n"
+        f"to answer the question. Select only images that actually\n"
+        f"support the answer. Do not assume multiple images are relevant.\n\n"
         f"Return only valid JSON:\n"
-        f'{{"image_id": 1, "answer": "your answer"}}'
+        f'{{"image_ids": [], "answer": ""}}'
     )
     if hasattr(engine, "generate_response"):
         resp = engine.generate_response(image_pil=canvas, question=composite_qs, max_new_tokens=max_new_tokens)

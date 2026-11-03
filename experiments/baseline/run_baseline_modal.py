@@ -136,10 +136,10 @@ def evaluate_baseline_modal(
             )
             lat = round(time.perf_counter() - t0, 3)
 
-            raw_id, actual_img_id, img_idx, pred_answer = parse_baseline_json_response(pred_text, candidate_meta)
+            raw_ids, actual_img_ids, img_indices, pred_answer = parse_baseline_json_response(pred_text, candidate_meta)
             gt_img = pool_info.get("gt_image") or sample.get("gt_image")
             gt_img_id = gt_img.get("image_id") if isinstance(gt_img, dict) else (gt_img or "")
-            is_img_correct = (str(actual_img_id) == str(gt_img_id)) if (actual_img_id and gt_img_id) else None
+            is_img_correct = (str(gt_img_id) in [str(x) for x in actual_img_ids]) if (actual_img_ids and gt_img_id) else None
             metrics = evaluate_predictions(pred_answer, [pred_answer], gt_list)
 
             record = {
@@ -150,8 +150,8 @@ def evaluate_baseline_modal(
                 "question": question,
                 "ground_truth_list": gt_list,
                 "gt_image_id": gt_img_id,
-                "pred_image_id": actual_img_id,
-                "pred_image_index": img_idx,
+                "pred_image_ids": actual_img_ids,
+                "pred_image_indices": img_indices,
                 "is_image_correct": is_img_correct,
                 "pred_answer": pred_answer,
                 "prediction": pred_answer,
@@ -169,7 +169,7 @@ def evaluate_baseline_modal(
             results_volume.commit()  # Persistent atomic commit per sample
 
             status = "OK" if is_img_correct else "MISS"
-            print(f"[Modal] [{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) Img:{actual_img_id}({status}) F1:{metrics['f1']*100:.1f}% Ans:'{pred_answer[:30]}' Time:{lat:.2f}s")
+            print(f"[Modal] [{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) Img:{actual_img_ids}({status}) F1:{metrics['f1']*100:.1f}% Ans:'{pred_answer[:30]}' Time:{lat:.2f}s")
 
 @app.local_entrypoint()
 def main(

@@ -102,11 +102,11 @@ def main():
             )
             latency = round(time.perf_counter() - t0, 3)
 
-            # Parse JSON for image_id and free-form answer
-            raw_id, actual_img_id, img_idx, pred_answer = parse_baseline_json_response(pred_text, candidate_meta)
+            # Parse JSON for image_ids and free-form answer
+            raw_ids, actual_img_ids, img_indices, pred_answer = parse_baseline_json_response(pred_text, candidate_meta)
             gt_img = pool_info.get("gt_image") or sample.get("gt_image")
             gt_img_id = gt_img.get("image_id") if isinstance(gt_img, dict) else (gt_img or "")
-            is_img_correct = (str(actual_img_id) == str(gt_img_id)) if (actual_img_id and gt_img_id) else None
+            is_img_correct = (str(gt_img_id) in [str(x) for x in actual_img_ids]) if (actual_img_ids and gt_img_id) else None
 
             # Evaluate metrics on parsed answer
             metrics = evaluate_predictions(pred_answer, [pred_answer], gt_list)
@@ -119,8 +119,8 @@ def main():
                 "question": question,
                 "ground_truth_list": gt_list,
                 "gt_image_id": gt_img_id,
-                "pred_image_id": actual_img_id,
-                "pred_image_index": img_idx,
+                "pred_image_ids": actual_img_ids,
+                "pred_image_indices": img_indices,
                 "is_image_correct": is_img_correct,
                 "pred_answer": pred_answer,
                 "prediction": pred_answer,
@@ -141,7 +141,7 @@ def main():
 
             status = "OK" if is_img_correct else "MISS"
             print(f"[{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) [{pool_name}|N={len(candidate_meta)}] "
-                  f"Img:{actual_img_id}({status}) | F1:{metrics['f1']*100:5.1f}% | Time:{latency:5.2f}s | Ans: '{pred_answer[:40]}'")
+                  f"Img:{actual_img_ids}({status}) | F1:{metrics['f1']*100:5.1f}% | Time:{latency:5.2f}s | Ans: '{pred_answer[:40]}'")
 
             gc.collect()
             if torch.cuda.is_available():
