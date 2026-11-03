@@ -56,6 +56,60 @@ def load_vlm_engine(model_path_or_name: str, device: str = "cuda:0", attn_implem
         # Defaults to QwenVL/AutoProcessor engine (handles Qwen2.5-VL, Qwen3-VL, LLaVA-OneVision)
         return ModelQwenVL(model_path=model_path_or_name, device=device, attn_implementation=attn_implementation)
 
+def format_baseline_prompt(num_images: int, question: str) -> str:
+    """Formats exact multi-image prompt requesting valid JSON image_id and answer."""
+    lines = [f"Image {idx + 1}: <image>\n" for idx in range(num_images)]
+    lines.append(f"\nQuestion: {question}\n\n")
+    lines.append("Identify the image that contains the evidence and answer the question.\n")
+    lines.append("Return only valid JSON:\n")
+    lines.append('{"image_id": 1, "answer": "your answer"}')
+    return "".join(lines)
+
+def parse_baseline_json_response(raw_resp: str, candidate_meta: List[Dict[str, Any]] = None) -> Tuple[Any, Any, Any, str]:
+    """Extracts (raw_image_id, actual_image_id, image_index_1based, free_form_answer)."""
+    import re, json
+    cleaned = raw_resp.strip()
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+    json_str = match.group(1) if match else None
+    if not json_str:
+        match = re.search(r"(\{.*?\})", cleaned, re.DOTALL)
+        json_str = match.group(1) if match else cleaned
+
+    pred_img_id = None
+    pred_ans = ""
+    try:
+        data = json.loads(json_str)
+        pred_img_id = data.get("image_id")
+        pred_ans = str(data.get("answer", "")).strip()
+    except Exception:
+        id_m = re.search(r"[\"']image_id[\"']\s*:\s*([0-9]+|[\"'][^\"']+[\"'])", raw_resp)
+        ans_m = re.search(r"[\"']answer[\"']\s*:\s*[\"']([^\"']+)[\"']", raw_resp)
+        if id_m:
+            raw_id = id_m.group(1).strip("\"'")
+            try:
+                pred_img_id = int(raw_id)
+            except ValueError:
+                pred_img_id = raw_id
+        pred_ans = ans_m.group(1).strip() if ans_m else raw_resp.strip()
+
+    pred_img_idx = None
+    actual_img_id = None
+    if candidate_meta:
+        if isinstance(pred_img_id, int) and 1 <= pred_img_id <= len(candidate_meta):
+            pred_img_idx = pred_img_id
+            actual_img_id = candidate_meta[pred_img_id - 1].get("image_id")
+        elif pred_img_id is not None:
+            for idx, c in enumerate(candidate_meta):
+                if str(c.get("image_id")) == str(pred_img_id):
+                    pred_img_idx = idx + 1
+                    actual_img_id = c.get("image_id")
+                    break
+    if not actual_img_id and pred_img_id is not None:
+        actual_img_id = pred_img_id
+    if not pred_ans:
+        pred_ans = raw_resp.strip()
+    return pred_img_id, actual_img_id, pred_img_idx, pred_ans
+
 def run_vlm_baseline_inference(
     engine: Any,
     images: List[Image.Image],
@@ -69,9 +123,8 @@ def run_vlm_baseline_inference(
 
     # Native Multi-Image Route for Qwen / LLaVA-OV
     if hasattr(engine, "processor") and hasattr(engine, "model") and hasattr(engine, "get_prompt_from_qs"):
-        prompt_parts = [f"Candidate Image {idx + 1}:\n<image>\n" for idx in range(len(images))]
-        prompt_parts.append(f"\n{question}")
-        full_prompt = engine.get_prompt_from_qs("".join(prompt_parts))
+        prompt_str = format_baseline_prompt(len(images), question)
+        full_prompt = engine.get_prompt_from_qs(prompt_str)
         try:
             inputs = engine.processor(text=[full_prompt], images=[images], return_tensors="pt", padding=True).to(engine.device)
             with torch.inference_mode():
@@ -92,9 +145,7 @@ def run_vlm_baseline_inference(
             num_patches_list.append(pv.shape[0])
         full_pv = torch.cat(pixel_vals, dim=0).to(engine.device)
 
-        prompt_parts = [f"Candidate Image {idx + 1}:\n<image>\n" for idx in range(len(images))]
-        prompt_parts.append(f"\n{question}")
-        chat_prompt = "".join(prompt_parts)
+        chat_prompt = format_baseline_prompt(len(images), question)
         for num_p in num_patches_list:
             tokens = IMG_START_TOKEN + IMG_CONTEXT_TOKEN * engine.model.num_image_token * num_p + IMG_END_TOKEN
             chat_prompt = chat_prompt.replace("<image>", tokens, 1)
@@ -104,10 +155,17 @@ def run_vlm_baseline_inference(
 
     # Single-Image / Composite Canvas Route (LLaVA-v1.6, LLaVA-HR, Yi-VL)
     canvas = create_vertical_panel_canvas(images)
+    composite_qs = (
+        f"Image 1 to Image {len(images)} are stacked vertically in the provided image.\n\n"
+        f"Question: {question}\n\n"
+        f"Identify the image that contains the evidence and answer the question.\n"
+        f"Return only valid JSON:\n"
+        f'{{"image_id": 1, "answer": "your answer"}}'
+    )
     if hasattr(engine, "generate_response"):
-        resp = engine.generate_response(image_pil=canvas, question=question, max_new_tokens=max_new_tokens)
+        resp = engine.generate_response(image_pil=canvas, question=composite_qs, max_new_tokens=max_new_tokens)
     else:
-        resp = str(engine(canvas, question))
+        resp = str(engine(canvas, composite_qs))
     return resp.strip(), [resp.strip()]
 
 def _run_one_by_one(engine: Any, images: List[Image.Image], question: str, max_new_tokens: int) -> Tuple[str, List[str]]:

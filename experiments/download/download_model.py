@@ -16,9 +16,9 @@ MODEL_MAP: Dict[str, str] = {
     "Qwen2.5-VL-32B": "Qwen/Qwen2.5-VL-72B-Instruct",
     "Qwen2.5-VL-72B": "Qwen/Qwen2.5-VL-72B-Instruct",
     # LLaVA-v1.6 (LLaVA-NeXT)
-    "LLaVA-v1.6-7B": "llava-hf/llava-v1.6-vicuna-7b-hf",
-    "LLaVA-v1.6-13B": "llava-hf/llava-v1.6-vicuna-13b-hf",
-    "LLaVA-v1.6-34B": "llava-hf/llava-v1.6-34b-hf",
+    "LLaVA-v1.6-7B": "liuhaotian/llava-v1.6-vicuna-7b",
+    "LLaVA-v1.6-13B": "liuhaotian/llava-v1.6-vicuna-13b",
+    "LLaVA-v1.6-34B": "liuhaotian/llava-v1.6-34b",
     # LLaVA-HR-X
     "LLaVA-HR-X-7B": "favor123/llava-hr-7b-sft-1024",
     "LLaVA-HR-X-13B": "favor123/llava-hr-13b-x-sft-1024",

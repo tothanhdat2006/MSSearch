@@ -62,11 +62,11 @@ def evaluate_baseline_modal(
     try:
         from experiments.baseline.eval_dataset import load_and_slice_dataset, resolve_image
         from experiments.baseline.eval_metrics import evaluate_predictions
-        from experiments.baseline.eval_models import load_vlm_engine, run_vlm_baseline_inference
+        from experiments.baseline.eval_models import load_vlm_engine, run_vlm_baseline_inference, parse_baseline_json_response
     except ModuleNotFoundError:
         from eval_dataset import load_and_slice_dataset, resolve_image
         from eval_metrics import evaluate_predictions
-        from eval_models import load_vlm_engine, run_vlm_baseline_inference
+        from eval_models import load_vlm_engine, run_vlm_baseline_inference, parse_baseline_json_response
 
     if not os.path.exists(dataset_path):
         for alt in ["/data/annotations_part1234_merged.json", "/data/STASHBench/annotations_part1234_merged.json", "/data/200_samples.json"]:
@@ -135,7 +135,12 @@ def evaluate_baseline_modal(
                 engine, images, question, eval_strategy=eval_strategy
             )
             lat = round(time.perf_counter() - t0, 3)
-            metrics = evaluate_predictions(pred_text, raw_list, gt_list)
+
+            raw_id, actual_img_id, img_idx, pred_answer = parse_baseline_json_response(pred_text, candidate_meta)
+            gt_img = pool_info.get("gt_image") or sample.get("gt_image")
+            gt_img_id = gt_img.get("image_id") if isinstance(gt_img, dict) else (gt_img or "")
+            is_img_correct = (str(actual_img_id) == str(gt_img_id)) if (actual_img_id and gt_img_id) else None
+            metrics = evaluate_predictions(pred_answer, [pred_answer], gt_list)
 
             record = {
                 "sample_id": sample_id,
@@ -144,7 +149,13 @@ def evaluate_baseline_modal(
                 "pool_N": len(candidate_meta),
                 "question": question,
                 "ground_truth_list": gt_list,
-                "prediction": pred_text,
+                "gt_image_id": gt_img_id,
+                "pred_image_id": actual_img_id,
+                "pred_image_index": img_idx,
+                "is_image_correct": is_img_correct,
+                "pred_answer": pred_answer,
+                "prediction": pred_answer,
+                "raw_prediction": pred_text,
                 "precision": metrics["precision"],
                 "recall": metrics["recall"],
                 "f1": metrics["f1"],
@@ -157,7 +168,8 @@ def evaluate_baseline_modal(
             os.fsync(out_f.fileno())
             results_volume.commit()  # Persistent atomic commit per sample
 
-            print(f"[Modal] [{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) F1:{metrics['f1']*100:.1f}% Time:{lat:.2f}s")
+            status = "OK" if is_img_correct else "MISS"
+            print(f"[Modal] [{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) Img:{actual_img_id}({status}) F1:{metrics['f1']*100:.1f}% Ans:'{pred_answer[:30]}' Time:{lat:.2f}s")
 
 @app.local_entrypoint()
 def main(

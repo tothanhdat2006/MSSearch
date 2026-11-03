@@ -10,11 +10,11 @@ import torch
 try:
     from eval_dataset import resolve_image, load_and_slice_dataset
     from eval_metrics import evaluate_predictions
-    from eval_models import load_vlm_engine, run_vlm_baseline_inference
+    from eval_models import load_vlm_engine, run_vlm_baseline_inference, parse_baseline_json_response
 except ModuleNotFoundError:
     from experiments.baseline.eval_dataset import resolve_image, load_and_slice_dataset
     from experiments.baseline.eval_metrics import evaluate_predictions
-    from experiments.baseline.eval_models import load_vlm_engine, run_vlm_baseline_inference
+    from experiments.baseline.eval_models import load_vlm_engine, run_vlm_baseline_inference, parse_baseline_json_response
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Baseline VLM Benchmark Runner.")
@@ -102,8 +102,14 @@ def main():
             )
             latency = round(time.perf_counter() - t0, 3)
 
-            # Evaluate metrics
-            metrics = evaluate_predictions(pred_text, raw_list, gt_list)
+            # Parse JSON for image_id and free-form answer
+            raw_id, actual_img_id, img_idx, pred_answer = parse_baseline_json_response(pred_text, candidate_meta)
+            gt_img = pool_info.get("gt_image") or sample.get("gt_image")
+            gt_img_id = gt_img.get("image_id") if isinstance(gt_img, dict) else (gt_img or "")
+            is_img_correct = (str(actual_img_id) == str(gt_img_id)) if (actual_img_id and gt_img_id) else None
+
+            # Evaluate metrics on parsed answer
+            metrics = evaluate_predictions(pred_answer, [pred_answer], gt_list)
 
             record = {
                 "sample_id": sample_id,
@@ -112,7 +118,13 @@ def main():
                 "pool_N": len(candidate_meta),
                 "question": question,
                 "ground_truth_list": gt_list,
-                "prediction": pred_text,
+                "gt_image_id": gt_img_id,
+                "pred_image_id": actual_img_id,
+                "pred_image_index": img_idx,
+                "is_image_correct": is_img_correct,
+                "pred_answer": pred_answer,
+                "prediction": pred_answer,
+                "raw_response": pred_text,
                 "predicted_tokens": metrics["pred_items"],
                 "precision": metrics["precision"],
                 "recall": metrics["recall"],
@@ -127,9 +139,9 @@ def main():
             out_f.flush()
             os.fsync(out_f.fileno())
 
+            status = "OK" if is_img_correct else "MISS"
             print(f"[{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) [{pool_name}|N={len(candidate_meta)}] "
-                  f"P:{metrics['precision']*100:5.1f}% | R:{metrics['recall']*100:5.1f}% | F1:{metrics['f1']*100:5.1f}% "
-                  f"| Time:{latency:5.2f}s | Pred: '{pred_text[:60]}'")
+                  f"Img:{actual_img_id}({status}) | F1:{metrics['f1']*100:5.1f}% | Time:{latency:5.2f}s | Ans: '{pred_answer[:40]}'")
 
             gc.collect()
             if torch.cuda.is_available():
