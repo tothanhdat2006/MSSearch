@@ -7,9 +7,14 @@ import argparse
 from typing import List, Dict, Any
 import torch
 
-from eval_dataset import resolve_image, load_and_slice_dataset
-from eval_metrics import evaluate_predictions
-from eval_models import load_vlm_engine, run_vlm_baseline_inference
+try:
+    from eval_dataset import resolve_image, load_and_slice_dataset
+    from eval_metrics import evaluate_predictions
+    from eval_models import load_vlm_engine, run_vlm_baseline_inference
+except ModuleNotFoundError:
+    from experiments.baseline.eval_dataset import resolve_image, load_and_slice_dataset
+    from experiments.baseline.eval_metrics import evaluate_predictions
+    from experiments.baseline.eval_models import load_vlm_engine, run_vlm_baseline_inference
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Baseline VLM Benchmark Runner.")

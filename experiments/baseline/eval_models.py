@@ -3,7 +3,10 @@ import torch
 from typing import List, Dict, Any, Tuple
 from PIL import Image, ImageDraw, ImageFont
 from difflib import SequenceMatcher
-from eval_metrics import is_negative_or_unanswerable
+try:
+    from eval_metrics import is_negative_or_unanswerable
+except ModuleNotFoundError:
+    from experiments.baseline.eval_metrics import is_negative_or_unanswerable
 
 def create_vertical_panel_canvas(images: List[Image.Image]) -> Image.Image:
     """Scales images to max width of the batch, stacking vertically with 20px white gap and 2px borders."""

@@ -6,9 +6,14 @@ import time
 import argparse
 import torch
 
-from eval_dataset import resolve_image, load_and_slice_dataset
-from eval_metrics import evaluate_predictions
-from eval_models import load_our_engines, run_our_pipeline
+try:
+    from eval_dataset import resolve_image, load_and_slice_dataset
+    from eval_metrics import evaluate_predictions
+    from eval_models import load_our_engines, run_our_pipeline
+except ModuleNotFoundError:
+    from experiments.our.eval_dataset import resolve_image, load_and_slice_dataset
+    from experiments.our.eval_metrics import evaluate_predictions
+    from experiments.our.eval_models import load_our_engines, run_our_pipeline
 
 def parse_args():
     parser = argparse.ArgumentParser(description="MSSearch V2 Evaluation Runner.")

@@ -56,7 +56,10 @@ def evaluate_our_modal(
     max_samples: int = None,
     resume: bool = True
 ):
-    import torch
+    import sys, os, torch
+    for p in ["/root/experiments/our", os.path.abspath(os.path.join(os.path.dirname(__file__), "experiments/our")), os.path.dirname(__file__)]:
+        if os.path.exists(p) and p not in sys.path:
+            sys.path.insert(0, p)
     try:
         from experiments.our.eval_dataset import load_and_slice_dataset, resolve_image
         from experiments.our.eval_metrics import evaluate_predictions
