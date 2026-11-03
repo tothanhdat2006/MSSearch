@@ -110,7 +110,26 @@ def evaluate_our_modal(
     resolved_model = local_model_path if os.path.isdir(local_model_path) else model_name
 
     sam3_path = "/models/sam3/sam3.pt"
+    if not os.path.isfile(sam3_path):
+        for alt_sam in ["/models/sam3.pt", "/root/models/sam3/sam3.pt"]:
+            if os.path.isfile(alt_sam):
+                sam3_path = alt_sam
+                break
+        if not os.path.isfile(sam3_path):
+            print(f"[Modal Worker] sam3.pt not found at {sam3_path}, fetching from ModelScope...")
+            os.makedirs("/models/sam3", exist_ok=True)
+            tar_tmp = "/models/sam3.tar.gz"
+            import urllib.request, tarfile
+            urllib.request.urlretrieve("https://www.modelscope.cn/models/llp1995/sam3/resolve/master/sam3.tar.gz", tar_tmp)
+            with tarfile.open(tar_tmp, "r:*") as tar:
+                tar.extractall("/models/sam3")
+            if os.path.exists(tar_tmp):
+                os.remove(tar_tmp)
+            models_volume.commit()
+
     siglip_name = "/models/siglip-base-patch16-384"
+    if not os.path.isdir(siglip_name):
+        siglip_name = "google/siglip-base-patch16-384"
     nlp_model = "en_core_web_sm"
 
     engines = load_our_engines(
