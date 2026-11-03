@@ -111,7 +111,7 @@ def evaluate_our_modal(
 
     sam3_path = "/models/sam3/sam3.pt"
     if not os.path.isfile(sam3_path):
-        for alt_sam in ["/models/sam3.pt", "/root/models/sam3/sam3.pt"]:
+        for alt_sam in ["/models/sam3/sam3/sam3.pt", "/models/sam3.pt", "/root/models/sam3/sam3.pt"]:
             if os.path.isfile(alt_sam):
                 sam3_path = alt_sam
                 break
@@ -119,7 +119,7 @@ def evaluate_our_modal(
             print(f"[Modal Worker] sam3.pt not found at {sam3_path}, fetching from ModelScope...")
             os.makedirs("/models/sam3", exist_ok=True)
             tar_tmp = "/models/sam3.tar.gz"
-            import urllib.request, tarfile
+            import urllib.request, tarfile, shutil
 
             def _hook(count, block_size, total_size):
                 if total_size > 0 and count % 5000 == 0:
@@ -134,6 +134,9 @@ def evaluate_our_modal(
                 tar.extractall("/models/sam3")
             if os.path.exists(tar_tmp):
                 os.remove(tar_tmp)
+            nested = "/models/sam3/sam3/sam3.pt"
+            if os.path.isfile(nested) and not os.path.isfile(sam3_path):
+                shutil.copyfile(nested, sam3_path)
             models_volume.commit()
 
     siglip_name = "/models/siglip-base-patch16-384"
@@ -212,11 +215,13 @@ def main(
     start_idx: int = None,
     end_idx: int = None,
     max_samples: int = None,
-    resume: bool = True
+    resume: bool = True,
+    detach_run: bool = False
 ):
     gpu_type = select_gpu(model)
     print(f"Launching Modal MSSearch Evaluation for model: {model} on {gpu_type} (Pool: {pool_mode})")
-    evaluate_our_modal.with_options(gpu=gpu_type).remote(
+    fn = evaluate_our_modal.with_options(gpu=gpu_type)
+    kwargs = dict(
         model_name=model,
         pool_mode=pool_mode,
         dataset_path=dataset_path,
@@ -227,3 +232,10 @@ def main(
         max_samples=max_samples,
         resume=resume
     )
+    if detach_run:
+        call = fn.spawn(**kwargs)
+        print(f"[Modal] Job spawned asynchronously in background! Call ID: {call.object_id}")
+        print("[Modal] Local entrypoint exiting cleanly. Safe to close terminal.")
+        print("[Modal] Track progress with: modal app list")
+    else:
+        fn.remote(**kwargs)
