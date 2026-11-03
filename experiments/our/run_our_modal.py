@@ -43,7 +43,7 @@ def select_gpu(model_name: str) -> str:
     gpu="A10G",
     volumes={"/data": data_volume, "/models": models_volume, "/results": results_volume},
     timeout=86400,
-    secrets=[modal.Secret.from_name("huggingface-secret", required=False)]
+    secrets=[modal.Secret.from_dict({"HF_TOKEN": os.environ.get("HF_TOKEN", "")})]
 )
 def evaluate_our_modal(
     model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct",
