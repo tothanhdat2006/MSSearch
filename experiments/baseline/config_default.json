@@ -1,9 +1,7 @@
 {
-  "pool_mode": "N_20",
-  "eval_strategy": "multi_image",
-  "max_new_tokens": 128,
-  "min_pixels": 3136,
-  "max_pixels": 12845056,
   "attn_implementation": "sdpa",
-  "log_level": "summary"
+  "eval_strategy": "multi_image",
+  "log_level": "summary",
+  "max_new_tokens": 128,
+  "pool_mode": "N_20"
 }

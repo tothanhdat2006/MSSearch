@@ -96,18 +96,11 @@ class ModelQwenVL:
         self.model.eval()
         self.device = self.model.device
 
-        # Visual pixel budget:
-        # - min_pixels: 3136 (corresponds to 56 x 56 minimum patch resolution).
-        # - max_pixels: Default 1,048,576 (~1M pixels, 1024 x 1024, ~1344 visual tokens).
-        #   Strictly enforces the <= 1024px subcanvas optical resolution ceiling, preventing
-        #   unbounded SDPA memory allocations and CPU RAM exhaustion on 16K visual tokens.
-        min_pixels = kwargs.get("min_pixels", 3136)
-        default_max_pixels = 1048576
-        max_pixels = kwargs.get("max_pixels", default_max_pixels)
-        print("[ModelQwenVL] max_pixels capped at:", max_pixels)
-        print("[ModelQwenVL] min_pixels:", min_pixels)
-        self.processor.image_processor.max_pixels = max_pixels
-        self.processor.image_processor.min_pixels = min_pixels
+        # Visual pixel budget: only override if explicitly provided, else use processor defaults
+        if kwargs.get("min_pixels") is not None and hasattr(self.processor.image_processor, "min_pixels"):
+            self.processor.image_processor.min_pixels = kwargs["min_pixels"]
+        if kwargs.get("max_pixels") is not None and hasattr(self.processor.image_processor, "max_pixels"):
+            self.processor.image_processor.max_pixels = kwargs["max_pixels"]
 
         self.bias_value = kwargs.get("bias_value", 0.6)
         print("bias_value:", self.bias_value)

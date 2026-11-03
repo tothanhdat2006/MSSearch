@@ -140,10 +140,10 @@ class MSSearchConfig:
     query_meta: Optional[dict] = None            # Optional structured query metadata: {'target_attribute_type': ..., 'condition_attribute': ..., 'target_object': ...}
 
     # -------------------------------------------------------------------------
-    # Visual Pixel Budget & Resolution Controls
+    # Visual Pixel Budget & Resolution Controls (None = model/processor defaults)
     # -------------------------------------------------------------------------
-    min_pixels: int = 3136                       # Corresponds to 56 x 56 minimum patch resolution
-    max_pixels: int = 1048576                    # Default 1,048,576 (~1M pixels, 1024 x 1024, ~1344 visual tokens) enforces <=1024px subcanvas ceiling and prevents OOM
+    min_pixels: Optional[int] = None
+    max_pixels: Optional[int] = None
 
     # -------------------------------------------------------------------------
     # Diagnostic & Logging Controls
