@@ -5,12 +5,23 @@ from typing import List
 from PIL import Image
 import numpy as np
 from transformers import AutoTokenizer
-from llava.model.language_model.llava_qwen import LlavaQwenForCausalLM
-from llava.model.language_model.llava_llama import LlavaLlamaForCausalLM, LlavaConfig
-from llava.utils import disable_torch_init
-from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
-from llava.conversation import conv_templates
-from llava.mm_utils import tokenizer_image_token, process_images
+try:
+    from llava.model.language_model.llava_qwen import LlavaQwenForCausalLM
+    from llava.model.language_model.llava_llama import LlavaLlamaForCausalLM, LlavaConfig
+    from llava.utils import disable_torch_init
+    from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN
+    from llava.conversation import conv_templates
+    from llava.mm_utils import tokenizer_image_token, process_images
+except (ModuleNotFoundError, ImportError):
+    LlavaQwenForCausalLM = None
+    LlavaLlamaForCausalLM = None
+    LlavaConfig = None
+    disable_torch_init = lambda: None
+    IMAGE_TOKEN_INDEX = -200
+    DEFAULT_IMAGE_TOKEN = "<image>"
+    conv_templates = {}
+    tokenizer_image_token = None
+    process_images = None
 from .tree import Node, NodeA
 from .utils import *
 from sentence_transformers import SentenceTransformer, util

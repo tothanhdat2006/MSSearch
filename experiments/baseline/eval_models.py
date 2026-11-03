@@ -38,22 +38,27 @@ def create_vertical_panel_canvas(images: List[Image.Image]) -> Image.Image:
 
 def load_vlm_engine(model_path_or_name: str, device: str = "cuda:0", attn_implementation: str = "sdpa") -> Any:
     """Loads appropriate VLM engine from local directory or Hugging Face repository."""
-    from mssearch.models import ModelQwenVL, ModelInternvl, ModelYiVL, ModelLlavaHR, ModelGlobalLocal
     m_str = str(model_path_or_name).lower()
 
     if "internvl" in m_str:
+        from mssearch.models import ModelInternvl
         return ModelInternvl(model_path=model_path_or_name, device=device)
     elif "yi-vl" in m_str or "yi_vl" in m_str:
+        from mssearch.models import ModelYiVL
         return ModelYiVL(model_path=model_path_or_name, device=device)
     elif "llava-hr" in m_str or "llava_hr" in m_str:
+        from mssearch.models import ModelLlavaHR
         return ModelLlavaHR(model_path=model_path_or_name, device=device)
     elif "llava-v1.6" in m_str or "llava_v1.6" in m_str or "vicuna" in m_str:
         try:
+            from mssearch.models import ModelGlobalLocal
             return ModelGlobalLocal(model_path=model_path_or_name, device=device)
         except Exception:
+            from mssearch.models import ModelQwenVL
             return ModelQwenVL(model_path=model_path_or_name, device=device, attn_implementation=attn_implementation)
     else:
         # Defaults to QwenVL/AutoProcessor engine (handles Qwen2.5-VL, Qwen3-VL, LLaVA-OneVision)
+        from mssearch.models import ModelQwenVL
         return ModelQwenVL(model_path=model_path_or_name, device=device, attn_implementation=attn_implementation)
 
 def format_baseline_prompt(num_images: int, question: str) -> str:

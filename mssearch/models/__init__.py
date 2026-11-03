@@ -17,8 +17,12 @@ def __getattr__(name: str) -> Any:
         from .modeling_qwenvl import ModelQwenVL
         return ModelQwenVL
     elif name == "ModelGlobalLocal":
-        from .modeling_llava import ModelGlobalLocal
-        return ModelGlobalLocal
+        try:
+            from .modeling_llava import ModelGlobalLocal
+            return ModelGlobalLocal
+        except (ModuleNotFoundError, ImportError):
+            from .modeling_qwenvl import ModelQwenVL
+            return ModelQwenVL
     elif name == "ModelInternvl":
         from .modeling_internvl import ModelInternvl
         return ModelInternvl
