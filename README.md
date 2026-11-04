@@ -257,5 +257,16 @@ Control visual search depth:
 
 ---
 
-## 9. Citation & Acknowledgements
+## 9. VLM Backend Compatibility & Debugging Notes
+
+When integrating custom or upstream MLLMs into `mssearch/models/`:
+- **Unified Interface**: Every VLM wrapper class must implement `generate_response(image_pil=None, question: str = "", max_new_tokens: int = 128, **kwargs) -> str`.
+  - When `image_pil is None`: routes to pure text generation (used by Stage 1 query parsing and Stage 5 candidate validation).
+  - When `image_pil` is a `PIL.Image.Image` or `List[Image]`: routes to vision-language generation.
+- **Visual Token Deduplication**: Prompts constructed in Stage 6 already prefix `<image>\n` (or `<image>`). Wrappers must check `if question.startswith("<image>\n")` before prepending default template visual tokens to prevent duplicate `<image><image>` tokens.
+- **Stage 6 Error Surfacing**: In `mssearch/stages/stage6_foveated_reader.py`, generation exceptions on chunk 0 are printed unconditionally to expose missing methods or tensor shape mismatches without requiring `verbose=True`.
+
+---
+
+## 10. Citation & Acknowledgements
 Built upon architectural principles from SAM3, SigLIP, and Qwen2.5-VL for scalable high-resolution visual question answering.
