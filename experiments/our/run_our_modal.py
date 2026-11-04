@@ -21,10 +21,23 @@ eval_image = (
         "sentencepiece",
         "spacy",
         "scikit-learn",
+        "scikit-image",
+        "scipy",
+        "matplotlib",
+        "networkx",
+        "pycocotools",
+        "opencv-python-headless",
+        "pandas",
+        "ftfy",
+        "regex",
+        "hydra-core",
+        "omegaconf",
+        "iopath",
+        "timm",
         "huggingface_hub"
     )
     .run_commands("python -m spacy download en_core_web_sm")
-    .add_local_python_source("mssearch", "experiments")
+    .add_local_python_source("mssearch", "experiments", "sam3")
 )
 
 data_volume = modal.Volume.from_name("mssearch-data", create_if_missing=True)
@@ -57,7 +70,7 @@ def evaluate_our_modal(
     resume: bool = True
 ):
     import sys, os, torch
-    for p in ["/root/experiments/our", os.path.abspath(os.path.join(os.path.dirname(__file__), "experiments/our")), os.path.dirname(__file__)]:
+    for p in ["/root", "/root/experiments/our", os.path.dirname(__file__)]:
         if os.path.exists(p) and p not in sys.path:
             sys.path.insert(0, p)
     try:
@@ -69,16 +82,8 @@ def evaluate_our_modal(
         from eval_metrics import evaluate_predictions
         from eval_models import load_our_engines, run_our_pipeline
 
-    if not os.path.exists(dataset_path):
-        for alt in ["/data/annotations_part1234_merged.json", "/data/STASHBench/annotations_part1234_merged.json", "/data/200_samples.json"]:
-            if os.path.exists(alt):
-                dataset_path = alt
-                break
-    if not os.path.exists(image_dir):
-        for alt in ["/data/pool", "/data/STASHBench/pool", "/data/images", "/data"]:
-            if os.path.exists(alt):
-                image_dir = alt
-                break
+    dataset_path = next((p for p in [dataset_path, "/data/annotations_part1234_merged.json", "/data/STASHBench/annotations_part1234_merged.json", "/data/200_samples.json"] if os.path.exists(p)), dataset_path)
+    image_dir = next((p for p in [image_dir, "/data/pool", "/data/STASHBench/pool", "/data/images", "/data"] if os.path.exists(p)), image_dir)
 
     output_dir = "/results/our"
     os.makedirs(output_dir, exist_ok=True)
