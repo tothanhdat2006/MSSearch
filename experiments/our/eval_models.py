@@ -22,6 +22,13 @@ def load_our_engines(
     print(f"[Engine Setup] Loading primary VLM: '{model_path}'...")
     if "internvl" in m_str:
         zoom_model = ModelInternvl(model_path=model_path, device=device)
+    elif "llava" in m_str:
+        try:
+            from mssearch.models import ModelGlobalLocal
+            zoom_model = ModelGlobalLocal(model_path=model_path, device=device)
+        except Exception:
+            from mssearch.models import ModelQwenVL
+            zoom_model = ModelQwenVL(model_path=model_path, device=device)
     else:
         zoom_model = ModelQwenVL(model_path=model_path, device=device)
 
