@@ -11,7 +11,6 @@ from .utils import *
 warnings.filterwarnings("ignore", category=FutureWarning, message=r".*min_pixels.*max_pixels.*")
 warnings.filterwarnings("ignore", message=r".*`torch_dtype` is deprecated.*")
 
-BOX_COLOR = "red"
 
 class ModelQwenVL:
     def __init__(self, model_path: str = "Qwen/Qwen2.5-VL-7B-Instruct", device: str = "cuda:0", torch_dtype=torch.float16, **kwargs) -> None:
@@ -141,7 +140,7 @@ class ModelQwenVL:
     def init_prompts(self):
         self.prompts = {
             "search": {
-                "pre_information_image2": f"<image>\nThis is the main image, and the section enclosed by the {BOX_COLOR} rectangle is the focus region.\n<image>\nThis is the zoomed-in view of the focus region.\n",
+                "pre_information_image2": "<image>\nThis is the main image.\n<image>\nThis is the zoomed-in view of the focus region.\n",
                 "pre_information_image1": "<image>\n",
                 "latent_prompt": "According to your common sense knowledge and the content of image, is it possible to find a {} by further zooming in the image? Answer Yes or No.",
                 "existence_prompt": "Is there a '{}' in the image? Answer Yes or No.",
@@ -281,17 +280,6 @@ class ModelQwenVL:
         x1, y1, x2, y2 = bbox
         return [x1 + left, y1 + top, x2 + left, y2 + top]
 
-    def draw_bbox_arrow_in_square_image(self, square_image, resized_bbox, color):
-        thickness = square_image.width // 120
-        new_bbox = visualize_bbox_and_arrow(square_image, resized_bbox, color, thickness, xyxy=True)
-        return new_bbox
-
-    def get_original_image_with_color_bbox(self, square_image, left, top, image_pil):
-        image_width, image_height = image_pil.size
-        crop_coords = [left, top, left + image_width, top + image_height]
-        cropped_image = square_image.crop(crop_coords)
-        return cropped_image
-
     def zoom_in(self, croped_view):
         c_width = croped_view.width
         c_height = croped_view.height
@@ -361,20 +349,14 @@ class ModelQwenVL:
 
         resized_bboxes = merge_bbox_list(resized_bboxes, threshold=0)
 
-        full_color_bboxes = []
-        for i in range(len(resized_bboxes)):
-            resized_bbox = self.get_bbox_in_square_image(resized_bboxes[i], left, top)
-            color_bbox = self.draw_bbox_arrow_in_square_image(square_image, resized_bbox, BOX_COLOR)
-            full_color_bboxes.append(color_bbox)
-
-        union_color_bboxes = union_all_bboxes(full_color_bboxes)
-        if union_color_bboxes is None:
+        target_bboxes = [self.get_bbox_in_square_image(b, left, top) for b in resized_bboxes]
+        union_bboxes = union_all_bboxes(target_bboxes)
+        if union_bboxes is None:
             return [square_image]
-        croped_view = square_image.crop(union_color_bboxes)
+        croped_view = square_image.crop(union_bboxes)
         zoomed_view = self.zoom_in(croped_view)
-        original_image_with_color_bbox = self.get_original_image_with_color_bbox(square_image, left, top, image_pil)
 
-        return [self.resize_image(original_image_with_color_bbox), croped_view, zoomed_view]
+        return [self.resize_image(image_pil), croped_view, zoomed_view]
 
     @torch.no_grad()
     def get_confidence_value(self, node: Optional[List[NodeA]] = None, image_pil: Image.Image = None, confidence_type: str = 'existence', input_ele: str = '', root_anyres: bool = True, node_list: Optional[List[NodeA]] = None):

@@ -9,7 +9,6 @@ from .utils import *
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
-BOX_COLOR = "red"
 
 IMG_START_TOKEN = '<img>'
 IMG_END_TOKEN = '</img>'
@@ -150,7 +149,7 @@ class ModelInternvl:
     def init_prompts(self):
         self.prompts = {
             "search": {
-                "pre_information_image2": f"<image>\nThis is the main image, and the section enclosed by the {BOX_COLOR} rectangle is the focus region.\n<image>\nThis is the zoomed-in view of the focus region.\n",
+                "pre_information_image2": "<image>\nThis is the main image.\n<image>\nThis is the zoomed-in view of the focus region.\n",
                 "pre_information_image1": "<image>\n",
                 "latent_prompt": "According to your common sense knowledge and the content of image, is it possible to find a {} by further zooming in the image? Answer Yes or No.",
                 "existence_prompt": "Is there a '{}' in the image? Answer Yes or No.",
@@ -233,11 +232,6 @@ class ModelInternvl:
         x1, y1, x2, y2 = bbox
         return [x1 + left, y1 + top, x2 + left, y2 + top]
 
-    def draw_bbox_arrow_in_square_image(self, square_image, resized_bbox, color):
-        thickness = square_image.width // 120
-        new_bbox = visualize_bbox_and_arrow(square_image, resized_bbox, color, thickness, xyxy=True)
-        return new_bbox
-
     def zoom_in(self, croped_view):
         c_width = croped_view.width
         c_height = croped_view.height
@@ -296,16 +290,11 @@ class ModelInternvl:
 
         resized_bboxes = merge_bbox_list(resized_bboxes, threshold=0)
 
-        full_color_bboxes = []
-        for i in range(len(resized_bboxes)):
-            resized_bbox = self.get_bbox_in_square_image(resized_bboxes[i], left, top)
-            color_bbox = self.draw_bbox_arrow_in_square_image(square_image, resized_bbox, BOX_COLOR)
-            full_color_bboxes.append(color_bbox)
-
-        union_color_bboxes = union_all_bboxes(full_color_bboxes)
-        if union_color_bboxes is None:
+        target_bboxes = [self.get_bbox_in_square_image(b, left, top) for b in resized_bboxes]
+        union_bboxes = union_all_bboxes(target_bboxes)
+        if union_bboxes is None:
             return [square_image]
-        croped_view = square_image.crop(union_color_bboxes)
+        croped_view = square_image.crop(union_bboxes)
         zoomed_view = self.zoom_in(croped_view)
 
         return [square_image.resize(self.input_size), croped_view, zoomed_view]
