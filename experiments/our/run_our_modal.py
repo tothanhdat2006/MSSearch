@@ -31,15 +31,12 @@ models_volume = modal.Volume.from_name("mssearch-models", create_if_missing=True
 results_volume = modal.Volume.from_name("mssearch-results", create_if_missing=True)
 
 def select_gpu(model_name: str) -> str:
-    """Assigns A10G (24GB) for <=8B and L40S (48GB) for 32B variants."""
-    m_lower = model_name.lower()
-    if any(tag in m_lower for tag in ["32b", "34b", "38b", "72b"]):
-        return "L40S"
-    return "A10G"
+    """Always assigns L40S (48GB) for our multi-model pipeline (VLM + SAM3 + SigLIP)."""
+    return "L40S"
 
 @app.function(
     image=eval_image,
-    gpu="A10G",
+    gpu="L40S",
     volumes={"/data": data_volume, "/models": models_volume, "/results": results_volume},
     timeout=86400,
     secrets=[modal.Secret.from_name("huggingface-secret")]
