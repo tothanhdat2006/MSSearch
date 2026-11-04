@@ -4,6 +4,7 @@
   "entropy_threshold": 0.35,
   "min_patch_entropy": 0.35,
   "max_partition_depth": 4,
+  "max_patches_per_image": 64,
   "enable_continuous_enclosure_subcanvas": true,
   "max_sub_canvases": 4,
   "seam_overlap_threshold": 0.1,

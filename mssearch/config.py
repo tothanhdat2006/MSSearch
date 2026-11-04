@@ -49,7 +49,7 @@ class MSSearchConfig:
     saliency_plateau_gain_threshold: float = 0.04 # Saliency gain (max_child - parent) required to justify deeper split
     saliency_target_threshold: float = 0.35      # High confidence target threshold where marginal gain halts zoom
     max_partition_depth: int = 4                 # Maximum recursion depth before direct tiling
-    max_patches_per_image: int = 150             # Maximum bounded patches budget per image
+    max_patches_per_image: int = 64              # Maximum bounded patches budget per image
     stage3_budget_mode: str = "siglip_similarity" # "siglip_similarity", "entropy_descending", "uniform_stride"
     siglip_budget_batch_size: int = 32           # Batch size for SigLIP crop scoring
     reuse_stage2_features: bool = True           # Reuse SAM3 vision features extracted in Stage 2
