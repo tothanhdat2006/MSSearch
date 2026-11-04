@@ -52,6 +52,10 @@ def main():
     else:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = os.path.join(args.output_dir, f"results_{m_name}_{args.pool_mode}_{stamp}.jsonl")
+    config_file = results_file.replace("results_", "config_").replace(".jsonl", ".json")
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(vars(args), f, indent=2)
+    print(f"[Config Saved] Config snapshot saved to '{config_file}'.")
 
     # Load dataset & slice
     all_samples, eval_tasks = load_and_slice_dataset(

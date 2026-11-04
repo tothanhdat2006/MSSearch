@@ -89,6 +89,14 @@ def evaluate_baseline_modal(
     else:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = os.path.join(output_dir, f"results_{m_clean}_{pool_mode}_{stamp}.jsonl")
+    config_file = results_file.replace("results_", "config_").replace(".jsonl", ".json")
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump({
+            "model_name": model_name, "pool_mode": pool_mode, "eval_strategy": eval_strategy,
+            "max_new_tokens": max_new_tokens, "max_samples": max_samples
+        }, f, indent=2)
+    results_volume.commit()
+    print(f"[Config Saved] Config snapshot saved to '{config_file}'.")
 
     # Load & slice dataset
     all_samples, eval_tasks = load_and_slice_dataset(

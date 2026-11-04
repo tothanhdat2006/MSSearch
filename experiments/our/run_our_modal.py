@@ -79,6 +79,7 @@ def evaluate_our_modal(
     else:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = os.path.join(output_dir, f"results_our_{m_clean}_{pool_mode}_{stamp}.jsonl")
+    config_file = results_file.replace("results_our_", "config_our_").replace(".jsonl", ".json")
 
     # Load & slice dataset
     all_samples, eval_tasks = load_and_slice_dataset(
@@ -131,6 +132,9 @@ def evaluate_our_modal(
         nlp_model=nlp_model,
         device="cuda:0"
     )
+    engines["config"].save_json(config_file)
+    results_volume.commit()
+    print(f"[Config Saved] Config snapshot saved to '{config_file}'.")
 
     with open(results_file, "a", encoding="utf-8") as out_f:
         for idx, (s_idx, sample, p_name, pool_info) in enumerate(remaining_tasks):
