@@ -1,15 +1,12 @@
 {
-  "answer_type": "attribute_list",
-  "attn_implementation": "sdpa",
-  "enable_continuous_enclosure_subcanvas": true,
-  "entropy_threshold": 4.5,
-  "log_level": "summary",
-  "max_depth": 2,
-  "max_sub_canvases": 4,
   "multi_answer_mode": true,
-  "pool_mode": "N_20",
-  "prompt_directed_final_answer": false,
   "scale_budgets_by_num_images": true,
+  "entropy_threshold": 0.35,
+  "min_patch_entropy": 0.35,
+  "max_partition_depth": 4,
+  "enable_continuous_enclosure_subcanvas": true,
+  "max_sub_canvases": 4,
   "seam_overlap_threshold": 0.1,
-  "siglip_threshold": 0.03
+  "prompt_directed_final_answer": false,
+  "log_level": "summary"
 }
