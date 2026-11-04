@@ -10,11 +10,11 @@ import torch
 
 try:
     from eval_dataset import resolve_image, load_and_slice_dataset
-    from eval_metrics import evaluate_predictions
+    from eval_metrics import evaluate_predictions, compute_stage_ret_rej_tokens
     from eval_models import load_our_engines, run_our_pipeline
 except ModuleNotFoundError:
     from experiments.our.eval_dataset import resolve_image, load_and_slice_dataset
-    from experiments.our.eval_metrics import evaluate_predictions
+    from experiments.our.eval_metrics import evaluate_predictions, compute_stage_ret_rej_tokens
     from experiments.our.eval_models import load_our_engines, run_our_pipeline
 
 def parse_args():
@@ -125,26 +125,33 @@ def main():
             pred_text = resp.get("primary_answer", "")
             pred_list = resp.get("prediction_list", []) or resp.get("answers", [])
             metrics = evaluate_predictions(pred_text, pred_list, gt_list)
-
             telemetry = resp.get("telemetry", {})
+
+            gt_img = pool_info.get("gt_image") or sample.get("gt_image")
+            gt_img_id = gt_img.get("image_id") if isinstance(gt_img, dict) else (gt_img or "")
+            gt_idx = pool_info.get("gt_index")
+            gt_img_idx = (gt_idx - 1) if gt_idx is not None else next((i for i, m in enumerate(candidate_meta) if str(m.get("image_id")) == str(gt_img_id)), None)
+
+            evidence_indices = telemetry.get("evidence_images", [])
+            evidence_img_ids = [
+                candidate_meta[i].get("image_id") if isinstance(candidate_meta[i], dict) else str(candidate_meta[i])
+                for i in evidence_indices if 0 <= i < len(candidate_meta)
+            ]
+            is_img_correct = (str(gt_img_id) in [str(x) for x in evidence_img_ids]) if (evidence_img_ids and gt_img_id) else (False if gt_img_id else None)
+
+            stage_stats = compute_stage_ret_rej_tokens(telemetry, gt_img_idx, sample.get("target_bbox"), images)
+
             record = {
-                "sample_id": sample_id,
-                "sample_index": s_idx,
-                "pool_name": pool_name,
-                "pool_N": len(candidate_meta),
-                "question": question,
-                "ground_truth_list": gt_list,
-                "prediction": pred_text,
-                "predicted_tokens": metrics["pred_items"],
-                "precision": metrics["precision"],
-                "recall": metrics["recall"],
-                "f1": metrics["f1"],
-                "exact_match": metrics["exact_match"],
-                "discovered_evidence_images": resp.get("evidence_images", []),
-                "route": telemetry.get("route", "UNKNOWN"),
-                "routes_executed": telemetry.get("routes_executed", []),
+                "sample_id": sample_id, "sample_index": s_idx, "pool_name": pool_name, "pool_N": len(candidate_meta),
+                "question": question, "ground_truth_list": gt_list, "gt_image_id": gt_img_id, "gt_image_idx": gt_img_idx,
+                "pred_image_ids": evidence_img_ids, "pred_image_indices": evidence_indices, "is_image_correct": is_img_correct,
+                "prediction": pred_text, "precision": metrics["precision"], "recall": metrics["recall"], "f1": metrics["f1"],
+                "exact_match": metrics["exact_match"], "route": telemetry.get("route", "UNKNOWN"),
+                "stage5_mode": telemetry.get("stage5_mode", ""), "stages_executed": telemetry.get("stages_executed", []),
+                "num_unified_crops": telemetry.get("num_unified_crops", 0), "timings_sec": telemetry.get("timings_sec", {}),
+                "stage_retention": stage_stats["stage_retention"], "stage_rejection": stage_stats["stage_rejection"],
+                "visual_tokens": stage_stats["visual_tokens"], "stage6_crop_sizes": stage_stats["stage6_crop_sizes"],
                 "latency_sec": latency,
-                "timings_sec": telemetry.get("timings_sec", {}),
             }
 
             out_f.write(json.dumps(record, ensure_ascii=False) + "\n")

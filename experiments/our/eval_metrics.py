@@ -72,3 +72,89 @@ def evaluate_predictions(
         "pred_items": sorted(list(pred_set)),
         "gt_items": sorted(list(gt_set)),
     }
+
+
+def compute_stage_ret_rej_tokens(
+    telemetry: Dict[str, Any],
+    gt_img_idx: Optional[int],
+    target_bbox: Optional[Any],
+    candidate_images: Optional[List[Any]] = None
+) -> Dict[str, Any]:
+    """Computes target retention, noise rejection, and visual tokens across pipeline stages."""
+    import math
+
+    tb = None
+    if isinstance(target_bbox, dict):
+        if "x" in target_bbox and "width" in target_bbox:
+            tb = [target_bbox["x"], target_bbox["y"], target_bbox["x"] + target_bbox["width"], target_bbox["y"] + target_bbox["height"]]
+        elif "x1" in target_bbox and "x2" in target_bbox:
+            tb = [target_bbox["x1"], target_bbox["y1"], target_bbox["x2"], target_bbox["y2"]]
+    elif isinstance(target_bbox, (list, tuple)) and len(target_bbox) >= 4:
+        tb = list(target_bbox[:4])
+
+    t_area = max(1.0, float((tb[2] - tb[0]) * (tb[3] - tb[1]))) if tb else 1.0
+
+    def _box_containment(b, img_idx):
+        if not tb or gt_img_idx is None or img_idx != gt_img_idx or len(b) < 4:
+            return 0.0
+        ix1, iy1 = max(tb[0], b[0]), max(tb[1], b[1])
+        ix2, iy2 = min(tb[2], b[2]), min(tb[3], b[3])
+        inter = max(0.0, float(ix2 - ix1)) * max(0.0, float(iy2 - iy1))
+        return inter / t_area
+
+    # Stage 3
+    s3_boxes = telemetry.get("stage3_boxes", [])
+    s3_ret = any(_box_containment(b.get("box", []), b.get("img_idx")) >= 0.5 for b in s3_boxes) if tb else None
+    s3_noise = sum(1 for b in s3_boxes if gt_img_idx is not None and b.get("img_idx") != gt_img_idx)
+
+    # Stage 4
+    s4_boxes = telemetry.get("stage4_boxes", [])
+    s4_ret = any(_box_containment(b.get("box", []), b.get("img_idx")) >= 0.5 for b in s4_boxes) if tb else None
+    s4_noise = sum(1 for b in s4_boxes if gt_img_idx is not None and b.get("img_idx") != gt_img_idx)
+
+    # Stage 5
+    s5_boxes = telemetry.get("stage5_boxes", [])
+    s5_ret = any(_box_containment(b.get("box", []), b.get("img_idx")) >= 0.5 for b in s5_boxes) if tb else None
+    s5_noise = sum(1 for b in s5_boxes if gt_img_idx is not None and b.get("img_idx") != gt_img_idx)
+
+    # Stage 6
+    s6_crops = telemetry.get("stage6_crops", [])
+    s6_ret = any(_box_containment(c.get("expanded_box") or c.get("box", [0, 0, 0, 0]), c.get("img_idx")) >= 0.5 for c in s6_crops) if tb else None
+    s6_noise = sum(1 for c in s6_crops if gt_img_idx is not None and c.get("img_idx") != gt_img_idx)
+
+    # Visual tokens (28x28 pixel block = 1 visual token in Qwen2.5-VL)
+    s6_crop_sizes = []
+    s6_tokens = 0
+    for c in s6_crops:
+        box = c.get("expanded_box") or c.get("box") or [0, 0, 0, 0]
+        w, h = max(1, box[2] - box[0]), max(1, box[3] - box[1])
+        s6_crop_sizes.append([w, h])
+        s6_tokens += int(math.ceil(w / 28) * math.ceil(h / 28))
+
+    s2_tokens = 0
+    if "stage2_fast_path" in telemetry.get("stages_executed", []) and candidate_images:
+        for img in candidate_images:
+            iw, ih = img.size if hasattr(img, "size") else (448, 448)
+            s2_tokens += int(math.ceil(iw / 28) * math.ceil(ih / 28))
+
+    return {
+        "stage_retention": {
+            "stage3": s3_ret,
+            "stage4": s4_ret,
+            "stage5": s5_ret,
+            "stage6": s6_ret,
+        },
+        "stage_rejection": {
+            "stage3_noise_patches": s3_noise,
+            "stage4_noise_patches": s4_noise,
+            "stage5_noise_crops": s5_noise,
+            "stage6_distractor_reads": s6_noise,
+        },
+        "visual_tokens": {
+            "stage2_direct_tokens": s2_tokens,
+            "stage6_reader_tokens": s6_tokens,
+            "total_vlm_tokens": s2_tokens + s6_tokens,
+        },
+        "stage6_crop_sizes": s6_crop_sizes,
+    }
+

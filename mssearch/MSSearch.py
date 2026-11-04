@@ -150,7 +150,10 @@ class MultiSourceSearchEngine:
             "multi_answer_mode": getattr(self.config, "multi_answer_mode", False),
             "target_attribute_type": target_attr_type,
             "condition_val": cond_val,
-            "target_object": target_obj
+            "target_object": target_obj,
+            "stage3_boxes": [],
+            "stage4_boxes": [],
+            "stage5_boxes": [],
         }
 
         # Tracking containers for the waterfall cascade
@@ -399,6 +402,7 @@ class MultiSourceSearchEngine:
         lat_s3 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage3_partitioning"] = lat_s3
         telemetry["num_bounded_patches"] = len(bounded_patches)
+        telemetry["stage3_boxes"] = [{"img_idx": p.img_idx, "box": list(map(int, p.box))} for p in bounded_patches]
         telemetry["stages_executed"].append("stage3_partitioning")
         if not is_quiet:
             print(f"[Stage 3: Partitioning] Decision: Partitioned {len(candidate_images)} images into {len(bounded_patches)} bounded patches (Mode: {self.config.partition_mode}) (Latency: {lat_s3}s)")
@@ -424,6 +428,7 @@ class MultiSourceSearchEngine:
         telemetry["stage4_groups"] = stage4_groups
         telemetry["stage4_kept_groups"] = sum(1 for g in stage4_groups if g.get("status") == "KEPT")
         telemetry["stage4_pruned_groups"] = sum(1 for g in stage4_groups if g.get("status") == "PRUNED")
+        telemetry["stage4_boxes"] = [{"img_idx": p.img_idx, "box": list(map(int, p.box))} for p in remaining_patches]
         telemetry["stages_executed"].append("stage4_grouping_gating")
         if not is_quiet:
             print(f"[Stage 4: Grouping & Gating] Decision: Evaluated {len(stage4_groups)} semantic groups -> Kept {telemetry['stage4_kept_groups']} groups ({len(remaining_patches)} patches), Pruned {telemetry['stage4_pruned_groups']} groups (Latency: {lat_s4}s)")
@@ -614,6 +619,7 @@ class MultiSourceSearchEngine:
         telemetry["stage5_mode"] = stage5_mode_val
         pre_agg_boxes = getattr(unified_pool, "pre_aggregation_boxes", [])
         telemetry["final_crop_boxes_before_aggregate"] = pre_agg_boxes
+        telemetry["stage5_boxes"] = [{"img_idx": c.img_idx, "box": list(map(int, c.box))} for c in unified_pool]
         telemetry["stages_executed"].append("stage5_screening")
         if not is_quiet:
             if has_continuous_enclosure:

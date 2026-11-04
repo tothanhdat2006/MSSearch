@@ -59,11 +59,11 @@ def evaluate_our_modal(
             sys.path.insert(0, p)
     try:
         from experiments.our.eval_dataset import load_and_slice_dataset, resolve_image
-        from experiments.our.eval_metrics import evaluate_predictions
+        from experiments.our.eval_metrics import evaluate_predictions, compute_stage_ret_rej_tokens
         from experiments.our.eval_models import load_our_engines, run_our_pipeline
     except ModuleNotFoundError:
         from eval_dataset import load_and_slice_dataset, resolve_image
-        from eval_metrics import evaluate_predictions
+        from eval_metrics import evaluate_predictions, compute_stage_ret_rej_tokens
         from eval_models import load_our_engines, run_our_pipeline
 
     dataset_path = next((p for p in [dataset_path, "/data/annotations_part1234_merged.json", "/data/STASHBench/annotations_part1234_merged.json", "/data/200_samples.json"] if os.path.exists(p)), dataset_path)
@@ -108,32 +108,18 @@ def evaluate_our_modal(
 
     sam3_path = "/models/sam3/sam3.pt"
     if not os.path.isfile(sam3_path):
-        for alt_sam in ["/models/sam3/sam3/sam3.pt", "/models/sam3.pt", "/root/models/sam3/sam3.pt"]:
-            if os.path.isfile(alt_sam):
-                sam3_path = alt_sam
-                break
+        for alt in ["/models/sam3/sam3/sam3.pt", "/models/sam3.pt", "/root/models/sam3/sam3.pt"]:
+            if os.path.isfile(alt): sam3_path = alt; break
         if not os.path.isfile(sam3_path):
-            print(f"[Modal Worker] sam3.pt not found at {sam3_path}, fetching from ModelScope...")
+            import urllib.request, tarfile, shutil
+            print("[Modal Worker] Fetching sam3.tar.gz from ModelScope...")
             os.makedirs("/models/sam3", exist_ok=True)
             tar_tmp = "/models/sam3.tar.gz"
-            import urllib.request, tarfile, shutil
-
-            def _hook(count, block_size, total_size):
-                if total_size > 0 and count % 5000 == 0:
-                    pct = min(100, count * block_size * 100 // total_size)
-                    mb = count * block_size // (1024 * 1024)
-                    tot_mb = total_size // (1024 * 1024)
-                    print(f"[Modal Worker] Fetching sam3.tar.gz: {pct}% ({mb}MB / {tot_mb}MB)")
-
-            urllib.request.urlretrieve("https://www.modelscope.cn/models/llp1995/sam3/resolve/master/sam3.tar.gz", tar_tmp, reporthook=_hook)
-            print("[Modal Worker] Extracting sam3.tar.gz...")
-            with tarfile.open(tar_tmp, "r:*") as tar:
-                tar.extractall("/models/sam3")
-            if os.path.exists(tar_tmp):
-                os.remove(tar_tmp)
+            urllib.request.urlretrieve("https://www.modelscope.cn/models/llp1995/sam3/resolve/master/sam3.tar.gz", tar_tmp, reporthook=lambda c, b, t: c % 5000 == 0 and t > 0 and print(f"SAM3: {min(100, c*b*100//t)}%"))
+            with tarfile.open(tar_tmp, "r:*") as tar: tar.extractall("/models/sam3")
+            if os.path.exists(tar_tmp): os.remove(tar_tmp)
             nested = "/models/sam3/sam3/sam3.pt"
-            if os.path.isfile(nested) and not os.path.isfile(sam3_path):
-                shutil.copyfile(nested, sam3_path)
+            if os.path.isfile(nested) and not os.path.isfile(sam3_path): shutil.copyfile(nested, sam3_path)
             models_volume.commit()
 
     siglip_name = "/models/siglip-base-patch16-384"
@@ -174,24 +160,35 @@ def evaluate_our_modal(
             resp = run_our_pipeline(engines, images, sample, s_idx)
             lat = round(time.perf_counter() - t0, 3)
 
+            gt_img = pool_info.get("gt_image") or sample.get("gt_image")
+            gt_img_id = gt_img.get("image_id") if isinstance(gt_img, dict) else (gt_img or "")
+            gt_idx = pool_info.get("gt_index")
+            gt_img_idx = (gt_idx - 1) if gt_idx is not None else next((i for i, m in enumerate(candidate_meta) if str(m.get("image_id")) == str(gt_img_id)), None)
+
             pred_text = resp.get("primary_answer", "")
             pred_list = resp.get("prediction_list", []) or resp.get("answers", [])
             metrics = evaluate_predictions(pred_text, pred_list, gt_list)
             telemetry = resp.get("telemetry", {})
 
+            evidence_indices = telemetry.get("evidence_images", [])
+            evidence_img_ids = [
+                candidate_meta[i].get("image_id") if isinstance(candidate_meta[i], dict) else str(candidate_meta[i])
+                for i in evidence_indices if 0 <= i < len(candidate_meta)
+            ]
+            is_img_correct = (str(gt_img_id) in [str(x) for x in evidence_img_ids]) if (evidence_img_ids and gt_img_id) else (False if gt_img_id else None)
+
+            stage_stats = compute_stage_ret_rej_tokens(telemetry, gt_img_idx, sample.get("target_bbox"), images)
+
             record = {
-                "sample_id": sample_id,
-                "sample_index": s_idx,
-                "pool_name": p_name,
-                "pool_N": len(candidate_meta),
-                "question": question,
-                "ground_truth_list": gt_list,
-                "prediction": pred_text,
-                "precision": metrics["precision"],
-                "recall": metrics["recall"],
-                "f1": metrics["f1"],
-                "exact_match": metrics["exact_match"],
-                "route": telemetry.get("route", "UNKNOWN"),
+                "sample_id": sample_id, "sample_index": s_idx, "pool_name": p_name, "pool_N": len(candidate_meta),
+                "question": question, "ground_truth_list": gt_list, "gt_image_id": gt_img_id, "gt_image_idx": gt_img_idx,
+                "pred_image_ids": evidence_img_ids, "pred_image_indices": evidence_indices, "is_image_correct": is_img_correct,
+                "prediction": pred_text, "precision": metrics["precision"], "recall": metrics["recall"], "f1": metrics["f1"],
+                "exact_match": metrics["exact_match"], "route": telemetry.get("route", "UNKNOWN"),
+                "stage5_mode": telemetry.get("stage5_mode", ""), "stages_executed": telemetry.get("stages_executed", []),
+                "num_unified_crops": telemetry.get("num_unified_crops", 0), "timings_sec": telemetry.get("timings_sec", {}),
+                "stage_retention": stage_stats["stage_retention"], "stage_rejection": stage_stats["stage_rejection"],
+                "visual_tokens": stage_stats["visual_tokens"], "stage6_crop_sizes": stage_stats["stage6_crop_sizes"],
                 "latency_sec": lat,
             }
 
