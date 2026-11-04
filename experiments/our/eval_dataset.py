@@ -1,12 +1,14 @@
 import os
 import json
 from typing import List, Dict, Any, Tuple
-from PIL import Image
+from PIL import Image, ImageOps
+
+Image.MAX_IMAGE_PIXELS = None
 
 def resolve_image(image_ref: Any, image_dir: str) -> Image.Image:
     """Resolves image file inside image_dir or image_dir/pool across common image formats."""
     if isinstance(image_ref, Image.Image):
-        return image_ref
+        return ImageOps.exif_transpose(image_ref)
 
     candidates = []
     crop_bbox = None
@@ -32,7 +34,9 @@ def resolve_image(image_ref: Any, image_dir: str) -> Image.Image:
 
     for p in candidates:
         if p and os.path.isfile(p):
-            img = Image.open(p).convert("RGB")
+            img = Image.open(p)
+            img = ImageOps.exif_transpose(img)
+            img = img.convert("RGB")
             if crop_bbox and isinstance(crop_bbox, dict):
                 x, y = crop_bbox.get("x", 0), crop_bbox.get("y", 0)
                 w, h = crop_bbox.get("width", img.width), crop_bbox.get("height", img.height)
