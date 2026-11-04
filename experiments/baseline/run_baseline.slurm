@@ -59,6 +59,5 @@ for M_ITEM in "${MODELS[@]}"; do
         --dataset_path "${DEFAULT_DATASET_PATH}" \
         --image_dir "${DEFAULT_IMAGE_DIR}" \
         --output_dir "${OUTPUT_DIR}" \
-        --pool_mode "${POOL_MODE}" \
-        --resume
+        --pool_mode "${POOL_MODE}"
 done

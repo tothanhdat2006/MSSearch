@@ -39,6 +39,7 @@ export PYTHONPATH="${MSSEARCH_ROOT}:${SCRIPT_DIR}:${PYTHONPATH:-}"
 POOL_MODE="N_5"
 CONFIG_PATH="${SCRIPT_DIR}/config_default.json"
 MODEL_CANDIDATE="${1:-lmms-lab/llava-onevision-qwen2-7b-ov}"
+shift || true
 
 M_BASE="$(basename "${MODEL_CANDIDATE}")"
 if [ -d "${DEFAULT_MODEL_DIR}/${M_BASE}" ]; then
@@ -73,4 +74,4 @@ echo "==========================================================================
     --output_dir "${OUTPUT_DIR}" \
     --config "${CONFIG_PATH}" \
     --pool_mode "${POOL_MODE}" \
-    --resume
+    "$@"

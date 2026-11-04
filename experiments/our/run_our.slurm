@@ -68,6 +68,5 @@ for M_ITEM in "${MODELS[@]}"; do
         --image_dir "${DEFAULT_IMAGE_DIR}" \
         --output_dir "${OUTPUT_DIR}" \
         --config "${CONFIG_PATH}" \
-        --pool_mode "${POOL_MODE}" \
-        --resume
+        --pool_mode "${POOL_MODE}"
 done

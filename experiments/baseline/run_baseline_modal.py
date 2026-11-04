@@ -54,7 +54,7 @@ def evaluate_baseline_modal(
     start_idx: int = None,
     end_idx: int = None,
     max_samples: int = None,
-    resume: bool = True
+    resume: bool = False
 ):
     import sys, os, glob, torch
     from datetime import datetime
@@ -190,7 +190,7 @@ def main(
     start_idx: int = None,
     end_idx: int = None,
     max_samples: int = None,
-    resume: bool = True,
+    resume: bool = False,
     detach_run: bool = False
 ):
     gpu_type = select_gpu(model)
