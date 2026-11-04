@@ -150,10 +150,22 @@ class Model(ABC):
         return confidence
 
     @torch.inference_mode()
-    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[Node], return_zoomed_view=False):
-        image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
+    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[Node] = None, return_zoomed_view=False, max_new_tokens: int = 128):
+        if searched_nodes is None:
+            searched_nodes = []
+        if isinstance(image_pil, (list, tuple)):
+            image_list = list(image_pil)
+        else:
+            image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
         prompt_tag = self.get_prompt_tag(image_list)
-        qs = self.prompts[prompt_tag]["pre_information"] + question
+        if question.startswith("<image>\n") or question.startswith(DEFAULT_IMAGE_TOKEN):
+            qs = question
+        elif prompt_tag in self.prompts and "pre_information" in self.prompts[prompt_tag]:
+            qs = self.prompts[prompt_tag]["pre_information"] + question
+        elif "search" in self.prompts and "pre_information_image1" in self.prompts["search"]:
+            qs = self.prompts["search"]["pre_information_image1"] + question
+        else:
+            qs = f"{DEFAULT_IMAGE_TOKEN}\n" + question
         prompt = self.get_prompt_from_qs(qs)
 
         image_tensor, image_sizes = self.process_image_list_to_tensor(image_list)
@@ -166,7 +178,7 @@ class Model(ABC):
             image_sizes=image_sizes,
             do_sample=False,
             temperature=0,
-            max_new_tokens=256,
+            max_new_tokens=max_new_tokens,
         )
         outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
 
@@ -175,6 +187,32 @@ class Model(ABC):
             return response
 
         return outputs
+
+    @torch.inference_mode()
+    def generate_response(self, image_pil=None, question: str = "", max_new_tokens: int = 128, **kwargs) -> str:
+        """Direct free-form text response generation interface for single image, crop, or text-only query."""
+        if image_pil is None:
+            conv = conv_templates[self.conv_type].copy()
+            clean_q = question[len("<image>\n"):].strip() if question.startswith("<image>\n") else question.strip()
+            conv.append_message(conv.roles[0], clean_q)
+            conv.append_message(conv.roles[1], None)
+            prompt = conv.get_prompt()
+            input_ids = self.tokenizer(prompt, return_tensors='pt').input_ids.to(self.device)
+            output_ids = self.model.generate(
+                input_ids,
+                images=None,
+                do_sample=False,
+                temperature=0,
+                max_new_tokens=max_new_tokens,
+            )
+            return self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+        return self.free_form_using_nodes(
+            image_pil=image_pil,
+            question=question,
+            searched_nodes=[],
+            return_zoomed_view=False,
+            max_new_tokens=max_new_tokens
+        )
 
     @torch.inference_mode()
     def multiple_choices_inference(self, image_pil, question, options, searched_nodes: List[Node] = None):
@@ -532,14 +570,18 @@ class ModelGlobalLocal(Model):
         return confidence
 
     @torch.inference_mode()
-    def free_form_using_nodes_sgavs(self, image_pil, question, searched_nodes: List[Node], return_zoomed_view=False):
-        image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
-
-        if len(image_list) > 1:
-            raw_image_resize, croped_view, zoom_view = image_list
-            image_input = [zoom_view]
+    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[Node] = None, return_zoomed_view=False, max_new_tokens: int = 128):
+        if searched_nodes is None:
+            searched_nodes = []
+        if isinstance(image_pil, (list, tuple)):
+            image_input = list(image_pil)
         else:
-            image_input = image_list
+            image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
+            if len(image_list) > 1:
+                raw_image_resize, croped_view, zoom_view = image_list
+                image_input = [zoom_view]
+            else:
+                image_input = image_list
 
         prompt_tag = "search"
         if len(image_input) > 1:
@@ -547,7 +589,10 @@ class ModelGlobalLocal(Model):
         else:
             pre_information = "pre_information_image1"
 
-        qs = self.prompts[prompt_tag][pre_information] + question
+        if question.startswith("<image>\n") or question.startswith(DEFAULT_IMAGE_TOKEN):
+            qs = question
+        else:
+            qs = self.prompts[prompt_tag][pre_information] + question
         prompt = self.get_prompt_from_qs(qs)
 
         image_tensor, image_sizes = self.process_image_list_to_tensor(image_input)
@@ -558,7 +603,7 @@ class ModelGlobalLocal(Model):
             image_sizes=image_sizes,
             do_sample=False,
             temperature=0,
-            max_new_tokens=256,
+            max_new_tokens=max_new_tokens,
         )
         outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
 
@@ -567,6 +612,34 @@ class ModelGlobalLocal(Model):
             return response
 
         return outputs
+
+    free_form_using_nodes_sgavs = free_form_using_nodes
+
+    @torch.inference_mode()
+    def generate_response(self, image_pil=None, question: str = "", max_new_tokens: int = 128, **kwargs) -> str:
+        """Direct free-form text response generation interface for single image, crop, or text-only query."""
+        if image_pil is None:
+            conv = conv_templates[self.conv_type].copy()
+            clean_q = question[len("<image>\n"):].strip() if question.startswith("<image>\n") else question.strip()
+            conv.append_message(conv.roles[0], clean_q)
+            conv.append_message(conv.roles[1], None)
+            prompt = conv.get_prompt()
+            input_ids = self.tokenizer(prompt, return_tensors='pt').input_ids.to(self.device)
+            output_ids = self.model.generate(
+                input_ids,
+                images=None,
+                do_sample=False,
+                temperature=0,
+                max_new_tokens=max_new_tokens,
+            )
+            return self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+        return self.free_form_using_nodes(
+            image_pil=image_pil,
+            question=question,
+            searched_nodes=[],
+            return_zoomed_view=False,
+            max_new_tokens=max_new_tokens
+        )
 
     @torch.inference_mode()
     def multiple_choices_inference(self, image_pil, question, options, searched_nodes: List[Node] = None):

@@ -142,7 +142,9 @@ def run_foveated_vlm_reading(
                 for c in chunk:
                     try:
                         raw_answers.append(zoom_model.generate_response(image_pil=c["vlm_image_input"], question=c["prompt"], max_new_tokens=max_tokens))
-                    except Exception:
+                    except Exception as err:
+                        if config.verbose or b_start == 0:
+                            print(f"[Stage 6][Error Fallback] Crop {c['c_idx']} (Image {c['img_idx']}) generation failed: {err}")
                         raw_answers.append("")
         else:
             raw_answers = []
@@ -158,8 +160,8 @@ def run_foveated_vlm_reading(
                         ans = str(zoom_model(image_pil=c["vlm_image_input"], question=c["prompt"]))
                     raw_answers.append(ans)
                 except Exception as e:
-                    if config.verbose:
-                        print(f"[Stage 6][Error Fallback] Crop {c['c_idx']} (Image {c['img_idx']}) generation failed ({e}); skipping.")
+                    if config.verbose or b_start == 0:
+                        print(f"[Stage 6][Error Fallback] Crop {c['c_idx']} (Image {c['img_idx']}) generation failed: {e}")
                     raw_answers.append("")
 
         for c, raw_answer in zip(chunk, raw_answers):

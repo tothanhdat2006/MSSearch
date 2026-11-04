@@ -366,13 +366,18 @@ class ModelInternvl:
         return confidence
 
     @torch.inference_mode()
-    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[Node], return_zoomed_view=False):
-        image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
-        if len(image_list) > 1:
-            raw_image_resize, croped_view, zoom_view = image_list
-            image_input = [zoom_view]
+    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[Node] = None, return_zoomed_view=False, max_new_tokens: int = 128):
+        if searched_nodes is None:
+            searched_nodes = []
+        if isinstance(image_pil, (list, tuple)):
+            image_input = list(image_pil)
         else:
-            image_input = image_list
+            image_list = self.process_nodes_to_image_list(searched_nodes, image_pil)
+            if len(image_list) > 1:
+                raw_image_resize, croped_view, zoom_view = image_list
+                image_input = [zoom_view]
+            else:
+                image_input = image_list
 
         prompt_tag = "search"
         if len(image_input) > 1:
@@ -380,7 +385,10 @@ class ModelInternvl:
         else:
             pre_information = "pre_information_image1"
 
-        qs = self.prompts[prompt_tag][pre_information] + question
+        if question.startswith("<image>\n") or question.startswith("<img>"):
+            qs = question
+        else:
+            qs = self.prompts[prompt_tag][pre_information] + question
 
         # Process images
         full_pixel_values = []
@@ -395,12 +403,28 @@ class ModelInternvl:
             num_patches_list.append(pixel_values.shape[0])
         full_pixel_values = torch.cat(full_pixel_values, dim=0)
         full_pixel_values = full_pixel_values.to(dtype=self.dtype, device=self.device)
-        outputs = self.model.chat(self.tokenizer, full_pixel_values, qs, self.generation_config)
+        generation_cfg = dict(self.generation_config) if isinstance(self.generation_config, dict) else self.generation_config
+        outputs = self.model.chat(self.tokenizer, full_pixel_values, qs, generation_cfg, max_new_tokens=max_new_tokens)
         if return_zoomed_view:
             response = {'text': outputs, 'output_image': image_input[1] if len(image_input) > 1 else image_input[0]}
             return response
 
         return outputs
+
+    @torch.inference_mode()
+    def generate_response(self, image_pil=None, question: str = "", max_new_tokens: int = 128, **kwargs) -> str:
+        """Direct free-form text response generation interface for single image, crop, or text-only query."""
+        if image_pil is None:
+            clean_q = question[len("<image>\n"):].strip() if question.startswith("<image>\n") else question.strip()
+            generation_cfg = dict(self.generation_config) if isinstance(self.generation_config, dict) else self.generation_config
+            return self.model.chat(self.tokenizer, None, clean_q, generation_cfg, max_new_tokens=max_new_tokens)
+        return self.free_form_using_nodes(
+            image_pil=image_pil,
+            question=question,
+            searched_nodes=[],
+            return_zoomed_view=False,
+            max_new_tokens=max_new_tokens
+        )
 
     @torch.inference_mode()
     def multiple_choices_inference(self, image_pil, question, options, searched_nodes: List[Node] = None):
