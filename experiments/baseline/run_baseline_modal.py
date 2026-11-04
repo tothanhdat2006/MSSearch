@@ -6,6 +6,13 @@ import modal
 
 app = modal.App("mssearch-baseline-eval")
 
+_req_cands = [
+    os.path.join(os.path.dirname(__file__), "requirements.txt"),
+    os.path.join(os.path.dirname(__file__), "../../requirements.txt"),
+    "requirements.txt",
+]
+req_file = next((p for p in _req_cands if os.path.isfile(p)), "requirements.txt")
+
 # Modal Image Definition
 eval_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -15,14 +22,7 @@ eval_image = (
         "torchvision",
         extra_index_url="https://download.pytorch.org/whl/cu126"
     )
-    .pip_install(
-        "transformers==4.53.0",
-        "accelerate",
-        "pillow",
-        "sentencepiece",
-        "qwen_vl_utils",
-        "huggingface_hub"
-    )
+    .pip_install_from_requirements(req_file)
     .add_local_python_source("mssearch", "experiments")
 )
 

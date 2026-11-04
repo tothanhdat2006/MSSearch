@@ -6,6 +6,13 @@ import modal
 
 app = modal.App("mssearch-our-eval")
 
+_req_cands = [
+    os.path.join(os.path.dirname(__file__), "requirements.txt"),
+    os.path.join(os.path.dirname(__file__), "../../requirements.txt"),
+    "requirements.txt",
+]
+req_file = next((p for p in _req_cands if os.path.isfile(p)), "requirements.txt")
+
 eval_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("git", "ffmpeg", "libsm6", "libxext6")
@@ -14,30 +21,7 @@ eval_image = (
         "torchvision",
         extra_index_url="https://download.pytorch.org/whl/cu126"
     )
-    .pip_install(
-        "transformers==4.53.0",
-        "accelerate",
-        "pillow",
-        "sentencepiece",
-        "spacy",
-        "scikit-learn",
-        "scikit-image",
-        "scipy",
-        "matplotlib",
-        "networkx",
-        "pycocotools",
-        "opencv-python-headless",
-        "pandas",
-        "ftfy",
-        "regex",
-        "hydra-core",
-        "omegaconf",
-        "iopath",
-        "timm",
-        "qwen_vl_utils",
-        "decord",
-        "huggingface_hub"
-    )
+    .pip_install_from_requirements(req_file)
     .run_commands("python -m spacy download en_core_web_sm")
     .add_local_python_source("mssearch", "experiments", "sam3")
 )
