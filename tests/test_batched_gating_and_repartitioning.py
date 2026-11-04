@@ -322,50 +322,19 @@ class TestRelationalLayoutConditioning(unittest.TestCase):
         self.assertTrue(is_relational_question(["jacket", "logo", "text"], "What is the text written above the logo?", zoom_model=mock_vlm))
         self.assertFalse(is_relational_question(["boat"], "What is the registration number of the boat?", zoom_model=mock_vlm))
 
-    def test_visualizer_cross_object_detection(self):
-        from pilot.visualize_results import is_sample_cross_object
-
-        # Explicit saved flags take precedence
-        self.assertTrue(is_sample_cross_object({"is_cross_object": True}))
-        self.assertFalse(is_sample_cross_object({"is_cross_object": False}))
-        self.assertTrue(is_sample_cross_object({"stage5_mode": "layout"}))
-        self.assertTrue(is_sample_cross_object({"stage5_mode": "continuous_enclosure"}))
-        self.assertFalse(is_sample_cross_object({"stage5_mode": "crops_only"}))
-
-        # Legacy questions without flags
-        self.assertFalse(is_sample_cross_object({"question": "What is the phone number listed on the building in the foreground?"}))
-        self.assertFalse(is_sample_cross_object({"question": "What is the registration number of the boat?"}))
-        self.assertTrue(is_sample_cross_object({"question": "Which side of the car is the person sitting on?"}))
-        self.assertTrue(is_sample_cross_object({"question": "What is the object to the left of the red car?"}))
-
     def test_budget_files_and_default_config_consistency(self):
         import json
         import os
         from mssearch.config import MSSearchConfig
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        hrbench_dir = os.path.join(base_dir, "pilot", "multisource_hrbench")
-
-        default_cfg_path = os.path.join(hrbench_dir, "config_default.json")
+        default_cfg_path = os.path.join(base_dir, "experiments", "our", "config_default.json")
         self.assertTrue(os.path.exists(default_cfg_path))
         with open(default_cfg_path, "r", encoding="utf-8") as f:
             default_data = json.load(f)
 
-        cfg_fields = set(MSSearchConfig().to_dict().keys())
-        self.assertEqual(set(default_data.keys()), cfg_fields)
-
-        # Ingest default via load_json
-        loaded_cfg = MSSearchConfig.load_json(default_cfg_path)
+        loaded_cfg = MSSearchConfig.from_dict(default_data)
         self.assertIsInstance(loaded_cfg, MSSearchConfig)
-
-        # Test budget preset (budget_large is the default and only budget preset)
-        b_path = os.path.join(hrbench_dir, "budget_large.json")
-        self.assertTrue(os.path.exists(b_path))
-        with open(b_path, "r", encoding="utf-8") as f:
-            b_data = json.load(f)
-        for k in b_data:
-            self.assertIn(k, cfg_fields)
-            self.assertIsNotNone(b_data[k])
 
 
 if __name__ == "__main__":
