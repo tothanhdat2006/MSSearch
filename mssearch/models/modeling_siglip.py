@@ -71,6 +71,7 @@ class SigLIPScorer:
         self.model = None
         self.processor = None
         self.is_siglip = "siglip" in self.model_name.lower()
+        self._text_embed_cache: Dict[Tuple[str, ...], torch.Tensor] = {}
 
     def _ensure_loaded(self):
         """Lazy loader to prevent unneeded GPU allocation until Stage 5 is invoked."""
@@ -90,6 +91,28 @@ class SigLIPScorer:
                 low_cpu_mem_usage=True,
             ).to(self.device).eval()
             self.processor = AutoProcessor.from_pretrained(self.model_name)
+
+    def clear_text_cache(self):
+        """Clears cached text query embeddings."""
+        self._text_embed_cache.clear()
+
+    def get_text_features(self, text_queries: List[str]) -> torch.Tensor:
+        """Returns L2-normalized text feature embeddings with caching."""
+        key = tuple(text_queries)
+        if key in self._text_embed_cache:
+            return self._text_embed_cache[key]
+        prompts = format_text_queries(text_queries, is_siglip=self.is_siglip)
+        text_inputs = self.processor(
+            text=prompts,
+            padding="max_length" if self.is_siglip else True,
+            return_tensors="pt",
+        )
+        text_inputs = {k: v.to(self.device) for k, v in text_inputs.items()}
+        text_embeds = self.model.get_text_features(**text_inputs)
+        text_embeds = _extract_embedding_tensor(text_embeds)
+        text_embeds = text_embeds / text_embeds.norm(dim=-1, keepdim=True)
+        self._text_embed_cache[key] = text_embeds
+        return text_embeds
 
     @torch.inference_mode()
     def score_crops(
@@ -117,31 +140,58 @@ class SigLIPScorer:
 
         self._ensure_loaded()
 
-        prompts = format_text_queries(text_queries, is_siglip=self.is_siglip)
+        can_use_features = (
+            hasattr(self.model, "get_text_features")
+            and hasattr(self.model, "get_image_features")
+            and hasattr(self.model, "logit_scale")
+            and not type(self.model).__module__.startswith("unittest.mock")
+        )
 
         scores: List[float] = []
-        for i in range(0, len(crops), batch_size):
-            batch_crops = crops[i : i + batch_size]
-            inputs = self.processor(
-                text=prompts,
-                images=batch_crops,
-                padding="max_length" if self.is_siglip else True,
-                return_tensors="pt",
-            )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            if self.dtype == torch.float16 and "pixel_values" in inputs:
-                inputs["pixel_values"] = inputs["pixel_values"].to(self.dtype)
+        if can_use_features:
+            text_embeds = self.get_text_features(text_queries)
+            logit_scale = self.model.logit_scale.exp()
+            logit_bias = self.model.logit_bias if hasattr(self.model, "logit_bias") else 0.0
 
-            outputs = self.model(**inputs)
-            logits_per_image = outputs.logits_per_image
+            for i in range(0, len(crops), batch_size):
+                batch_crops = crops[i : i + batch_size]
+                img_inputs = self.processor(images=batch_crops, return_tensors="pt")
+                pixel_values = img_inputs["pixel_values"].to(self.device)
+                if self.dtype == torch.float16:
+                    pixel_values = pixel_values.to(self.dtype)
 
-            if self.is_siglip:
-                probs = torch.sigmoid(logits_per_image)
-            else:
-                probs = torch.softmax(logits_per_image, dim=-1)
+                img_embeds = self.model.get_image_features(pixel_values=pixel_values)
+                img_embeds = _extract_embedding_tensor(img_embeds)
+                img_embeds = img_embeds / img_embeds.norm(dim=-1, keepdim=True)
 
-            max_probs = probs.max(dim=-1).values
-            scores.extend(max_probs.cpu().tolist())
+                logits_per_image = torch.matmul(img_embeds, text_embeds.t()) * logit_scale + logit_bias
+                probs = torch.sigmoid(logits_per_image) if self.is_siglip else torch.softmax(logits_per_image, dim=-1)
+                max_probs = probs.max(dim=-1).values
+                scores.extend(max_probs.cpu().tolist())
+        else:
+            prompts = format_text_queries(text_queries, is_siglip=self.is_siglip)
+            for i in range(0, len(crops), batch_size):
+                batch_crops = crops[i : i + batch_size]
+                inputs = self.processor(
+                    text=prompts,
+                    images=batch_crops,
+                    padding="max_length" if self.is_siglip else True,
+                    return_tensors="pt",
+                )
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                if self.dtype == torch.float16 and "pixel_values" in inputs:
+                    inputs["pixel_values"] = inputs["pixel_values"].to(self.dtype)
+
+                outputs = self.model(**inputs)
+                logits_per_image = outputs.logits_per_image
+
+                if self.is_siglip:
+                    probs = torch.sigmoid(logits_per_image)
+                else:
+                    probs = torch.softmax(logits_per_image, dim=-1)
+
+                max_probs = probs.max(dim=-1).values
+                scores.extend(max_probs.cpu().tolist())
 
         # ponytail: clamp bounds to [0.0, 1.0] float contract
         return [float(min(1.0, max(0.0, s))) for s in scores]

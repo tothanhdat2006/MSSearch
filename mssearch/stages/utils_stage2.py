@@ -116,8 +116,6 @@ def _query_vlm_response(zoom_model, image_pil: Image.Image, question: str, max_n
         resp = zoom_model.generate(image_pil=safe_img, question=question, max_new_tokens=max_new_tokens)
     else:
         resp = str(zoom_model(image_pil=safe_img, question=question))
-    if torch is not None and torch.cuda.is_available():
-        torch.cuda.empty_cache()
     return resp
 
 
@@ -144,8 +142,6 @@ def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str) -> floa
                 print(f"[Stage 2][VLM Confidence Notice] {e}")
                 conf = 0.0
                 break
-        if torch is not None and torch.cuda.is_available():
-            torch.cuda.empty_cache()
         return conf
     return 0.0
 

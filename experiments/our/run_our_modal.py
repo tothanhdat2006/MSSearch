@@ -59,11 +59,11 @@ def evaluate_our_modal(
             sys.path.insert(0, p)
     try:
         from experiments.our.eval_dataset import load_and_slice_dataset, resolve_image
-        from experiments.our.eval_metrics import evaluate_predictions, compute_stage_ret_rej_tokens
+        from experiments.our.eval_metrics import compute_stage_ret_rej_tokens
         from experiments.our.eval_models import load_our_engines, run_our_pipeline
     except ModuleNotFoundError:
         from eval_dataset import load_and_slice_dataset, resolve_image
-        from eval_metrics import evaluate_predictions, compute_stage_ret_rej_tokens
+        from eval_metrics import compute_stage_ret_rej_tokens
         from eval_models import load_our_engines, run_our_pipeline
 
     dataset_path = next((p for p in [dataset_path, "/data/annotations_part1234_merged.json", "/data/STASHBench/annotations_part1234_merged.json", "/data/200_samples.json"] if os.path.exists(p)), dataset_path)
@@ -74,11 +74,8 @@ def evaluate_our_modal(
 
     m_clean = os.path.basename(os.path.normpath(model_name))
     cands = sorted(glob.glob(os.path.join(output_dir, f"results_our_{m_clean}_{pool_mode}_*.jsonl")))
-    legacy = os.path.join(output_dir, f"results_our_{m_clean}_{pool_mode}.jsonl")
     if resume and cands:
         results_file = cands[-1]
-    elif resume and os.path.exists(legacy):
-        results_file = legacy
     else:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = os.path.join(output_dir, f"results_our_{m_clean}_{pool_mode}_{stamp}.jsonl")
@@ -166,8 +163,6 @@ def evaluate_our_modal(
             gt_img_idx = (gt_idx - 1) if gt_idx is not None else next((i for i, m in enumerate(candidate_meta) if str(m.get("image_id")) == str(gt_img_id)), None)
 
             pred_text = resp.get("primary_answer", "")
-            pred_list = resp.get("prediction_list", []) or resp.get("answers", [])
-            metrics = evaluate_predictions(pred_text, pred_list, gt_list)
             telemetry = resp.get("telemetry", {})
 
             evidence_indices = telemetry.get("evidence_images", [])
@@ -183,8 +178,7 @@ def evaluate_our_modal(
                 "sample_id": sample_id, "sample_index": s_idx, "pool_name": p_name, "pool_N": len(candidate_meta),
                 "question": question, "ground_truth_list": gt_list, "gt_image_id": gt_img_id, "gt_image_idx": gt_img_idx,
                 "pred_image_ids": evidence_img_ids, "pred_image_indices": evidence_indices, "is_image_correct": is_img_correct,
-                "prediction": pred_text, "precision": metrics["precision"], "recall": metrics["recall"], "f1": metrics["f1"],
-                "exact_match": metrics["exact_match"], "route": telemetry.get("route", "UNKNOWN"),
+                "prediction": pred_text, "route": telemetry.get("route", "UNKNOWN"),
                 "stage5_mode": telemetry.get("stage5_mode", ""), "stages_executed": telemetry.get("stages_executed", []),
                 "num_unified_crops": telemetry.get("num_unified_crops", 0), "timings_sec": telemetry.get("timings_sec", {}),
                 "stage_retention": stage_stats["stage_retention"], "stage_rejection": stage_stats["stage_rejection"],
@@ -197,7 +191,8 @@ def evaluate_our_modal(
             os.fsync(out_f.fileno())
             results_volume.commit()  # Persistent atomic commit per sample
 
-            print(f"[Modal MSSearch] [{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) F1:{metrics['f1']*100:.1f}% Time:{lat:.2f}s")
+            route_str = "+".join(telemetry.get("routes_executed", [])) or telemetry.get("route", "UNKNOWN")
+            print(f"[Modal MSSearch] [{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) ImgOk:{is_img_correct} Route:{route_str} Time:{lat:.2f}s")
 
 @app.local_entrypoint()
 def main(

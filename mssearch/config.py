@@ -72,7 +72,7 @@ class MSSearchConfig:
     bypass_vlm_for_confirmed_groups: bool = True # Skip VLM existence check if SAM3 det >= threshold or SigLIP >= 0.45
     max_latent_evals: int = 20                   # Cap speculative VLM latent checks to top K groups (surfaced parameter)
     enable_prioritized_sam3_scanning: bool = True # Scan only high-priority candidate patches / centroids with SAM3
-    max_sam3_eval_patches: int = 150             # Upper bound on expensive SAM3 patch scans in Stage 4
+    max_sam3_eval_patches: int = 64              # Upper bound on expensive SAM3 patch scans in Stage 4
     # Group Retention Granularity & Global Hard Cap
     enable_group_retention_caps: bool = True     # Cap number of member patches retained per group
     max_patches_per_latent_group: int = 2        # Max patches kept for latent-retained groups

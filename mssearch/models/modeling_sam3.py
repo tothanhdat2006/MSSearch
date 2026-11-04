@@ -164,8 +164,6 @@ class sam3_inference():
         del output
         del batch
         del datapoint
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
         return backbone_out, processed_results, text_id
 
@@ -216,8 +214,6 @@ class sam3_inference():
                 del output
                 del batch
                 del datapoints
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
 
                 for img_local_idx, t_ids in enumerate(chunk_meta):
                     img_results = {}

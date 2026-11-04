@@ -63,11 +63,9 @@ def evaluate_baseline_modal(
             sys.path.insert(0, p)
     try:
         from experiments.baseline.eval_dataset import load_and_slice_dataset, resolve_image
-        from experiments.baseline.eval_metrics import evaluate_predictions
         from experiments.baseline.eval_models import load_vlm_engine, run_vlm_baseline_inference, parse_baseline_json_response
     except ModuleNotFoundError:
         from eval_dataset import load_and_slice_dataset, resolve_image
-        from eval_metrics import evaluate_predictions
         from eval_models import load_vlm_engine, run_vlm_baseline_inference, parse_baseline_json_response
 
     if not os.path.exists(dataset_path):
@@ -86,11 +84,8 @@ def evaluate_baseline_modal(
 
     m_clean = os.path.basename(os.path.normpath(model_name))
     cands = sorted(glob.glob(os.path.join(output_dir, f"results_{m_clean}_{pool_mode}_*.jsonl")))
-    legacy = os.path.join(output_dir, f"results_{m_clean}_{pool_mode}.jsonl")
     if resume and cands:
         results_file = cands[-1]
-    elif resume and os.path.exists(legacy):
-        results_file = legacy
     else:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = os.path.join(output_dir, f"results_{m_clean}_{pool_mode}_{stamp}.jsonl")
@@ -150,7 +145,6 @@ def evaluate_baseline_modal(
             gt_img = pool_info.get("gt_image") or sample.get("gt_image")
             gt_img_id = gt_img.get("image_id") if isinstance(gt_img, dict) else (gt_img or "")
             is_img_correct = (str(gt_img_id) in [str(x) for x in actual_img_ids]) if (actual_img_ids and gt_img_id) else None
-            metrics = evaluate_predictions(pred_answer, [pred_answer], gt_list)
 
             record = {
                 "sample_id": sample_id,
@@ -166,10 +160,6 @@ def evaluate_baseline_modal(
                 "pred_answer": pred_answer,
                 "prediction": pred_answer,
                 "raw_prediction": pred_text,
-                "precision": metrics["precision"],
-                "recall": metrics["recall"],
-                "f1": metrics["f1"],
-                "exact_match": metrics["exact_match"],
                 "latency_sec": lat,
             }
 
@@ -179,7 +169,7 @@ def evaluate_baseline_modal(
             results_volume.commit()  # Persistent atomic commit per sample
 
             status = "OK" if is_img_correct else "MISS"
-            print(f"[Modal] [{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) Img:{actual_img_ids}({status}) F1:{metrics['f1']*100:.1f}% Ans:'{pred_answer[:30]}' Time:{lat:.2f}s")
+            print(f"[Modal] [{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) Img:{actual_img_ids}({status}) Ans:'{pred_answer[:30]}' Time:{lat:.2f}s")
 
 @app.local_entrypoint()
 def main(

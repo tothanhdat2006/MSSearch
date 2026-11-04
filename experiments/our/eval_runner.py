@@ -10,11 +10,11 @@ import torch
 
 try:
     from eval_dataset import resolve_image, load_and_slice_dataset
-    from eval_metrics import evaluate_predictions, compute_stage_ret_rej_tokens
+    from eval_metrics import compute_stage_ret_rej_tokens
     from eval_models import load_our_engines, run_our_pipeline
 except ModuleNotFoundError:
     from experiments.our.eval_dataset import resolve_image, load_and_slice_dataset
-    from experiments.our.eval_metrics import evaluate_predictions, compute_stage_ret_rej_tokens
+    from experiments.our.eval_metrics import compute_stage_ret_rej_tokens
     from experiments.our.eval_models import load_our_engines, run_our_pipeline
 
 def parse_args():
@@ -51,13 +51,10 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     m_name = os.path.basename(os.path.normpath(args.model_path))
     cands = sorted(glob.glob(os.path.join(args.output_dir, f"results_our_{m_name}_{args.pool_mode}_*.jsonl")))
-    legacy = os.path.join(args.output_dir, f"results_our_{m_name}_{args.pool_mode}.jsonl")
     if args.resume_from:
         results_file = args.resume_from
     elif args.resume and cands:
         results_file = cands[-1]
-    elif args.resume and os.path.exists(legacy):
-        results_file = legacy
     else:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = os.path.join(args.output_dir, f"results_our_{m_name}_{args.pool_mode}_{stamp}.jsonl")
@@ -123,8 +120,6 @@ def main():
             latency = round(time.perf_counter() - t0, 3)
 
             pred_text = resp.get("primary_answer", "")
-            pred_list = resp.get("prediction_list", []) or resp.get("answers", [])
-            metrics = evaluate_predictions(pred_text, pred_list, gt_list)
             telemetry = resp.get("telemetry", {})
 
             gt_img = pool_info.get("gt_image") or sample.get("gt_image")
@@ -145,8 +140,7 @@ def main():
                 "sample_id": sample_id, "sample_index": s_idx, "pool_name": pool_name, "pool_N": len(candidate_meta),
                 "question": question, "ground_truth_list": gt_list, "gt_image_id": gt_img_id, "gt_image_idx": gt_img_idx,
                 "pred_image_ids": evidence_img_ids, "pred_image_indices": evidence_indices, "is_image_correct": is_img_correct,
-                "prediction": pred_text, "precision": metrics["precision"], "recall": metrics["recall"], "f1": metrics["f1"],
-                "exact_match": metrics["exact_match"], "route": telemetry.get("route", "UNKNOWN"),
+                "prediction": pred_text, "route": telemetry.get("route", "UNKNOWN"),
                 "stage5_mode": telemetry.get("stage5_mode", ""), "stages_executed": telemetry.get("stages_executed", []),
                 "num_unified_crops": telemetry.get("num_unified_crops", 0), "timings_sec": telemetry.get("timings_sec", {}),
                 "stage_retention": stage_stats["stage_retention"], "stage_rejection": stage_stats["stage_rejection"],
@@ -160,8 +154,7 @@ def main():
 
             route_str = "+".join(telemetry.get("routes_executed", [])) or telemetry.get("route", "UNKNOWN")
             print(f"[{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) [{pool_name}|N={len(candidate_meta)}] "
-                  f"P:{metrics['precision']*100:5.1f}% | R:{metrics['recall']*100:5.1f}% | F1:{metrics['f1']*100:5.1f}% "
-                  f"| Route:{route_str:<18} | Time:{latency:5.2f}s | Pred:'{pred_text[:50]}'")
+                  f"ImgOk:{is_img_correct} | Route:{route_str:<18} | Time:{latency:5.2f}s | Pred:'{pred_text[:50]}'")
 
             gc.collect()
             if torch.cuda.is_available():

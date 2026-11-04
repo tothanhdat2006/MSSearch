@@ -133,7 +133,7 @@ def run_feature_grouping_and_gating(
                 ),
                 reverse=True,
             )
-            max_evals = getattr(config, "max_sam3_eval_patches", 16)
+            max_evals = getattr(config, "max_sam3_eval_patches", 64)
             patches_to_scan = candidate_pool[:max_evals]
             if config.verbose:
                 print(f"[Stage 4][Prioritized SAM3 Scan] Scanning top {len(patches_to_scan)} / {len(bounded_patches)} prioritized candidate patches/centroids (max_evals={max_evals})...")

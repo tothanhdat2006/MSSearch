@@ -1,7 +1,6 @@
 {
   "answer_type": "attribute_list",
   "attn_implementation": "sdpa",
-  "budget_max_patches": 16,
   "enable_continuous_enclosure_subcanvas": true,
   "entropy_threshold": 4.5,
   "log_level": "summary",

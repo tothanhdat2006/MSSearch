@@ -411,8 +411,6 @@ class ModelQwenVL:
         conf = self._cal_confidence(outputs)
         del model_inputs
         del outputs
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
         return conf
 
     @torch.no_grad()
@@ -466,8 +464,6 @@ class ModelQwenVL:
 
         del model_inputs
         del generated_ids
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
         if return_zoomed_view:
             response = {'text': outputs, 'output_image': image_list[1] if len(image_list) > 1 else image_list[0]}
@@ -572,8 +568,6 @@ class ModelQwenVL:
                 results.extend(confidences)
                 del model_inputs
                 del outputs
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
             except Exception:
                 # Safe single-item fallback if batch forward pass fails
                 for img, q_str, tmpl in zip(chunk, chunk_queries, chunk_templates):

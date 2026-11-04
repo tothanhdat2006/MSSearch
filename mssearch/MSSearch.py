@@ -121,7 +121,7 @@ class MultiSourceSearchEngine:
                 print(f"[MSSearch] Query-Adaptive Halting: Single candidate image (N=1) -> multi_answer_mode=False, early consensus exit enabled.")
 
         if getattr(self.config, "scale_budgets_by_num_images", True) and n_candidates > 1:
-            base_sam3 = getattr(self.config, "max_sam3_eval_patches", 16)
+            base_sam3 = getattr(self.config, "max_sam3_eval_patches", 64)
             base_latent = getattr(self.config, "max_latent_evals", 8)
             base_retained = getattr(self.config, "max_retained_patches", 32)
             sub_config.max_sam3_eval_patches = base_sam3 * n_candidates
@@ -220,6 +220,9 @@ class MultiSourceSearchEngine:
                         for idx in harvested_evidence_images
                     ]
                     telemetry["final_crop_boxes_before_aggregate"] = pre_agg_boxes
+                    telemetry["num_unified_crops"] = len(harvested_extractions)
+                    telemetry["stage5_boxes"] = [{"img_idx": e["img_idx"], "box": list(map(int, e["box"]))} for e in harvested_extractions]
+                    telemetry["stage6_crops"] = harvested_extractions
                     telemetry["is_cross_object"] = False
                     telemetry["is_relational"] = False
                     telemetry["stage5_mode"] = "direct_answer"
@@ -344,6 +347,9 @@ class MultiSourceSearchEngine:
                     for idx in harvested_evidence_images
                 ]
                 telemetry["final_crop_boxes_before_aggregate"] = pre_agg_boxes
+                telemetry["num_unified_crops"] = len(harvested_extractions)
+                telemetry["stage5_boxes"] = [{"img_idx": e["img_idx"], "box": list(map(int, e["box"]))} for e in harvested_extractions]
+                telemetry["stage6_crops"] = harvested_extractions
                 telemetry["is_cross_object"] = False
                 telemetry["is_relational"] = False
                 telemetry["stage5_mode"] = "fast_path"

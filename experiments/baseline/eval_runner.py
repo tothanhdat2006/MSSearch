@@ -11,11 +11,9 @@ import torch
 
 try:
     from eval_dataset import resolve_image, load_and_slice_dataset
-    from eval_metrics import evaluate_predictions
     from eval_models import load_vlm_engine, run_vlm_baseline_inference, parse_baseline_json_response
 except ModuleNotFoundError:
     from experiments.baseline.eval_dataset import resolve_image, load_and_slice_dataset
-    from experiments.baseline.eval_metrics import evaluate_predictions
     from experiments.baseline.eval_models import load_vlm_engine, run_vlm_baseline_inference, parse_baseline_json_response
 
 def parse_args():
@@ -47,13 +45,10 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     m_name = os.path.basename(os.path.normpath(args.model_path))
     cands = sorted(glob.glob(os.path.join(args.output_dir, f"results_{m_name}_{args.pool_mode}_*.jsonl")))
-    legacy = os.path.join(args.output_dir, f"results_{m_name}_{args.pool_mode}.jsonl")
     if args.resume_from:
         results_file = args.resume_from
     elif args.resume and cands:
         results_file = cands[-1]
-    elif args.resume and os.path.exists(legacy):
-        results_file = legacy
     else:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = os.path.join(args.output_dir, f"results_{m_name}_{args.pool_mode}_{stamp}.jsonl")
@@ -120,9 +115,6 @@ def main():
             gt_img_id = gt_img.get("image_id") if isinstance(gt_img, dict) else (gt_img or "")
             is_img_correct = (str(gt_img_id) in [str(x) for x in actual_img_ids]) if (actual_img_ids and gt_img_id) else None
 
-            # Evaluate metrics on parsed answer
-            metrics = evaluate_predictions(pred_answer, [pred_answer], gt_list)
-
             record = {
                 "sample_id": sample_id,
                 "sample_index": s_idx,
@@ -137,11 +129,6 @@ def main():
                 "pred_answer": pred_answer,
                 "prediction": pred_answer,
                 "raw_response": pred_text,
-                "predicted_tokens": metrics["pred_items"],
-                "precision": metrics["precision"],
-                "recall": metrics["recall"],
-                "f1": metrics["f1"],
-                "exact_match": metrics["exact_match"],
                 "latency_sec": latency,
                 "eval_strategy": args.eval_strategy,
             }
@@ -153,7 +140,7 @@ def main():
 
             status = "OK" if is_img_correct else "MISS"
             print(f"[{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) [{pool_name}|N={len(candidate_meta)}] "
-                  f"Img:{actual_img_ids}({status}) | F1:{metrics['f1']*100:5.1f}% | Time:{latency:5.2f}s | Ans: '{pred_answer[:40]}'")
+                  f"Img:{actual_img_ids}({status}) | Time:{latency:5.2f}s | Ans: '{pred_answer[:40]}'")
 
             gc.collect()
             if torch.cuda.is_available():

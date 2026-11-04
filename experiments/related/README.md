@@ -36,7 +36,7 @@ All related methods must conform to the unified evaluation input/output schema:
 - **Input**:
   - `candidate_images: List[PIL.Image.Image]` ($N \in [5, 20]$)
   - `question: str`
-  - `budget_max_patches: int` (proportional to candidate set size $N$)
+  - `max_sam3_eval_patches: int` (proportional to candidate set size $N$)
 - **Output Schema**:
   ```python
   {

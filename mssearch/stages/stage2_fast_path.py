@@ -221,8 +221,6 @@ def run_tool_based_fast_path(
             feature_cache[img_idx] = feat_np
 
         del backbone_out
-        if torch is not None and torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
         # 3. Check detection coverage across all Active Objects
         all_objects_found = True
@@ -262,8 +260,6 @@ def run_tool_based_fast_path(
             if config.verbose:
                 print(f"[Stage 2] Image {img_idx}: Detected {len(matched_boxes_by_obj)}/{len(active_objects)} objects -> missing targets, fast path bypass.")
             del processed_results
-            if torch is not None and torch.cuda.is_available():
-                torch.cuda.empty_cache()
             continue
 
         targets_detected_on_any_image = True
@@ -275,8 +271,6 @@ def run_tool_based_fast_path(
         if cw < 8 or ch < 8:
             del processed_results
             del crop_pil
-            if torch is not None and torch.cuda.is_available():
-                torch.cuda.empty_cache()
             continue
 
         x_min, y_min = composite_box[0], composite_box[1]
@@ -331,8 +325,6 @@ def run_tool_based_fast_path(
                 del processed_results
                 del vlm_crop
                 del crop_pil
-                if torch is not None and torch.cuda.is_available():
-                    torch.cuda.empty_cache()
                 continue
 
             if len(candidate_images) > 1:
@@ -348,8 +340,6 @@ def run_tool_based_fast_path(
                 del processed_results
                 del vlm_crop
                 del crop_pil
-                if torch is not None and torch.cuda.is_available():
-                    torch.cuda.empty_cache()
                 continue
 
             if config.verbose:
@@ -372,8 +362,6 @@ def run_tool_based_fast_path(
             del processed_results
             del vlm_crop
             del crop_pil
-            if torch is not None and torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
     if collected_fp:
         raw_ans_list = [r["answer"] for r in collected_fp]

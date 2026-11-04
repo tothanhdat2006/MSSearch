@@ -78,13 +78,13 @@ def compute_spatial_entropy(
 
     # 2. Sobel Gradient Density & 3. Laplacian Variance
     if cv2 is not None:
-        sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-        sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
         sobel_mag = np.sqrt(sobel_x ** 2 + sobel_y ** 2)
         mean_grad = float(np.mean(sobel_mag))
         norm_sobel = min(1.0, mean_grad / 64.0)
 
-        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+        laplacian = cv2.Laplacian(gray, cv2.CV_32F)
         var_lap = float(np.var(laplacian))
         norm_lap = min(1.0, math.log1p(var_lap) / 10.0)
     else:

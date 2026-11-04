@@ -13,67 +13,6 @@ def is_negative_or_unanswerable(text: str) -> bool:
         return True
     return any(neg in clean for neg in ["not clearly visible", "cannot see", "not visible", "no evidence"])
 
-def evaluate_predictions(
-    pred_text: str,
-    raw_pred_list: Optional[List[str]],
-    gt_list: List[str]
-) -> Dict[str, Any]:
-    """Computes token-level set Precision, Recall, F1, and Exact Match."""
-    gt_set = set(g.lower().strip() for g in gt_list if g and str(g).strip())
-
-    extracted_preds: List[str] = []
-    if raw_pred_list and isinstance(raw_pred_list, list):
-        for item in raw_pred_list:
-            if isinstance(item, str):
-                parts = re.split(r"[,;\n/]+", item)
-                extracted_preds.extend(p.strip().lower() for p in parts if p.strip())
-    elif pred_text and isinstance(pred_text, str):
-        clean_str = re.sub(r"^(the|an|a)\s+", "", pred_text.strip(), flags=re.IGNORECASE)
-        clean_str = re.sub(r"[\.\!\?]+$", "", clean_str)
-        parts = re.split(r"[,;\n/]+|\band\b", clean_str)
-        extracted_preds.extend(p.strip().lower() for p in parts if p.strip())
-
-    cleaned_preds: List[str] = []
-    for p in extracted_preds:
-        p_clean = re.sub(r"\b(color|colour|view|side|front|rear|facing)\b", "", p, flags=re.IGNORECASE).strip()
-        p_clean = re.sub(r"[^\w\s-]", "", p_clean).strip()
-        if p_clean and p_clean not in NEGATIVE_RESPONSES:
-            cleaned_preds.append(p_clean)
-
-    pred_set = set(cleaned_preds)
-    if not pred_set:
-        return {
-            "precision": 0.0, "recall": 0.0, "f1": 0.0,
-            "exact_match": 1.0 if not gt_set else 0.0,
-            "matched_gt": [], "matched_pred": [],
-            "pred_items": [], "gt_items": list(gt_set),
-        }
-
-    matched_gt = set()
-    matched_pred = set()
-    for p in pred_set:
-        for g in gt_set:
-            if p == g or p in g or g in p:
-                matched_gt.add(g)
-                matched_pred.add(p)
-
-    precision = len(matched_pred) / len(pred_set) if pred_set else 0.0
-    recall = len(matched_gt) / len(gt_set) if gt_set else 1.0
-    f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-    exact_match = 1.0 if (gt_set and pred_set == gt_set) else 0.0
-
-    return {
-        "precision": round(precision, 4),
-        "recall": round(recall, 4),
-        "f1": round(f1, 4),
-        "exact_match": exact_match,
-        "matched_gt": sorted(list(matched_gt)),
-        "matched_pred": sorted(list(matched_pred)),
-        "pred_items": sorted(list(pred_set)),
-        "gt_items": sorted(list(gt_set)),
-    }
-
-
 def compute_stage_ret_rej_tokens(
     telemetry: Dict[str, Any],
     gt_img_idx: Optional[int],
@@ -82,6 +21,9 @@ def compute_stage_ret_rej_tokens(
 ) -> Dict[str, Any]:
     """Computes target retention, noise rejection, and visual tokens across pipeline stages."""
     import math
+
+    is_direct = telemetry.get("stage5_mode") in ["direct_answer", "fast_path"]
+    ev_imgs = telemetry.get("evidence_images", [])
 
     tb = None
     if isinstance(target_bbox, dict):
@@ -102,24 +44,27 @@ def compute_stage_ret_rej_tokens(
         inter = max(0.0, float(ix2 - ix1)) * max(0.0, float(iy2 - iy1))
         return inter / t_area
 
+    # Direct answer bypass retention
+    direct_retained = (gt_img_idx in ev_imgs) if (tb and gt_img_idx is not None and is_direct) else None
+
     # Stage 3
     s3_boxes = telemetry.get("stage3_boxes", [])
-    s3_ret = any(_box_containment(b.get("box", []), b.get("img_idx")) >= 0.5 for b in s3_boxes) if tb else None
+    s3_ret = direct_retained if is_direct else (any(_box_containment(b.get("box", []), b.get("img_idx")) >= 0.5 for b in s3_boxes) if tb else None)
     s3_noise = sum(1 for b in s3_boxes if gt_img_idx is not None and b.get("img_idx") != gt_img_idx)
 
     # Stage 4
     s4_boxes = telemetry.get("stage4_boxes", [])
-    s4_ret = any(_box_containment(b.get("box", []), b.get("img_idx")) >= 0.5 for b in s4_boxes) if tb else None
+    s4_ret = direct_retained if is_direct else (any(_box_containment(b.get("box", []), b.get("img_idx")) >= 0.5 for b in s4_boxes) if tb else None)
     s4_noise = sum(1 for b in s4_boxes if gt_img_idx is not None and b.get("img_idx") != gt_img_idx)
 
     # Stage 5
     s5_boxes = telemetry.get("stage5_boxes", [])
-    s5_ret = any(_box_containment(b.get("box", []), b.get("img_idx")) >= 0.5 for b in s5_boxes) if tb else None
+    s5_ret = direct_retained if is_direct else (any(_box_containment(b.get("box", []), b.get("img_idx")) >= 0.5 for b in s5_boxes) if tb else None)
     s5_noise = sum(1 for b in s5_boxes if gt_img_idx is not None and b.get("img_idx") != gt_img_idx)
 
     # Stage 6
     s6_crops = telemetry.get("stage6_crops", [])
-    s6_ret = any(_box_containment(c.get("expanded_box") or c.get("box", [0, 0, 0, 0]), c.get("img_idx")) >= 0.5 for c in s6_crops) if tb else None
+    s6_ret = direct_retained if is_direct else (any(_box_containment(c.get("expanded_box") or c.get("box", [0, 0, 0, 0]), c.get("img_idx")) >= 0.5 for c in s6_crops) if tb else None)
     s6_noise = sum(1 for c in s6_crops if gt_img_idx is not None and c.get("img_idx") != gt_img_idx)
 
     # Visual tokens (28x28 pixel block = 1 visual token in Qwen2.5-VL)
@@ -131,11 +76,12 @@ def compute_stage_ret_rej_tokens(
         s6_crop_sizes.append([w, h])
         s6_tokens += int(math.ceil(w / 28) * math.ceil(h / 28))
 
-    s2_tokens = 0
-    if "stage2_fast_path" in telemetry.get("stages_executed", []) and candidate_images:
+    direct_tokens = 0
+    stages_exec = telemetry.get("stages_executed", [])
+    if any(s in stages_exec for s in ["phase1_direct_answer", "stage2_fast_path"]) and candidate_images:
         for img in candidate_images:
             iw, ih = img.size if hasattr(img, "size") else (448, 448)
-            s2_tokens += int(math.ceil(iw / 28) * math.ceil(ih / 28))
+            direct_tokens += int(math.ceil(iw / 28) * math.ceil(ih / 28))
 
     return {
         "stage_retention": {
@@ -151,9 +97,9 @@ def compute_stage_ret_rej_tokens(
             "stage6_distractor_reads": s6_noise,
         },
         "visual_tokens": {
-            "stage2_direct_tokens": s2_tokens,
+            "stage2_direct_tokens": direct_tokens,
             "stage6_reader_tokens": s6_tokens,
-            "total_vlm_tokens": s2_tokens + s6_tokens,
+            "total_vlm_tokens": direct_tokens + s6_tokens,
         },
         "stage6_crop_sizes": s6_crop_sizes,
     }
