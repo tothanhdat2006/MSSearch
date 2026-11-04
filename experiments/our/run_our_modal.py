@@ -52,7 +52,8 @@ def evaluate_our_modal(
     max_samples: int = None,
     resume: bool = True
 ):
-    import sys, os, torch
+    import sys, os, glob, torch
+    from datetime import datetime
     for p in ["/root", "/root/experiments/our", os.path.dirname(__file__)]:
         if os.path.exists(p) and p not in sys.path:
             sys.path.insert(0, p)
@@ -72,7 +73,15 @@ def evaluate_our_modal(
     os.makedirs(output_dir, exist_ok=True)
 
     m_clean = os.path.basename(os.path.normpath(model_name))
-    results_file = os.path.join(output_dir, f"results_our_{m_clean}_{pool_mode}.jsonl")
+    cands = sorted(glob.glob(os.path.join(output_dir, f"results_our_{m_clean}_{pool_mode}_*.jsonl")))
+    legacy = os.path.join(output_dir, f"results_our_{m_clean}_{pool_mode}.jsonl")
+    if resume and cands:
+        results_file = cands[-1]
+    elif resume and os.path.exists(legacy):
+        results_file = legacy
+    else:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_file = os.path.join(output_dir, f"results_our_{m_clean}_{pool_mode}_{stamp}.jsonl")
 
     # Load & slice dataset
     all_samples, eval_tasks = load_and_slice_dataset(

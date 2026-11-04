@@ -1,9 +1,11 @@
 import os
 import sys
 import gc
+import glob
 import json
 import time
 import argparse
+from datetime import datetime
 import torch
 
 try:
@@ -48,7 +50,17 @@ def main():
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     m_name = os.path.basename(os.path.normpath(args.model_path))
-    results_file = args.resume_from or os.path.join(args.output_dir, f"results_our_{m_name}_{args.pool_mode}.jsonl")
+    cands = sorted(glob.glob(os.path.join(args.output_dir, f"results_our_{m_name}_{args.pool_mode}_*.jsonl")))
+    legacy = os.path.join(args.output_dir, f"results_our_{m_name}_{args.pool_mode}.jsonl")
+    if args.resume_from:
+        results_file = args.resume_from
+    elif args.resume and cands:
+        results_file = cands[-1]
+    elif args.resume and os.path.exists(legacy):
+        results_file = legacy
+    else:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_file = os.path.join(args.output_dir, f"results_our_{m_name}_{args.pool_mode}_{stamp}.jsonl")
 
     # Load dataset & slice
     all_samples, eval_tasks = load_and_slice_dataset(
