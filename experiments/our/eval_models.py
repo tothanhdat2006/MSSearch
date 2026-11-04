@@ -60,7 +60,7 @@ def load_our_engines(
     if os.path.exists(cfg_file):
         with open(cfg_file, "r", encoding="utf-8") as f:
             cfg_dict = json.load(f)
-    config = MSSearchConfig(**cfg_dict)
+    config = MSSearchConfig.from_dict(cfg_dict)
 
     return {
         "zoom_model": zoom_model,
