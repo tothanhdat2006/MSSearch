@@ -25,6 +25,7 @@ psutil==7.0.0
 pycocotools==2.0.10
 pytest==9.0.3
 PyYAML==6.0.2
+qwen_vl_utils
 regex==2024.11.6
 Requests==2.34.2
 ring_flash_attn==0.1.8

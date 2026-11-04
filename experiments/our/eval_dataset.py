@@ -55,6 +55,7 @@ def load_and_slice_dataset(
     start_idx: int = None,
     end_idx: int = None,
     max_samples: int = None,
+    gallery_order_path: str = None,
 ) -> Tuple[List[Dict[str, Any]], List[Tuple[int, Dict[str, Any], str, Dict[str, Any]]]]:
     """Loads STASHBench or legacy dataset and formulates sliced evaluation tasks."""
     if os.path.isdir(dataset_path):
@@ -69,6 +70,25 @@ def load_and_slice_dataset(
 
     with open(dataset_path, "r", encoding="utf-8") as f:
         raw_data = json.load(f)
+
+    gallery_data = {}
+    gallery_cands = [
+        gallery_order_path,
+        os.path.join(os.path.dirname(dataset_path), "gallery_order_seed42.json"),
+        os.path.join(os.path.dirname(__file__), "../gallery_order_seed42.json"),
+        os.path.join(os.path.dirname(__file__), "gallery_order_seed42.json"),
+        "/data/STASHBench/gallery_order_seed42.json",
+        "/data/gallery_order_seed42.json",
+        "/root/experiments/gallery_order_seed42.json",
+    ]
+    for gp in gallery_cands:
+        if gp and os.path.isfile(gp):
+            try:
+                with open(gp, "r", encoding="utf-8") as gf:
+                    gallery_data = json.load(gf).get("samples", {})
+                break
+            except Exception:
+                pass
 
     all_samples = raw_data.get("samples", []) if isinstance(raw_data, dict) else raw_data
 
@@ -89,21 +109,35 @@ def load_and_slice_dataset(
     for s_idx in sample_indices:
         s = all_samples[s_idx]
         gt_img = s.get("gt_image")
+        sid_keys = [str(s.get("sample_id")), f"{s_idx:03d}", str(s_idx)]
+        g_entry = next((gallery_data[k] for k in sid_keys if k in gallery_data), None)
+
         for p_name in pool_keys:
             if p_name in ["crop", "N_crop", "N=crop"]:
-                bbox = s.get("target_bbox")
+                bbox = None
+                if g_entry and "crop" in g_entry and "box_xyxy" in g_entry["crop"]:
+                    b = g_entry["crop"]["box_xyxy"]
+                    bbox = {"x": b[0], "y": b[1], "width": b[2] - b[0], "height": b[3] - b[1]}
+                else:
+                    bbox = s.get("target_bbox")
                 crop_meta = dict(gt_img) if isinstance(gt_img, dict) else {"image_id": str(gt_img)}
                 crop_meta["crop_bbox"] = bbox
                 crop_meta["is_crop"] = True
-                pool_info = {"images": [crop_meta], "N": 1, "gt_image": gt_img, "is_crop": True}
+                pool_info = {"images": [crop_meta], "N": 1, "gt_image": gt_img, "is_crop": True, "gt_index": 1}
                 eval_tasks.append((s_idx, s, "N_crop", pool_info))
             elif "other_images" in s:
                 k = p_name if p_name in s["other_images"] else p_name.replace("_", "")
                 if k in s["other_images"]:
                     distractors = s["other_images"][k]
-                    cand_imgs = [gt_img] + distractors if gt_img else distractors
-                    cand_imgs = sorted(cand_imgs, key=lambda x: str(x.get("image_id", "")))
-                    pool_info = {"images": cand_imgs, "N": len(cand_imgs), "gt_image": gt_img}
+                    cand_pool = [gt_img] + distractors if gt_img else distractors
+                    gt_idx = None
+                    if g_entry and k in g_entry and "image_ids" in g_entry[k]:
+                        meta_map = {str(m.get("image_id")): m for m in cand_pool if isinstance(m, dict)}
+                        cand_imgs = [meta_map.get(str(iid), {"image_id": str(iid)}) for iid in g_entry[k]["image_ids"]]
+                        gt_idx = g_entry[k].get("gt_index")
+                    else:
+                        cand_imgs = sorted(cand_pool, key=lambda x: str(x.get("image_id", "")))
+                    pool_info = {"images": cand_imgs, "N": len(cand_imgs), "gt_image": gt_img, "gt_index": gt_idx}
                     eval_tasks.append((s_idx, s, p_name, pool_info))
             elif "pools" in s:
                 pools = s.get("pools", {})

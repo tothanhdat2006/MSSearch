@@ -20,6 +20,7 @@ eval_image = (
         "accelerate",
         "pillow",
         "sentencepiece",
+        "qwen_vl_utils",
         "huggingface_hub"
     )
     .add_local_python_source("mssearch", "experiments")

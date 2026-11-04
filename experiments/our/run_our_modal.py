@@ -34,6 +34,8 @@ eval_image = (
         "omegaconf",
         "iopath",
         "timm",
+        "qwen_vl_utils",
+        "decord",
         "huggingface_hub"
     )
     .run_commands("python -m spacy download en_core_web_sm")
