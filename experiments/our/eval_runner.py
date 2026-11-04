@@ -58,7 +58,9 @@ def main():
     else:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = os.path.join(args.output_dir, f"results_our_{m_name}_{args.pool_mode}_{stamp}.jsonl")
-    config_file = results_file.replace("results_our_", "config_our_").replace(".jsonl", ".json")
+    res_dir = os.path.dirname(os.path.abspath(results_file))
+    cfg_base = os.path.basename(results_file).replace("results_our_", "config_our_").replace(".jsonl", ".json")
+    config_file = os.path.join(res_dir, cfg_base)
 
     # Load dataset & slice
     all_samples, eval_tasks = load_and_slice_dataset(

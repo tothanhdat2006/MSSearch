@@ -89,7 +89,10 @@ def evaluate_baseline_modal(
     else:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = os.path.join(output_dir, f"results_{m_clean}_{pool_mode}_{stamp}.jsonl")
-    config_file = results_file.replace("results_", "config_").replace(".jsonl", ".json")
+    res_dir = os.path.dirname(os.path.abspath(results_file))
+    cfg_base = os.path.basename(results_file).replace("results_", "config_").replace(".jsonl", ".json")
+    config_file = os.path.join(res_dir, cfg_base)
+    os.makedirs(res_dir, exist_ok=True)
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump({
             "model_name": model_name, "pool_mode": pool_mode, "eval_strategy": eval_strategy,
