@@ -10,6 +10,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, message=r".*min_pixels
 warnings.filterwarnings("ignore", message=r".*bos_token_id.*")
 warnings.filterwarnings("ignore", message=r".*eos_token_id.*")
 warnings.filterwarnings("ignore", message=r".*`torch_dtype` is deprecated.*")
+warnings.filterwarnings("ignore", category=UserWarning, message=r".*the number of connected components of the connectivity matrix.*")
 logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
 
 from .config import MSSearchConfig

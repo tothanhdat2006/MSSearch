@@ -1,7 +1,10 @@
 import spacy
 import re
+import warnings
 import numpy as np
 import networkx as nx
+
+warnings.filterwarnings("ignore", category=UserWarning, message=r".*the number of connected components of the connectivity matrix.*")
 import torch
 import matplotlib.pyplot as plt
 import math
@@ -427,34 +430,35 @@ class ConstrainedTreeBuilder:
         limit_k = min(max_splits, len(indices))
         if limit_k < effective_min_k: return
 
-        for k in range(effective_min_k, limit_k + 1):
-            try:
-                model = AgglomerativeClustering(
-                    n_clusters=k,
-                    connectivity=sub_connectivity,
-                    linkage='ward'
-                )
-                labels = model.fit_predict(sub_features_for_clustering)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            for k in range(effective_min_k, limit_k + 1):
+                try:
+                    model = AgglomerativeClustering(
+                        n_clusters=k,
+                        connectivity=sub_connectivity,
+                        linkage='ward'
+                    )
+                    labels = model.fit_predict(sub_features_for_clustering)
 
-                if self.use_silhouette_score:
-                    if k > 1 and len(indices) > k:
-                        sil_score = silhouette_score(enhanced_semantic, labels)
+                    if self.use_silhouette_score:
+                        if k > 1 and len(indices) > k:
+                            sil_score = silhouette_score(enhanced_semantic, labels)
+                        else:
+                            sil_score = -1.0
                     else:
-                        sil_score = -1.0
-                else:
-                    sil_score = 0.0
+                        sil_score = 0.0
 
-                # Calculate BBox overlap cost
-                overlap_cost = self._calc_overlap_cost_for_labels(indices, labels, k)
-                # --- Comprehensive scoring formula ---
-                combined_score = sil_score - (1.5 * overlap_cost)
-                if combined_score > best_score:
-                    best_score = combined_score
-                    best_k = k
-                    best_labels = labels
-
-            except Exception as e:
-                continue
+                    # Calculate BBox overlap cost
+                    overlap_cost = self._calc_overlap_cost_for_labels(indices, labels, k)
+                    # --- Comprehensive scoring formula ---
+                    combined_score = sil_score - (1.5 * overlap_cost)
+                    if combined_score > best_score:
+                        best_score = combined_score
+                        best_k = k
+                        best_labels = labels
+                except Exception:
+                    continue
 
         if best_score == -float('inf'): return
         best_children = []

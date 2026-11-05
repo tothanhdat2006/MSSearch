@@ -5,8 +5,11 @@ Stage 3 Utilities: Data Structures, Spatial Entropy, Patch Geometry Splitting, S
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 import math
+import warnings
 import numpy as np
 from PIL import Image
+
+warnings.filterwarnings("ignore", category=UserWarning, message=r".*the number of connected components of the connectivity matrix.*")
 
 try:
     import cv2
@@ -315,19 +318,21 @@ def partition_into_sam3_sgap(
     limit_k = min(max_splits, n_atoms - 1)
 
     # 4. Search optimal k* in [min_splits, max_splits]
-    for k in range(min_splits, limit_k + 1):
-        try:
-            model = AgglomerativeClustering(n_clusters=k, connectivity=adj_matrix, linkage='ward')
-            labels = model.fit_predict(clustering_features)
-            sil = silhouette_score(scaled_semantic, labels) if k > 1 else 0.0
-            overlap_cost = compute_bbox_overlap_cost(atom_bboxes, labels, k)
-            score = sil - 1.5 * overlap_cost
-            if score > best_score:
-                best_score = score
-                best_k = k
-                best_labels = labels
-        except Exception:
-            continue
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        for k in range(min_splits, limit_k + 1):
+            try:
+                model = AgglomerativeClustering(n_clusters=k, connectivity=adj_matrix, linkage='ward')
+                labels = model.fit_predict(clustering_features)
+                sil = silhouette_score(scaled_semantic, labels) if k > 1 else 0.0
+                overlap_cost = compute_bbox_overlap_cost(atom_bboxes, labels, k)
+                score = sil - 1.5 * overlap_cost
+                if score > best_score:
+                    best_score = score
+                    best_k = k
+                    best_labels = labels
+            except Exception:
+                continue
 
     if best_labels is None:
         if verbose:
