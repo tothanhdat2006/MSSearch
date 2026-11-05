@@ -315,6 +315,23 @@ bash experiments/our/ablations/scripts/run_ablation_matrix.sh Qwen/Qwen2.5-VL-7B
 sbatch experiments/our/ablations/scripts/run_ablation_slurm.slurm
 ```
 
+### 4.5 Cloud Ablation on Modal (`run_modal_ablation.sh`)
+Execute any ablation sweep in the cloud using persistent volumes (`mssearch-data`, `mssearch-models`, `mssearch-results` at `/results/ablation`):
+```bash
+# Detector sweep (SAM3, Grounding DINO, Florence-2, DINOv3)
+bash experiments/our/ablations/scripts/run_modal_ablation.sh detector Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+
+# Visual screening scorer sweep (SigLIP, SigLIP2-384, SigLIP2-512, CLIP-B/32, CLIP-L/14, EVA-02-L/14)
+bash experiments/our/ablations/scripts/run_modal_ablation.sh scorer Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+
+# Gating threshold sweep (0.3, 0.7, 0.5)
+bash experiments/our/ablations/scripts/run_modal_ablation.sh gate Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+
+# Full cross-ablation sweep
+bash experiments/our/ablations/scripts/run_modal_ablation.sh all Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+```
+
+
 ---
 
 ## Step 5: Evaluate Results (`eval_stashbench.py`)

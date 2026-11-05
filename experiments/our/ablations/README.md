@@ -118,7 +118,46 @@ bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen2.5-VL-
 
 ---
 
-## 4. HPC Cluster Submission (Slurm)
+## 4. Serverless Cloud GPU Execution (Modal)
+
+Ablation experiments can be run directly on Modal cloud infrastructure (`L40S` 48GB / `A100` 80GB) with persistent storage volumes (`mssearch-data`, `mssearch-models`, `mssearch-results` under `/results/ablation`):
+
+### A. Run via Modal Launcher Script (`run_modal_ablation.sh`)
+```bash
+# Detector sweep (SAM3, Grounding DINO, Florence-2, DINOv3)
+bash experiments/our/ablations/scripts/run_modal_ablation.sh detector Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+
+# Visual scorer sweep (SigLIP, SigLIP2-384, SigLIP2-512, CLIP-B/32, CLIP-L/14, EVA-02-L/14)
+bash experiments/our/ablations/scripts/run_modal_ablation.sh scorer Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+
+# Gating threshold sweep (0.3, 0.7, 0.5)
+bash experiments/our/ablations/scripts/run_modal_ablation.sh gate Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+
+# Full matrix sweep across all 3 axes
+bash experiments/our/ablations/scripts/run_modal_ablation.sh all Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+```
+
+### B. Direct Modal CLI Run (`run_ablation_modal.py`)
+```bash
+# Run specific configuration
+modal run experiments/our/ablations/scripts/run_ablation_modal.py \
+    --detector grounding_dino \
+    --scorer clip_l14 \
+    --model Qwen/Qwen2.5-VL-7B-Instruct \
+    --pool-mode N_5
+
+# Run asynchronously in background
+modal run --detach experiments/our/ablations/scripts/run_ablation_modal.py \
+    --detector florence2 \
+    --scorer siglip2_384 \
+    --gate-threshold 0.3 \
+    --model Qwen/Qwen2.5-VL-7B-Instruct \
+    --pool-mode N_5
+```
+
+---
+
+## 5. HPC Cluster Submission (Slurm)
 
 ```bash
 sbatch experiments/our/ablations/scripts/run_ablation_slurm.slurm Qwen/Qwen2.5-VL-7B-Instruct
