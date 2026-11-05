@@ -169,16 +169,7 @@ bash scripts/modal/run_modal.sh llava_ov_7b N_10
 bash scripts/modal/run_modal.sh internvl3_8b N_20
 
 # Run asynchronously in background (safe to close terminal)
-modal run scripts/modal/run_our_modal.py --model Qwen/Qwen2.5-VL-7B-Instruct --pool-mode N_5 --detach-run
-```
-
----
-
-## 6. Evaluating and Summarizing Results
-
-Once an evaluation completes, compute both **Set-based** and **Strict Primary Evidence** accuracy metrics:
-```bash
-python mssearch/eval/eval_stashbench.py \
-    --results_file experiments/our/results_our_a6000_Qwen2.5-VL-7B-Instruct_N_5_*.jsonl \
-    --dataset_file data/STASHBench/annotations_part1234_merged.json
+modal run --detach scripts/modal/run_our_modal.py --model Qwen/Qwen2.5-VL-7B-Instruct --pool-mode N_5
+# or via wrapper
+bash scripts/modal/run_modal.sh qwen2.5_vl_7b N_5 --detach
 ```

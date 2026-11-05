@@ -42,7 +42,17 @@ echo "==========================================================================
 echo "LAUNCHING MODAL EVALUATION: ${MODEL_NAME} (${POOL_MODE})"
 echo "=========================================================================="
 
-modal run "${SCRIPT_DIR}/run_our_modal.py" \
+MODAL_FLAGS=()
+REMOTE_ARGS=()
+for arg in "$@"; do
+    if [ "${arg}" = "--detach" ] || [ "${arg}" = "-d" ]; then
+        MODAL_FLAGS+=("--detach")
+    else
+        REMOTE_ARGS+=("${arg}")
+    fi
+done
+
+exec modal run ${MODAL_FLAGS[@]+"${MODAL_FLAGS[@]}"} "${SCRIPT_DIR}/run_our_modal.py" \
     --model "${MODEL_NAME}" \
     --pool-mode "${POOL_MODE}" \
-    "$@"
+    ${REMOTE_ARGS[@]+"${REMOTE_ARGS[@]}"}

@@ -226,13 +226,12 @@ def main(
     start_idx: int = None,
     end_idx: int = None,
     max_samples: int = None,
-    resume: bool = False,
-    detach_run: bool = False
+    resume: bool = False
 ):
     gpu_type = select_gpu(model)
-    print(f"Launching Modal MSSearch Evaluation for model: {model} on {gpu_type} (Pool: {pool_mode})")
+    print(f"Launching Modal MSSearch Evaluation for model: {model} on {gpu_type} (Pool: {pool_mode})", flush=True)
     fn = evaluate_our_modal.with_options(gpu=gpu_type)
-    kwargs = dict(
+    fn.remote(
         model_name=model,
         pool_mode=pool_mode,
         dataset_path=dataset_path,
@@ -243,10 +242,3 @@ def main(
         max_samples=max_samples,
         resume=resume
     )
-    if detach_run:
-        call = fn.spawn(**kwargs)
-        print(f"[Modal] Job spawned asynchronously in background! Call ID: {call.object_id}")
-        print("[Modal] Local entrypoint exiting cleanly. Safe to close terminal.")
-        print("[Modal] Track progress with: modal app list")
-    else:
-        fn.remote(**kwargs)
