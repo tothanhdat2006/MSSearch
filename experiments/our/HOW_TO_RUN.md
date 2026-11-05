@@ -45,7 +45,33 @@ export IMAGE_DIR="/data/shared/cvpr/dat/simple/data/STASHBench/pool"
 
 ---
 
-## 3. Option A: Local Workstation / Server (Bash / A6000)
+## 3. Prerequisite: Download Auxiliary Models (SAM3, SigLIP, spaCy)
+
+> **Important**: Evaluation runner scripts do **not** automatically download SAM3 checkpoint weights or auxiliary assets to `$MODEL_DIR`.
+>
+> - **SAM3 (`sam3.pt`)**: **Must be pre-downloaded**. If `SAM3_PATH` does not point to an existing file, the runner throws `FileNotFoundError`.
+> - **SigLIP & VLMs**: If not found in `$MODEL_DIR`, Hugging Face downloads them into `~/.cache/huggingface/hub/` (not into `$MODEL_DIR`).
+> - **spaCy**: Requires `en_core_web_sm` installed in your Python environment.
+
+Before running evaluations on A6000 or A100 clusters, download all required auxiliary models once:
+
+```bash
+# 1. Download SAM3, SigLIP, and spaCy into your configured MODEL_DIR
+python experiments/download/download_auxiliary.py \
+    --base_model_dir /data/shared/cvpr/dat/models
+
+# 2. Ensure the spaCy English pipeline is installed in your Python environment
+python -m spacy download en_core_web_sm
+
+# Or download everything (dataset + auxiliary weights) in one step:
+python experiments/download/download_all.py \
+    --base_model_dir /data/shared/cvpr/dat/models \
+    --data_dir /data/shared/cvpr/dat/simple/data/STASHBench
+```
+
+---
+
+## 4. Option A: Local Workstation / Server (Recommended)
 
 Navigate to the repository root:
 ```bash
@@ -106,7 +132,7 @@ bash experiments/our/scripts/A6000/run_our_qwen2.5_vl_7b_n5.sh --start_idx 0 --e
 
 ---
 
-## 4. Option B: HPC Cluster (Slurm / A100)
+## 5. Option B: HPC Cluster (Slurm / A100)
 
 Ensure you have access to a node with at least 1x A100 (40GB/80GB):
 
@@ -147,7 +173,7 @@ bash experiments/our/scripts/A100/run_our_sweep.slurm
 
 ---
 
-## 5. Option C: Google Colab Pro (`notebook/`)
+## 6. Option C: Google Colab Pro (`notebook/`)
 
 Each notebook in `experiments/our/notebook/` is fully self-contained for a specific model and pool size:
 
@@ -167,7 +193,7 @@ Each notebook in `experiments/our/notebook/` is fully self-contained for a speci
 
 ---
 
-## 6. Option D: Modal Serverless Cloud (`scripts/modal/`)
+## 7. Option D: Modal Serverless Cloud (`scripts/modal/`)
 
 Ensure `modal` is configured (`modal setup` or token set). Target GPU is automatically assigned as **L40S (48GB)**.
 
@@ -209,7 +235,7 @@ done
 
 ---
 
-## 7. Evaluating Predictions & Summarizing Metrics
+## 8. Evaluating Predictions & Summarizing Metrics
 
 After a run completes, evaluate the resulting `.jsonl` file against STASHBench ground truth:
 
