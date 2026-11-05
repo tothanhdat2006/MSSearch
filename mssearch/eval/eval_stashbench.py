@@ -44,8 +44,6 @@ def score_prediction(pred_str: str, gt_list: List[str]) -> Dict[str, Any]:
         best_prec = max(best_prec, p)
         best_rec = max(best_rec, r)
         best_f1 = max(best_f1, f)
-        if r >= 0.9:
-            hit = True
 
     return {"hit": hit, "exact_match": em, "precision": best_prec, "recall": best_rec, "f1": best_f1}
 

@@ -26,6 +26,7 @@ Unified download and asset preparation tools for evaluation datasets, auxiliary 
    - Downloads individual model checkpoints by name or HuggingFace repo ID:
      ```bash
      python download_model.py --model_name Qwen2.5-VL-7B-Instruct --base_model_dir /data/shared/cvpr/dat/models
+     python download_model.py --model_name OpenGVLab/InternVL3-8B --base_model_dir /data/shared/cvpr/dat/models
      python download_model.py --model_name Yi-VL-34B --base_model_dir /data/shared/cvpr/dat/models
      python download_model.py --model_name favor123/llava-hr-7b-sft-1024 --base_model_dir /data/shared/cvpr/dat/models
      ```

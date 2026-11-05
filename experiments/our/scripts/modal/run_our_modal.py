@@ -1,14 +1,25 @@
 import os
 import sys
+import glob
 import json
 import time
 import modal
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUR_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
+MSSEARCH_ROOT = os.path.abspath(os.path.join(OUR_DIR, "../.."))
+
+if MSSEARCH_ROOT not in sys.path:
+    sys.path.insert(0, MSSEARCH_ROOT)
+if OUR_DIR not in sys.path:
+    sys.path.insert(0, OUR_DIR)
+
 app = modal.App("mssearch-our-eval")
 
 _req_cands = [
-    os.path.join(os.path.dirname(__file__), "requirements.txt"),
-    os.path.join(os.path.dirname(__file__), "../../requirements.txt"),
+    os.path.join(OUR_DIR, "requirements.txt"),
+    os.path.join(MSSEARCH_ROOT, "requirements.txt"),
+    os.path.join(SCRIPT_DIR, "requirements.txt"),
     "requirements.txt",
 ]
 req_file = next((p for p in _req_cands if os.path.isfile(p)), "requirements.txt")
@@ -31,7 +42,7 @@ models_volume = modal.Volume.from_name("mssearch-models", create_if_missing=True
 results_volume = modal.Volume.from_name("mssearch-results", create_if_missing=True)
 
 def select_gpu(model_name: str) -> str:
-    """Always assigns L40S (48GB) for our multi-model pipeline (VLM + SAM3 + SigLIP)."""
+    """Assigns L40S (48GB) for our multi-model pipeline (VLM + SAM3 + SigLIP)."""
     return "L40S"
 
 @app.function(

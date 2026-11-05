@@ -27,6 +27,8 @@ MODEL_MAP: Dict[str, str] = {
     "llava-onevision-qwen2-7b-ov": "lmms-lab/llava-onevision-qwen2-7b-ov",
     # InternVL
     "InternVL2.5-8B": "OpenGVLab/InternVL2.5-8B",
+    "InternVL3-8B": "OpenGVLab/InternVL3-8B",
+    "OpenGVLab/InternVL3-8B": "OpenGVLab/InternVL3-8B",
     "InternVL3-38B": "OpenGVLab/InternVL3-38B",
     # Yi-VL
     "Yi-VL-34B": "01-ai/Yi-VL-34B",

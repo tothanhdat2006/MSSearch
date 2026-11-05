@@ -5,13 +5,13 @@ import subprocess
 
 BASELINE_MODELS = [
     "Qwen3-VL-8B", "LLaVA-v1.6-7B", "LLaVA-v1.6-13B", "LLaVA-v1.6-34B",
-    "LLaVA-HR-X-7B", "LLaVA-HR-X-13B", "Qwen2.5-VL-32B", "InternVL3-38B",
+    "LLaVA-HR-X-7B", "LLaVA-HR-X-13B", "Qwen2.5-VL-32B", "InternVL3-8B", "InternVL3-38B",
     "Yi-VL-34B", "Qwen2.5-VL-7B", "LLaVA-OV-7B", "InternVL2.5-8B",
     "Qwen2.5-VL-3B", "Qwen3-VL-2B", "Qwen3-VL-4B", "Qwen3-VL-32B"
 ]
 
 OUR_MODELS = [
-    "Qwen2.5-VL-7B", "LLaVA-OV-7B", "InternVL2.5-8B", "Qwen2.5-VL-3B",
+    "Qwen2.5-VL-7B", "LLaVA-OV-7B", "InternVL3-8B", "InternVL2.5-8B", "Qwen2.5-VL-3B",
     "Qwen3-VL-2B", "Qwen3-VL-4B", "Qwen3-VL-8B", "Qwen3-VL-32B"
 ]
 
