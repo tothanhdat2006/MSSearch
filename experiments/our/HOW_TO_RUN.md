@@ -1,6 +1,6 @@
 # How to Run MSSearch V2 Evaluation Benchmark
 
-This guide outlines the standard 4-step workflow to evaluate MSSearch V2 on **STASHBench** (336 samples) across **3 Vision-Language Models** and **4 Candidate Pool Sizes** ($N \in \{1, 5, 10, 20\}$), totaling **12 evaluation configurations**:
+This guide outlines the standard 3-step workflow to run MSSearch V2 on **STASHBench** (336 samples) across **3 Vision-Language Models** and **4 Candidate Pool Sizes** ($N \in \{1, 5, 10, 20\}$), totaling **12 evaluation configurations**:
 
 ```
 [Step 1] Configure Global Paths (env_paths.sh)
@@ -10,9 +10,6 @@ This guide outlines the standard 4-step workflow to evaluate MSSearch V2 on **ST
     │
     ▼
 [Step 3] Run Main Evaluation Scripts (A6000 / A100 / Colab / Modal)
-    │
-    ▼
-[Step 4] Evaluate Predictions & Calculate Metrics
 ```
 
 ---
@@ -279,24 +276,3 @@ for model in qwen2.5_vl_7b llava_ov_7b internvl3_8b; do
     done
 done
 ```
-
----
-
-## Step 4: Evaluate Predictions & Calculate Metrics
-
-Once evaluation completes, compute benchmark scores against the STASHBench ground truth:
-
-```bash
-python mssearch/eval/eval_stashbench.py \
-    --results_file experiments/our/results_our_a6000_Qwen2.5-VL-7B-Instruct_N_5_*.jsonl \
-    --dataset_file "${DATASET_PATH}"
-```
-
-### Metrics Reported
-The evaluation tool reports both set-based and strict primary attribution accuracy:
-1. **Set-Based Evidence Accuracy**:
-   - `Image Accuracy (Set)`: The ground-truth image is included anywhere in `telemetry.evidence_images`.
-   - `Joint Accuracy (Set)`: Prediction text matches ground truth AND the GT image is in the evidence set.
-2. **Strict Primary Attribution Accuracy**:
-   - `Strict Primary Image Accuracy`: The primary answer was derived specifically from the ground-truth image.
-   - `Strict Primary Joint Accuracy`: Prediction text is correct AND the primary evidence image matches the GT image.
