@@ -9,10 +9,7 @@ from typing import List, Dict, Tuple, Optional, Any, Union
 import numpy as np
 from PIL import Image
 
-try:
-    import torch
-except ImportError:
-    torch = None
+import torch
 
 from ..config import MSSearchConfig
 from .stage3_partitioning import BoundedPatch

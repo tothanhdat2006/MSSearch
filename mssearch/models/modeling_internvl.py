@@ -1,5 +1,6 @@
 import torch
 from torch.nn import CrossEntropyLoss
+from typing import List, Dict, Optional, Union, Any
 import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
 import types
@@ -222,11 +223,11 @@ class ModelInternvl:
             raise ValueError
         return prompt_tag
 
-    def is_root_only(self, nodes: List[Node]):
-        return (len(nodes) == 1 and nodes[0].is_root)
+    def is_root_only(self, nodes: Optional[List[Node]]):
+        return bool(nodes and len(nodes) == 1 and getattr(nodes[0], "is_root", False))
 
-    def include_root(self, nodes: List[Node]):
-        return any(node.is_root for node in nodes)
+    def include_root(self, nodes: Optional[List[Node]]):
+        return bool(nodes and any(getattr(node, "is_root", False) for node in nodes))
 
     def get_bbox_in_square_image(self, bbox, left, top):
         x1, y1, x2, y2 = bbox
@@ -264,9 +265,11 @@ class ModelInternvl:
 
     def process_nodes_to_image_list(self, nodes, image_pil, root_anyres=True):
         square_image, left, top = expand2square(image_pil, self.background_color)
+        if not nodes:
+            return [deepcopy(image_pil)]
         if self.is_root_only(nodes):
             return [deepcopy(image_pil)] if root_anyres else [square_image.resize(self.input_size)]
-        if len(nodes) == 0 or self.include_root(nodes):
+        if self.include_root(nodes):
             return [deepcopy(image_pil)]
 
         resized_bboxes = []
@@ -300,10 +303,19 @@ class ModelInternvl:
         return [square_image.resize(self.input_size), croped_view, zoomed_view]
 
     @torch.no_grad()
-    def get_confidence_value(self, node: List[Node], image_pil: Image.Image, confidence_type: str, input_ele,root_anyres=True):
-
+    def get_confidence_value(
+        self,
+        node: Optional[List[Node]] = None,
+        image_pil: Image.Image = None,
+        confidence_type: str = 'existence',
+        input_ele: str = '',
+        root_anyres: bool = True,
+        node_list: Optional[List[Node]] = None,
+        **kwargs
+    ):
         assert confidence_type in ['existence', 'latent', 'answering']
-        image_list = self.process_nodes_to_image_list(node, image_pil, root_anyres=root_anyres)
+        actual_nodes = node if node is not None else (node_list if node_list is not None else [])
+        image_list = self.process_nodes_to_image_list(actual_nodes, image_pil, root_anyres=root_anyres)
 
         if len(image_list) > 1:
             raw_image_resize, croped_view, zoom_view = image_list
@@ -380,15 +392,18 @@ class ModelInternvl:
                 image_input = image_list
 
         prompt_tag = "search"
-        if len(image_input) > 1:
-            pre_information = "pre_information_image2"
-        else:
-            pre_information = "pre_information_image1"
+        clean_q = question
+        while clean_q.startswith("<image>\n") or clean_q.startswith("<image>"):
+            if clean_q.startswith("<image>\n"):
+                clean_q = clean_q[len("<image>\n"):]
+            else:
+                clean_q = clean_q[len("<image>"):]
+        clean_q = clean_q.strip()
 
-        if question.startswith("<image>\n") or question.startswith("<img>"):
-            qs = question
+        if len(image_input) > 1:
+            qs = self.prompts[prompt_tag]["pre_information_image2"] + clean_q
         else:
-            qs = self.prompts[prompt_tag][pre_information] + question
+            qs = self.prompts[prompt_tag]["pre_information_image1"] + clean_q
 
         # Process images
         full_pixel_values = []
@@ -425,6 +440,85 @@ class ModelInternvl:
             return_zoomed_view=False,
             max_new_tokens=max_new_tokens
         )
+
+    @torch.no_grad()
+    def batch_get_confidence_values(
+        self,
+        image_list: List[Image.Image],
+        confidence_type: str = 'existence',
+        input_ele: Union[str, List[str]] = '',
+        batch_size: int = 4,
+        custom_prompt_templates: Optional[Union[str, List[str]]] = None
+    ) -> List[float]:
+        """Unified batched confidence probing for ModelInternvl."""
+        assert confidence_type in ['existence', 'latent', 'answering']
+        if not image_list:
+            return []
+
+        n_imgs = len(image_list)
+        if isinstance(input_ele, (list, tuple)):
+            queries = list(input_ele)
+            if len(queries) < n_imgs:
+                queries.extend([queries[-1] if queries else ""] * (n_imgs - len(queries)))
+        else:
+            queries = [str(input_ele)] * n_imgs
+
+        if custom_prompt_templates is not None:
+            if isinstance(custom_prompt_templates, (list, tuple)):
+                templates = list(custom_prompt_templates)
+                if len(templates) < n_imgs:
+                    templates.extend([templates[-1] if templates else None] * (n_imgs - len(templates)))
+            else:
+                templates = [custom_prompt_templates] * n_imgs
+        else:
+            templates = [None] * n_imgs
+
+        results: List[float] = []
+        for img, q_str, tmpl in zip(image_list, queries, templates):
+            orig_prompt = None
+            if tmpl and hasattr(self, "prompts") and "search" in self.prompts:
+                orig_prompt = self.prompts["search"].get(f"{confidence_type}_prompt")
+                self.prompts["search"][f"{confidence_type}_prompt"] = tmpl
+            try:
+                conf = self.get_confidence_value(
+                    node=None,
+                    image_pil=img,
+                    confidence_type=confidence_type,
+                    input_ele=q_str
+                )
+                if hasattr(conf, "item"):
+                    conf = conf.item()
+                results.append(float(conf))
+            finally:
+                if orig_prompt is not None:
+                    self.prompts["search"][f"{confidence_type}_prompt"] = orig_prompt
+
+        return results
+
+    @torch.inference_mode()
+    def batch_generate_response(
+        self,
+        image_list: List[Image.Image],
+        questions: Union[str, List[str]],
+        max_new_tokens: int = 128,
+        batch_size: int = 4,
+        **kwargs
+    ) -> List[str]:
+        """Unified sequential/batched response generation for ModelInternvl."""
+        if not image_list:
+            return []
+        n_imgs = len(image_list)
+        if isinstance(questions, (list, tuple)):
+            q_list = list(questions)
+            if len(q_list) < n_imgs:
+                q_list.extend([q_list[-1] if q_list else ""] * (n_imgs - len(q_list)))
+        else:
+            q_list = [str(questions)] * n_imgs
+
+        return [
+            self.generate_response(image_pil=img, question=q, max_new_tokens=max_new_tokens)
+            for img, q in zip(image_list, q_list)
+        ]
 
     @torch.inference_mode()
     def multiple_choices_inference(self, image_pil, question, options, searched_nodes: List[Node] = None):

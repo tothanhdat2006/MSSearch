@@ -7,10 +7,7 @@ from typing import List, Dict, Tuple, Optional, Any
 from PIL import Image, ImageDraw
 import numpy as np
 
-try:
-    import torch
-except ImportError:
-    torch = None
+import torch
 
 from ..config import MSSearchConfig
 
@@ -120,29 +117,22 @@ def _query_vlm_response(zoom_model, image_pil: Image.Image, question: str, max_n
 
 
 def _query_vlm_existence(zoom_model, image_pil: Image.Image, query: str) -> float:
-    """Safely invokes VLM existence confidence query across model APIs with resolution safety shield."""
+    """Invokes VLM existence confidence query with resolution safety shield."""
     if hasattr(zoom_model, "get_confidence_value"):
         safe_img = clamp_image_to_safe_resolution(image_pil, max_dim=1024)
-        conf = 0.0
-        for kwarg in [{"node": None}, {"node_list": None}, {}]:
-            try:
-                conf = zoom_model.get_confidence_value(
-                    image_pil=safe_img,
-                    confidence_type="existence",
-                    input_ele=query,
-                    **kwarg
-                )
-                if isinstance(conf, torch.Tensor):
-                    conf = conf.item()
-                conf = float(conf)
-                break
-            except TypeError:
-                continue
-            except Exception as e:
-                print(f"[Stage 2][VLM Confidence Notice] {e}")
-                conf = 0.0
-                break
-        return conf
+        try:
+            conf = zoom_model.get_confidence_value(
+                node=None,
+                image_pil=safe_img,
+                confidence_type="existence",
+                input_ele=query
+            )
+            if isinstance(conf, torch.Tensor):
+                conf = conf.item()
+            return float(conf)
+        except Exception as e:
+            print(f"[Stage 2][VLM Confidence Notice] {e}")
+            return 0.0
     return 0.0
 
 

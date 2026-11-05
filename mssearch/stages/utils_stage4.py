@@ -6,10 +6,7 @@ from typing import List, Dict, Tuple, Optional, Union
 import numpy as np
 from PIL import Image
 
-try:
-    from sklearn.cluster import AgglomerativeClustering
-except ImportError:
-    AgglomerativeClustering = None
+from sklearn.cluster import AgglomerativeClustering
 
 from ..config import MSSearchConfig
 from .stage3_partitioning import BoundedPatch
@@ -200,19 +197,15 @@ def _query_vlm_existence(
             search_prompts["existence_prompt"] = template_to_use
 
     try:
-        for kwarg in [{"node": None}, {"node_list": None}, {}]:
-            try:
-                conf = zoom_model.get_confidence_value(
-                    image_pil=safe_img,
-                    confidence_type="existence",
-                    input_ele=query,
-                    **kwarg
-                )
-                if hasattr(conf, "item"):
-                    conf = conf.item()
-                return float(conf)
-            except TypeError:
-                continue
+        conf = zoom_model.get_confidence_value(
+            node=None,
+            image_pil=safe_img,
+            confidence_type="existence",
+            input_ele=query
+        )
+        if hasattr(conf, "item"):
+            conf = conf.item()
+        return float(conf)
     except Exception as e:
         if config.verbose:
             print(f"[Stage 4][VLM Existence Notice] {e}")
@@ -252,19 +245,15 @@ def _query_vlm_latent(
             search_prompts["latent_prompt"] = template_to_use
 
     try:
-        for kwarg in [{"node": None}, {"node_list": None}, {}]:
-            try:
-                conf = zoom_model.get_confidence_value(
-                    image_pil=safe_img,
-                    confidence_type="latent",
-                    input_ele=query,
-                    **kwarg
-                )
-                if hasattr(conf, "item"):
-                    conf = conf.item()
-                return float(conf)
-            except TypeError:
-                continue
+        conf = zoom_model.get_confidence_value(
+            node=None,
+            image_pil=safe_img,
+            confidence_type="latent",
+            input_ele=query
+        )
+        if hasattr(conf, "item"):
+            conf = conf.item()
+        return float(conf)
     except Exception as e:
         if config.verbose:
             print(f"[Stage 4][VLM Latent Notice] {e}")

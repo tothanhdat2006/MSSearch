@@ -9,10 +9,7 @@ from typing import List, Dict, Tuple, Optional, Any
 from PIL import Image
 import numpy as np
 
-try:
-    import torch
-except ImportError:
-    torch = None
+import torch
 
 from ..config import MSSearchConfig
 from .utils_stage2 import (

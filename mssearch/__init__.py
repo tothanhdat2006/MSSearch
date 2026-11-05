@@ -14,9 +14,6 @@ logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
 
 from .config import MSSearchConfig
 
-try:
-    from .MSSearch import MultiSourceSearchEngine, get_mssearch_response
-    __all__ = ["MSSearchConfig", "MultiSourceSearchEngine", "get_mssearch_response"]
-except ImportError:
-    __all__ = ["MSSearchConfig"]
+from .MSSearch import MultiSourceSearchEngine, get_mssearch_response
+__all__ = ["MSSearchConfig", "MultiSourceSearchEngine", "get_mssearch_response"]
 

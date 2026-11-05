@@ -8,27 +8,14 @@ import math
 import numpy as np
 from PIL import Image
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None
-
-try:
-    from skimage.segmentation import slic
-    from skimage.measure import regionprops
-    from skimage import graph
-    import networkx as nx
-    from sklearn.cluster import AgglomerativeClustering
-    from sklearn.metrics import silhouette_score
-    from sklearn.preprocessing import StandardScaler
-except ImportError:
-    slic = None
-    regionprops = None
-    graph = None
-    nx = None
-    AgglomerativeClustering = None
-    silhouette_score = None
-    StandardScaler = None
+import cv2
+from skimage.segmentation import slic
+from skimage.measure import regionprops
+from skimage import graph
+import networkx as nx
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.metrics import silhouette_score
+from sklearn.preprocessing import StandardScaler
 
 
 @dataclass

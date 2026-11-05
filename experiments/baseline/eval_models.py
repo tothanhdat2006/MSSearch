@@ -49,15 +49,11 @@ def load_vlm_engine(model_path_or_name: str, device: str = "cuda:0", attn_implem
     elif "llava-hr" in m_str or "llava_hr" in m_str:
         from mssearch.models import ModelLlavaHR
         return ModelLlavaHR(model_path=model_path_or_name, device=device)
-    elif "llava-v1.6" in m_str or "llava_v1.6" in m_str or "vicuna" in m_str:
-        try:
-            from mssearch.models import ModelGlobalLocal
-            return ModelGlobalLocal(model_path=model_path_or_name, device=device)
-        except Exception:
-            from mssearch.models import ModelQwenVL
-            return ModelQwenVL(model_path=model_path_or_name, device=device, attn_implementation=attn_implementation)
+    elif "llava" in m_str or "vicuna" in m_str:
+        from mssearch.models import ModelGlobalLocal
+        return ModelGlobalLocal(model_path=model_path_or_name, device=device)
     else:
-        # Defaults to QwenVL/AutoProcessor engine (handles Qwen2.5-VL, Qwen3-VL, LLaVA-OneVision)
+        # Defaults to QwenVL/AutoProcessor engine (handles Qwen2.5-VL, Qwen3-VL)
         from mssearch.models import ModelQwenVL
         return ModelQwenVL(model_path=model_path_or_name, device=device, attn_implementation=attn_implementation)
 
