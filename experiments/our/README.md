@@ -9,6 +9,7 @@ Evaluation suite for the unified Multi-Source Visual Search pipeline (`METHOD_SP
 ```text
 experiments/our/
 ├── env_paths.sh              # SINGLE CENTRAL CONFIG for all paths and environment settings
+├── HOW_TO_RUN.md             # Complete step-by-step execution guide for all 12 runs
 ├── config_default.json       # Production hyperparameter configuration
 ├── eval_dataset.py           # Dataset slicing & deterministic image pool loader
 ├── eval_metrics.py           # Dual metrics (Set-based vs Strict Primary attribution)
