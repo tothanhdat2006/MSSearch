@@ -113,7 +113,10 @@ def load_and_slice_dataset(
         g_entry = next((gallery_data[k] for k in sid_keys if k in gallery_data), None)
 
         for p_name in pool_keys:
-            if p_name in ["crop", "N_crop", "N=crop"]:
+            if p_name in ["N_1", "N1"]:
+                pool_info = {"images": [gt_img] if gt_img else [], "N": 1, "gt_image": gt_img, "gt_index": 1}
+                eval_tasks.append((s_idx, s, "N_1", pool_info))
+            elif p_name in ["crop", "N_crop", "N=crop"]:
                 bbox = None
                 if g_entry and "crop" in g_entry and "box_xyxy" in g_entry["crop"]:
                     b = g_entry["crop"]["box_xyxy"]

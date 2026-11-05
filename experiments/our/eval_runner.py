@@ -17,26 +17,45 @@ except ModuleNotFoundError:
     from experiments.our.eval_metrics import compute_stage_ret_rej_tokens
     from experiments.our.eval_models import load_our_engines, run_our_pipeline
 
+def load_env_paths():
+    for f_name in ["env_paths.sh", "paths.env"]:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), f_name)
+        if os.path.isfile(p):
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("export "):
+                        line = line[7:].strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip().strip("'\"")
+                        if "${MODEL_DIR}" in v and "MODEL_DIR" in os.environ:
+                            v = v.replace("${MODEL_DIR}", os.environ["MODEL_DIR"])
+                        if k not in os.environ and v:
+                            os.environ[k] = v
+            break
+
 def parse_args():
+    load_env_paths()
     parser = argparse.ArgumentParser(description="MSSearch V2 Evaluation Runner.")
-    parser.add_argument("--model_path", type=str, default="Qwen/Qwen2.5-VL-7B-Instruct",
+    parser.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-VL-7B-Instruct"),
                         help="Path or HuggingFace ID of VLM checkpoint.")
-    parser.add_argument("--sam3_path", type=str, default="/data/shared/cvpr/dat/models/sam3/sam3.pt",
+    parser.add_argument("--sam3_path", type=str, default=os.environ.get("SAM3_PATH", "/data/shared/cvpr/dat/models/sam3/sam3.pt"),
                         help="Path to sam3.pt.")
-    parser.add_argument("--siglip_name", type=str, default="/data/shared/cvpr/dat/models/siglip-base-patch16-384",
+    parser.add_argument("--siglip_name", type=str, default=os.environ.get("SIGLIP_NAME", "/data/shared/cvpr/dat/models/siglip-base-patch16-384"),
                         help="Path or HF ID for SigLIP.")
-    parser.add_argument("--nlp_model", type=str, default="/data/shared/cvpr/dat/models/spacy/en_core_web_sm-3.8.0",
+    parser.add_argument("--nlp_model", type=str, default=os.environ.get("NLP_MODEL", "/data/shared/cvpr/dat/models/spacy/en_core_web_sm-3.8.0"),
                         help="Path or name of spaCy model.")
-    parser.add_argument("--dataset_path", type=str, default="/data/STASHBench/annotations_part1234_merged.json",
+    parser.add_argument("--dataset_path", type=str, default=os.environ.get("DATASET_PATH", "/data/STASHBench/annotations_part1234_merged.json"),
                         help="Path to annotations_part1234_merged.json or 200_samples.json.")
-    parser.add_argument("--image_dir", type=str, default="/data/STASHBench/pool",
+    parser.add_argument("--image_dir", type=str, default=os.environ.get("IMAGE_DIR", "/data/STASHBench/pool"),
                         help="Directory containing candidate images or pool.")
-    parser.add_argument("--output_dir", type=str, default="./results_our",
+    parser.add_argument("--output_dir", type=str, default=os.environ.get("OUTPUT_DIR", "./results_our"),
                         help="Directory to save JSONL logs.")
     parser.add_argument("--config", type=str, default=None,
                         help="Path to custom config JSON file.")
-    parser.add_argument("--pool_mode", type=str, choices=["N_5", "N_10", "N_20", "crop", "N_crop", "ALL"], default="N_20",
-                        help="Candidate pool size: N_5, N_10, N_20, crop, or ALL.")
+    parser.add_argument("--pool_mode", type=str, choices=["N_1", "N_5", "N_10", "N_20", "crop", "N_crop", "ALL"], default="N_20",
+                        help="Candidate pool size: N_1, N_5, N_10, N_20, crop, or ALL.")
     parser.add_argument("--sample_idx", type=int, default=None)
     parser.add_argument("--start_idx", type=int, default=None)
     parser.add_argument("--end_idx", type=int, default=None)

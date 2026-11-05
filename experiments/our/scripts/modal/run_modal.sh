@@ -11,6 +11,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUR_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 MSSEARCH_ROOT="$(cd "${OUR_DIR}/../.." && pwd)"
+
+# Source centralized environment and paths
+if [ -f "${OUR_DIR}/env_paths.sh" ]; then
+    source "${OUR_DIR}/env_paths.sh"
+fi
+
 export PYTHONPATH="${MSSEARCH_ROOT}:${OUR_DIR}:${PYTHONPATH:-}"
 
 MODEL_KEY="${1:-qwen2.5_vl_7b}"

@@ -8,6 +8,7 @@ Evaluation suite for the unified Multi-Source Visual Search pipeline (`METHOD_SP
 
 ```text
 experiments/our/
+├── env_paths.sh              # SINGLE CENTRAL CONFIG for all paths and environment settings
 ├── config_default.json       # Production hyperparameter configuration
 ├── eval_dataset.py           # Dataset slicing & deterministic image pool loader
 ├── eval_metrics.py           # Dual metrics (Set-based vs Strict Primary attribution)
@@ -48,7 +49,31 @@ experiments/our/
 
 ---
 
-## 2. Core Python Components
+## 2. Centralized Configuration (`env_paths.sh`)
+
+Instead of editing paths across individual script files, **edit `experiments/our/env_paths.sh` once**. All scripts in `scripts/A6000/`, `scripts/A100/`, `scripts/modal/`, and `eval_runner.py` source and respect this file:
+
+```bash
+# Python Environment
+export CONDA_ENV_NAME="hrsearch"
+export VENV_PATH="/data/shared/cvpr/dat/.venv/bin/activate"
+
+# Model & Perceptual Checkpoints
+export MODEL_DIR="/data/shared/cvpr/dat/models"
+export SAM3_PATH="${MODEL_DIR}/sam3/sam3.pt"
+export SIGLIP_NAME="${MODEL_DIR}/siglip-base-patch16-384"
+export NLP_MODEL="${MODEL_DIR}/spacy/en_core_web_sm-3.8.0"
+
+# STASHBench Dataset & Pool Images
+export DATASET_PATH="/data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json"
+export IMAGE_DIR="/data/shared/cvpr/dat/simple/data/STASHBench/pool"
+```
+
+*Note: If the paths above do not exist on the current machine, `env_paths.sh` automatically falls back to repo-relative paths (e.g. `<repo>/models/`, `<repo>/data/STASHBench/`).*
+
+---
+
+## 3. Core Python Components
 
 - **`eval_dataset.py`** (<250 lines): Loads STASHBench annotations, slices dataset ranges (`--start_idx`, `--end_idx`, `--max_samples`), and resolves pool images deterministically using `gallery_order_seed42.json`. Enforces `ImageOps.exif_transpose` and `MAX_IMAGE_PIXELS = None`.
 - **`eval_metrics.py`** (<250 lines): Computes text answer metrics (accuracy, token precision, recall, F1) and tracks Stage 1-6 telemetry: target retention, background rejection, visual token budget, and crop sizes.
@@ -58,7 +83,7 @@ experiments/our/
 
 ---
 
-## 3. Supported Foundation Models
+## 4. Supported Foundation Models
 
 | Short Key | Model Identifier | Architecture | VRAM Required |
 | :--- | :--- | :--- | :--- |
@@ -68,7 +93,7 @@ experiments/our/
 
 ---
 
-## 4. Execution Guides
+## 5. Execution Guides
 
 All scripts automatically resolve paths relative to the repository, detect local model directories, and accept environment variable overrides (`MODEL_DIR`, `DATASET_PATH`, `IMAGE_DIR`, `SAM3_PATH`, `SIGLIP_NAME`).
 
@@ -149,7 +174,7 @@ modal run scripts/modal/run_our_modal.py --model Qwen/Qwen2.5-VL-7B-Instruct --p
 
 ---
 
-## 5. Evaluating and Summarizing Results
+## 6. Evaluating and Summarizing Results
 
 Once an evaluation completes, compute both **Set-based** and **Strict Primary Evidence** accuracy metrics:
 ```bash
