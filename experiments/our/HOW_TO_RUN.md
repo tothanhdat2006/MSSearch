@@ -44,19 +44,19 @@ Edit this file once with your cluster/workstation storage paths:
 
 # 1. Python Environment Activation
 export CONDA_ENV_NAME="hrsearch"
-export VENV_PATH="/data/shared/cvpr/dat/.venv/bin/activate"
+export VENV_PATH=".../.venv/bin/activate"
 
 # 2. Checkpoints Root & Auxiliary Models
-export MODEL_DIR="/data/shared/cvpr/dat/models"
-export SAM3_PATH="${MODEL_DIR}/sam3/sam3.pt"
-export SIGLIP_NAME="${MODEL_DIR}/siglip2-so400m-patch16-512"
-export NLP_MODEL="${MODEL_DIR}/spacy/en_core_web_sm-3.8.0"
+export MODEL_DIR=".../models"
+export SAM3_PATH=".../models/sam3/sam3.pt"
+export SIGLIP_NAME="google/siglip2-so400m-patch16-512"
+export NLP_MODEL=".../models/spacy/en_core_web_sm-3.8.0"
 
 # 3. STASHBench Dataset & Pool Images
-export DATASET_PATH="/data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json"
-export IMAGE_DIR="/data/shared/cvpr/dat/simple/data/STASHBench/pool"
+export DATASET_PATH=".../STASHBench/annotations_part1234_merged.json"
+export IMAGE_DIR=".../STASHBench/pool"
 
-# 4. Optional Base Output Directory (defaults to repo results folder if empty)
+# 4. Base Output Directory
 export OUTPUT_BASE_DIR=""
 ```
 

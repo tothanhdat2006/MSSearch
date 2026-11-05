@@ -7,56 +7,19 @@
 # - Colab and Modal evaluations
 # ==============================================================================
 
-# Explicit directory configuration (override via env; no dynamic BASH_SOURCE or executing dir)
-export _REPO_ROOT="${_REPO_ROOT:-/data/shared/cvpr/dat/simple}"
-export _MSSEARCH_ROOT="${_MSSEARCH_ROOT:-/data/shared/cvpr/dat/simple/experiments/multisource/MSSearch}"
-export _CONFIG_DIR="${_CONFIG_DIR:-/data/shared/cvpr/dat/simple/experiments/multisource/MSSearch/experiments/our}"
-
-# ------------------------------------------------------------------------------
 # 1. Python Environment Activation
-# ------------------------------------------------------------------------------
-export CONDA_ENV_NAME="${CONDA_ENV_NAME:-hrsearch}"
-export VENV_PATH="${VENV_PATH:-/data/shared/cvpr/dat/.venv/bin/activate}"
+export CONDA_ENV_NAME="hrsearch"
+export VENV_PATH=".../.venv/bin/activate"
 
-# ------------------------------------------------------------------------------
 # 2. Base Model & Perception Checkpoints
-# ------------------------------------------------------------------------------
-export MODEL_DIR="${MODEL_DIR:-/data/shared/cvpr/dat/models}"
-if [ ! -d "${MODEL_DIR}" ] && [ -d "${_REPO_ROOT}/models" ]; then
-    export MODEL_DIR="${_REPO_ROOT}/models"
-fi
+export MODEL_DIR=".../models"
+export SAM3_PATH=".../models/sam3/sam3.pt"
+export SIGLIP_NAME="google/siglip2-so400m-patch16-512"
+export NLP_MODEL=".../models/spacy/en_core_web_sm-3.8.0"
 
-export SAM3_PATH="${SAM3_PATH:-${MODEL_DIR}/sam3/sam3.pt}"
-if [ ! -f "${SAM3_PATH}" ] && [ -f "${_REPO_ROOT}/models/sam3/sam3.pt" ]; then
-    export SAM3_PATH="${_REPO_ROOT}/models/sam3/sam3.pt"
-fi
-
-export SIGLIP_NAME="${SIGLIP_NAME:-${MODEL_DIR}/siglip2-so400m-patch16-512}"
-if [ ! -d "${SIGLIP_NAME}" ] && [ -d "${_REPO_ROOT}/models/siglip2-so400m-patch16-512" ]; then
-    export SIGLIP_NAME="${_REPO_ROOT}/models/siglip2-so400m-patch16-512"
-elif [ ! -d "${SIGLIP_NAME}" ]; then
-    export SIGLIP_NAME="google/siglip2-so400m-patch16-512"
-fi
-
-export NLP_MODEL="${NLP_MODEL:-${MODEL_DIR}/spacy/en_core_web_sm-3.8.0}"
-if [ ! -d "${NLP_MODEL}" ]; then
-    export NLP_MODEL="en_core_web_sm"
-fi
-
-# ------------------------------------------------------------------------------
 # 3. STASHBench Dataset & Candidate Pool Images
-# ------------------------------------------------------------------------------
-export DATASET_PATH="${DATASET_PATH:-/data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json}"
-if [ ! -f "${DATASET_PATH}" ] && [ -f "${_REPO_ROOT}/data/STASHBench/annotations_part1234_merged.json" ]; then
-    export DATASET_PATH="${_REPO_ROOT}/data/STASHBench/annotations_part1234_merged.json"
-fi
+export DATASET_PATH=".../STASHBench/annotations_part1234_merged.json"
+export IMAGE_DIR=".../STASHBench/pool"
 
-export IMAGE_DIR="${IMAGE_DIR:-/data/shared/cvpr/dat/simple/data/STASHBench/pool}"
-if [ ! -d "${IMAGE_DIR}" ] && [ -d "${_REPO_ROOT}/data/STASHBench/pool" ]; then
-    export IMAGE_DIR="${_REPO_ROOT}/data/STASHBench/pool"
-fi
-
-# ------------------------------------------------------------------------------
-# 4. Optional Base Output Directory
-# ------------------------------------------------------------------------------
-export OUTPUT_BASE_DIR="${OUTPUT_BASE_DIR:-}"
+# 4. Base Output Directory
+export OUTPUT_BASE_DIR=""
