@@ -236,12 +236,15 @@ class MultiSourceSearchEngine:
                                 pred_list.append(t)
                     is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
                     primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else direct_result.answer
+                    primary_evidence_img_idx = direct_result.evidence_img_idx if direct_result.evidence_img_idx is not None else (harvested_evidence_images[0] if harvested_evidence_images else None)
+                    telemetry["primary_evidence_image"] = primary_evidence_img_idx
                     if not is_quiet:
-                        print(f"[MSSearch Final Decision] Primary Answer: '{primary_ans}' | Evidence Images: {harvested_evidence_images} | Route: direct_global_answer | Latency: {telemetry['total_latency_sec']}s")
+                        print(f"[MSSearch Final Decision] Primary Answer: '{primary_ans}' | Primary Image: {primary_evidence_img_idx} | Evidence Images: {harvested_evidence_images} | Route: direct_global_answer | Latency: {telemetry['total_latency_sec']}s")
                     return {
                         "answers": harvested_answers,
                         "prediction_list": pred_list if pred_list else harvested_answers,
                         "primary_answer": primary_ans,
+                        "primary_evidence_image": primary_evidence_img_idx,
                         "raw_vlm_response": direct_result.raw_response,
                         "evidence_images": harvested_evidence_images,
                         "stage6_patch_boxes": harvested_patch_boxes,
@@ -363,12 +366,15 @@ class MultiSourceSearchEngine:
                             pred_list.append(t)
                 is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
                 primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else (harvested_answers[0] if harvested_answers else "No answer found")
+                primary_evidence_img_idx = fast_path_result.evidence_img_idx if fast_path_result.evidence_img_idx is not None else (harvested_evidence_images[0] if harvested_evidence_images else None)
+                telemetry["primary_evidence_image"] = primary_evidence_img_idx
                 if not is_quiet:
-                    print(f"[MSSearch Final Decision] Primary Answer: '{primary_ans}' | Evidence Images: {harvested_evidence_images} | Route: {telemetry['route']} | Latency: {telemetry['total_latency_sec']}s")
+                    print(f"[MSSearch Final Decision] Primary Answer: '{primary_ans}' | Primary Image: {primary_evidence_img_idx} | Evidence Images: {harvested_evidence_images} | Route: {telemetry['route']} | Latency: {telemetry['total_latency_sec']}s")
                 return {
                     "answers": harvested_answers,
                     "prediction_list": pred_list if pred_list else harvested_answers,
                     "primary_answer": primary_ans,
+                    "primary_evidence_image": primary_evidence_img_idx,
                     "raw_vlm_response": fast_path_result.raw_response or fast_path_result.answer,
                     "evidence_images": harvested_evidence_images,
                     "stage6_patch_boxes": harvested_patch_boxes,
@@ -702,6 +708,16 @@ class MultiSourceSearchEngine:
         else:
             primary_answer = "No answer found"
 
+        primary_evidence_img_idx = None
+        for e in harvested_extractions:
+            cand_clean = e.get("final_answer") or e.get("raw_answer")
+            if cand_clean and (cand_clean == primary_answer or cand_clean in informative_answers):
+                primary_evidence_img_idx = e.get("img_idx")
+                break
+        if primary_evidence_img_idx is None and harvested_evidence_images:
+            primary_evidence_img_idx = harvested_evidence_images[0]
+
+        telemetry["primary_evidence_image"] = primary_evidence_img_idx
         telemetry["evidence_images"] = harvested_evidence_images
         telemetry["stage6_patch_boxes"] = harvested_patch_boxes
 
@@ -716,12 +732,13 @@ class MultiSourceSearchEngine:
 
         if not is_quiet:
             print(f"[Stage 6: Foveated Reading] Decision: Read {len(unified_pool)} candidate crops -> Harvested {len(final_answers_out)} answer(s): {final_answers_out} (Latency: {lat_s6}s)")
-            print(f"[MSSearch Final Decision] Primary Answer: '{primary_answer}' | Evidence Images: {harvested_evidence_images} | Route: {telemetry.get('route')} | Latency: {telemetry.get('total_latency_sec')}s\n")
+            print(f"[MSSearch Final Decision] Primary Answer: '{primary_answer}' | Primary Image: {primary_evidence_img_idx} | Evidence Images: {harvested_evidence_images} | Route: {telemetry.get('route')} | Latency: {telemetry.get('total_latency_sec')}s\n")
 
         return {
             "answers": final_answers_out,
             "prediction_list": pred_list if pred_list else final_answers_out,
             "primary_answer": primary_answer,
+            "primary_evidence_image": primary_evidence_img_idx,
             "raw_vlm_response": raw_vlm_resp,
             "evidence_images": harvested_evidence_images,
             "stage6_patch_boxes": harvested_patch_boxes,

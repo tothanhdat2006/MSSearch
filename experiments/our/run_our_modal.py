@@ -152,10 +152,6 @@ def evaluate_our_modal(
                 gt_list = [ans_field]
             else:
                 gt_list = []
-            if "references" in sample and isinstance(sample["references"], list):
-                for ref in sample["references"]:
-                    if ref and str(ref).strip() and str(ref).strip() not in gt_list:
-                        gt_list.append(str(ref).strip())
 
             candidate_meta = pool_info.get("images", [])
             images = [resolve_image(m, image_dir) for m in candidate_meta]
@@ -178,11 +174,20 @@ def evaluate_our_modal(
             ]
             is_img_correct = (str(gt_img_id) in [str(x) for x in evidence_img_ids]) if (evidence_img_ids and gt_img_id) else (False if gt_img_id else None)
 
+            prim_img_idx = telemetry.get("primary_evidence_image")
+            if prim_img_idx is None and evidence_indices:
+                prim_img_idx = evidence_indices[0]
+            prim_img_id = (
+                candidate_meta[prim_img_idx].get("image_id") if isinstance(candidate_meta[prim_img_idx], dict) else str(candidate_meta[prim_img_idx])
+            ) if (prim_img_idx is not None and 0 <= prim_img_idx < len(candidate_meta)) else None
+            is_prim_img_correct = (str(gt_img_id) == str(prim_img_id)) if (gt_img_id and prim_img_id) else (False if gt_img_id else None)
+
             stage_stats = compute_stage_ret_rej_tokens(telemetry, gt_img_idx, sample.get("target_bbox"), images)
 
             record = {
                 "sample_id": sample_id, "sample_index": s_idx, "pool_name": p_name, "pool_N": len(candidate_meta),
                 "question": question, "ground_truth_list": gt_list, "gt_image_id": gt_img_id, "gt_image_idx": gt_img_idx,
+                "primary_pred_image_id": prim_img_id, "primary_pred_image_idx": prim_img_idx, "is_primary_image_correct": is_prim_img_correct,
                 "pred_image_ids": evidence_img_ids, "pred_image_indices": evidence_indices, "is_image_correct": is_img_correct,
                 "prediction": pred_text, "route": telemetry.get("route", "UNKNOWN"),
                 "stage5_mode": telemetry.get("stage5_mode", ""), "stages_executed": telemetry.get("stages_executed", []),

@@ -246,18 +246,19 @@ def run_foveated_vlm_reading(
     )
 
     # 5. Strict Evidence Pruning: Retain only image indices that yielded affirmative, non-negative answers
-    valid_evidence_indices: set = set()
+    valid_evidence_indices: List[int] = []
     for e in extractions:
         cand = e.final_answer
         if cand and not is_negative_or_unanswerable(cand):
-            valid_evidence_indices.add(e.img_idx)
+            if e.img_idx not in valid_evidence_indices:
+                valid_evidence_indices.append(e.img_idx)
 
     if config.verbose:
-        print(f"[Stage 6] Reading complete: Extracted {len(extractions)} evidence items, deduplicated to {len(final_dedup_answers)} unique answers: {final_dedup_answers} (Evidence images: {sorted(list(valid_evidence_indices))}).")
+        print(f"[Stage 6] Reading complete: Extracted {len(extractions)} evidence items, deduplicated to {len(final_dedup_answers)} unique answers: {final_dedup_answers} (Evidence images: {valid_evidence_indices}).")
 
     return FinalSearchResult(
         answers=final_dedup_answers,
-        evidence_image_indices=sorted(list(valid_evidence_indices)),
+        evidence_image_indices=valid_evidence_indices,
         extractions=extractions,
         crop_records=crop_records
     )

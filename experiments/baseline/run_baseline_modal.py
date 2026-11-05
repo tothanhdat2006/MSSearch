@@ -139,10 +139,6 @@ def evaluate_baseline_modal(
                 gt_list = [ans_field]
             else:
                 gt_list = []
-            if "references" in sample and isinstance(sample["references"], list):
-                for ref in sample["references"]:
-                    if ref and str(ref).strip() and str(ref).strip() not in gt_list:
-                        gt_list.append(str(ref).strip())
 
             candidate_meta = pool_info.get("images", [])
             images = [resolve_image(m, image_dir) for m in candidate_meta]
@@ -156,6 +152,9 @@ def evaluate_baseline_modal(
             gt_img = pool_info.get("gt_image") or sample.get("gt_image")
             gt_img_id = gt_img.get("image_id") if isinstance(gt_img, dict) else (gt_img or "")
             is_img_correct = (str(gt_img_id) in [str(x) for x in actual_img_ids]) if (actual_img_ids and gt_img_id) else None
+            prim_id = actual_img_ids[0] if actual_img_ids else None
+            prim_idx = img_indices[0] if img_indices else None
+            is_prim_img_correct = (str(gt_img_id) == str(prim_id)) if (gt_img_id and prim_id) else (False if gt_img_id else None)
 
             record = {
                 "sample_id": sample_id,
@@ -165,6 +164,9 @@ def evaluate_baseline_modal(
                 "question": question,
                 "ground_truth_list": gt_list,
                 "gt_image_id": gt_img_id,
+                "primary_pred_image_id": prim_id,
+                "primary_pred_image_idx": prim_idx,
+                "is_primary_image_correct": is_prim_img_correct,
                 "pred_image_ids": actual_img_ids,
                 "pred_image_indices": img_indices,
                 "is_image_correct": is_img_correct,

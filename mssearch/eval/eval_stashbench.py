@@ -77,8 +77,10 @@ def main():
         return
 
     img_correct_cnt = 0
+    prim_img_correct_cnt = 0
     ans_hit_cnt = 0
     joint_cnt = 0
+    prim_joint_cnt = 0
     em_cnt = 0
     total_f1, total_rec, total_prec = 0.0, 0.0, 0.0
     total_lat = 0.0
@@ -96,13 +98,24 @@ def main():
         gt_list = r.get("ground_truth_list", [])
         is_img_ok = bool(r.get("is_image_correct", False))
 
+        is_prim_ok = r.get("is_primary_image_correct")
+        if is_prim_ok is None:
+            prim_id = r.get("primary_pred_image_id") or (r.get("pred_image_ids", [None])[0] if r.get("pred_image_ids") else None)
+            gt_id = r.get("gt_image_id")
+            is_prim_ok = (str(gt_id) == str(prim_id)) if (gt_id and prim_id) else False
+        else:
+            is_prim_ok = bool(is_prim_ok)
+
         scores = score_prediction(pred, gt_list)
         hit = scores["hit"]
         is_joint = is_img_ok and hit
+        is_prim_joint = is_prim_ok and hit
 
         img_correct_cnt += int(is_img_ok)
+        prim_img_correct_cnt += int(is_prim_ok)
         ans_hit_cnt += int(hit)
         joint_cnt += int(is_joint)
+        prim_joint_cnt += int(is_prim_joint)
         em_cnt += int(scores["exact_match"])
         total_f1 += scores["f1"]
         total_rec += scores["recall"]
@@ -142,8 +155,10 @@ def main():
         })
 
     img_acc = (img_correct_cnt / n) * 100.0
+    prim_img_acc = (prim_img_correct_cnt / n) * 100.0
     ans_acc = (ans_hit_cnt / n) * 100.0
     joint_acc = (joint_cnt / n) * 100.0
+    prim_joint_acc = (prim_joint_cnt / n) * 100.0
     em_acc = (em_cnt / n) * 100.0
     avg_f1 = (total_f1 / n) * 100.0
     avg_rec = (total_rec / n) * 100.0
@@ -152,12 +167,14 @@ def main():
     print("=" * 72)
     print("STASHBENCH EVALUATION SUMMARY")
     print("=" * 72)
-    print(f"File              : {os.path.basename(input_path)}")
-    print(f"Total Samples     : {n}")
-    print(f"Image Selection   : {img_acc:5.1f}% ({img_correct_cnt}/{n})")
-    print(f"Answer Match (Hit): {ans_acc:5.1f}% ({ans_hit_cnt}/{n})")
-    print(f"Joint (Img + Ans) : {joint_acc:5.1f}% ({joint_cnt}/{n})")
-    print(f"Exact Match (EM)  : {em_acc:5.1f}% ({em_cnt}/{n})")
+    print(f"File                    : {os.path.basename(input_path)}")
+    print(f"Total Samples           : {n}")
+    print(f"Image Selection (Set)   : {img_acc:5.1f}% ({img_correct_cnt}/{n})")
+    print(f"Primary Image (Strict)  : {prim_img_acc:5.1f}% ({prim_img_correct_cnt}/{n})")
+    print(f"Answer Match (Hit)      : {ans_acc:5.1f}% ({ans_hit_cnt}/{n})")
+    print(f"Joint (Set Img + Ans)   : {joint_acc:5.1f}% ({joint_cnt}/{n})")
+    print(f"Joint (Primary + Ans)   : {prim_joint_acc:5.1f}% ({prim_joint_cnt}/{n})")
+    print(f"Exact Match (EM)        : {em_acc:5.1f}% ({em_cnt}/{n})")
     print(f"Token Recall      : {avg_rec:5.1f}%")
     print(f"Token F1 Score    : {avg_f1:5.1f}%")
     print(f"Average Latency   : {avg_lat:5.2f}s")
@@ -198,8 +215,10 @@ def main():
         "file": input_path,
         "num_samples": n,
         "image_selection_acc": round(img_acc, 2),
+        "primary_image_acc": round(prim_img_acc, 2),
         "answer_match_acc": round(ans_acc, 2),
         "joint_acc": round(joint_acc, 2),
+        "primary_joint_acc": round(prim_joint_acc, 2),
         "exact_match_acc": round(em_acc, 2),
         "token_recall": round(avg_rec, 2),
         "token_f1": round(avg_f1, 2),
