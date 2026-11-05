@@ -1,8 +1,9 @@
 # MSSearch Ablation Study Suite
 
-Ablation evaluation framework for dissecting the perceptual backbones of the MSSearch pipeline across two independent axes:
-1. **Open-Vocabulary Detection Backbone** (replacing **SAM3** with **Grounding DINO** or **DINO-X**).
-2. **Low-Resolution Zero-Shot Screening Scorer** (replacing **SigLIP** with **CLIP-ViT-B/32**, **CLIP-ViT-L/14**, or **EVA-02-L/14**).
+Ablation evaluation framework for dissecting the perceptual backbones and decision thresholds of the MSSearch pipeline across three independent axes:
+1. **Open-Vocabulary Detection Backbone** (replacing **SAM3** with **Grounding DINO**, **Florence-2**, or **DINOv3**).
+2. **Low-Resolution Zero-Shot Screening Scorer** (replacing **SigLIP** with **SigLIP2**, **CLIP-ViT-B/32**, **CLIP-ViT-L/14**, or **EVA-02-L/14**).
+3. **VLM Gating Confidence Threshold** (evaluating **0.3**, **0.5** [default], and **0.7**).
 
 ---
 
@@ -15,7 +16,8 @@ Controls tool fast path (Stage 2) and candidate crop open-vocabulary object gati
 | :--- | :--- | :--- | :--- |
 | `sam3` | `sam3_inference` | `${MODEL_DIR}/sam3/sam3.pt` | Unified promptable segmentation/detection baseline |
 | `grounding_dino` | `GroundingDinoDetector` | `IDEA-Research/grounding-dino-base` | Text-grounded open-set object detection |
-| `dinox` | `DinoXDetector` | Local checkpoint or DINO-X Cloud API | Next-generation unified open-world detection |
+| `florence2` | `Florence2Detector` | `microsoft/Florence-2-large` | Open-vocabulary phrase grounding (<CAPTION_TO_PHRASE_GROUNDING>) |
+| `dinov3` | `DINOv3Detector` | `facebook/dinov3-vitl16-pretrain-lvd1689m` | Dense ViT-L/16 patch features & energy proposals (gated) |
 
 ### Axis 2: Low-Resolution Visual Scorer (`--scorer`)
 Controls saliency-guided quadtree budget allocation (Stage 3), preliminary patch gating (Stage 4), and candidate crop spatial filtering (Stage 5):
@@ -23,9 +25,20 @@ Controls saliency-guided quadtree budget allocation (Stage 3), preliminary patch
 | Key | Model Identifier | HuggingFace / OpenCLIP ID | Resolution / Patch |
 | :--- | :--- | :--- | :--- |
 | `siglip` | `SigLIPScorer` | `google/siglip-base-patch16-384` | 384x384, Patch 16 (Sigmoid loss) |
+| `siglip2_384` | `SigLIPScorer` | `google/siglip2-so400m-patch16-384` | 384x384, Patch 16 (SigLIP 2 SO400M) |
+| `siglip2_512` | `SigLIPScorer` | `google/siglip2-so400m-patch16-512` | 512x512, Patch 16 (SigLIP 2 SO400M) |
 | `clip_b32` | `CLIPVisualScorer` | `openai/clip-vit-base-patch32` | 224x224, Patch 32 (Calibrated Cosine) |
 | `clip_l14` | `CLIPVisualScorer` | `openai/clip-vit-large-patch14` | 224x224, Patch 14 (Calibrated Cosine) |
-| `eva02_l14` | `EVA02VisualScorer` | `EVA02-L-14-336` / `QuanSun/EVA-CLIP` | 336x336, Patch 14 (MIM + CLIP) |
+| `eva02_l14` | `EVA02VisualScorer` | `timm/eva02_large_patch14_clip_336.merged2b_s6b_b61k` | 336x336, Patch 14 (MIM + CLIP) |
+
+### Axis 3: VLM Gating Confidence Threshold (`--gate_threshold`)
+Controls candidate patch gating in Stage 4 (existence probe and speculative latent zoom probing):
+
+| Key | Probability $P(\text{Yes})$ | Internal Score $[-1, 1]$ | Behavior |
+| :--- | :--- | :--- | :--- |
+| `0.3` | $0.30$ | $-0.40$ | High Recall: retains speculative and ambiguous patches for Stage 6 reading |
+| `0.5` | $0.50$ (default) | $0.00$ | Balanced Baseline: standard majority softmax decision boundary |
+| `0.7` | $0.70$ | $+0.40$ | High Precision: prunes aggressively, only passing high-certainty evidence |
 
 ---
 
@@ -42,12 +55,13 @@ MSSearch/experiments/our/ablations/
 │   ├── base.py                    # BaseDetector and BaseVisualScorer contracts
 │   ├── sam3_adapter.py            # SAM3 wrapper conforming to BaseDetector
 │   ├── grounding_dino_adapter.py  # Grounding DINO adapter via HF Transformers
-│   ├── dinox_adapter.py           # DINO-X adapter (local weights or API client)
+│   ├── florence2_adapter.py       # Florence-2-large adapter via HF Transformers
 │   ├── clip_scorer_adapter.py     # CLIP-ViT-B/32 and CLIP-ViT-L/14 scorer
 │   └── eva02_scorer_adapter.py    # EVA-02-L/14 scorer (open_clip / timm / HF)
 ├── scripts/
-│   ├── run_ablation_detector.sh   # Sweeps SAM3 vs Grounding DINO vs DINO-X (fixed SigLIP)
-│   ├── run_ablation_scorer.sh     # Sweeps SigLIP vs CLIP-B/32 vs CLIP-L/14 vs EVA-02 (fixed SAM3)
+│   ├── run_ablation_detector.sh   # Sweeps SAM3 vs Grounding DINO vs Florence-2 vs DINOv3 (fixed SigLIP)
+│   ├── run_ablation_scorer.sh     # Sweeps SigLIP vs SigLIP2 vs CLIP vs EVA-02 (fixed SAM3)
+│   ├── run_ablation_gate_threshold.sh # Sweeps Gating Threshold: 0.3 vs 0.7 vs 0.5
 │   ├── run_ablation_matrix.sh     # Full cross-ablation sweep
 │   └── run_ablation_slurm.slurm   # HPC Slurm batch runner
 └── tests/
@@ -60,20 +74,27 @@ MSSearch/experiments/our/ablations/
 ## 3. How to Run Ablations
 
 ### A. Run Detector Ablation (Fixed SigLIP)
-Compares **SAM3** vs. **Grounding DINO** vs. **DINO-X** on pool $N=5$:
+Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** vs. **DINOv3** on pool $N=5$:
 ```bash
 cd MSSearch
 bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
 ```
 
 ### B. Run Visual Scorer Ablation (Fixed SAM3)
-Compares **SigLIP** vs. **CLIP-ViT-B/32** vs. **CLIP-ViT-L/14** vs. **EVA-02-L/14** on pool $N=5$:
+Compares **SigLIP** vs. **SigLIP2** vs. **CLIP-ViT-B/32** vs. **CLIP-ViT-L/14** vs. **EVA-02-L/14** on pool $N=5$:
 ```bash
 cd MSSearch
 bash experiments/our/ablations/scripts/run_ablation_scorer.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
 ```
 
-### C. Run Specific Pair via CLI Runner
+### C. Run Gate Threshold Ablation (0.3 vs 0.7 vs 0.5)
+Evaluates gating probability thresholds **0.3**, **0.7**, and **0.5** (default) on pool $N=5$:
+```bash
+cd MSSearch
+bash experiments/our/ablations/scripts/run_ablation_gate_threshold.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
+```
+
+### D. Run Specific Pair via CLI Runner
 ```bash
 python experiments/our/ablations/eval_runner_ablation.py \
     --model_path Qwen/Qwen2.5-VL-7B-Instruct \

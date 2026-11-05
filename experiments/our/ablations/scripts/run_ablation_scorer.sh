@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# ABLATION EXPERIMENT: VISUAL SCREENING SCORER (SigLIP vs CLIP-B/32 vs CLIP-L/14 vs EVA-02-L/14)
+# ABLATION EXPERIMENT: VISUAL SCREENING SCORER
+# (SigLIP vs SigLIP2-384 vs SigLIP2-512 vs CLIP-B/32 vs CLIP-L/14 vs EVA-02-L/14)
 # Fixed Detector: SAM3
 # ==============================================================================
 set -euo pipefail
@@ -17,10 +18,14 @@ export PYTHONPATH="${MSSEARCH_ROOT}:${OUR_DIR}:${ABLATION_DIR}:${PYTHONPATH:-}"
 
 TARGET_MODEL="${1:-Qwen/Qwen2.5-VL-7B-Instruct}"
 POOL_MODE="${2:-N_5}"
-shift 2 || true
+if [ "$#" -ge 2 ]; then
+    shift 2
+elif [ "$#" -eq 1 ]; then
+    shift 1
+fi
 
 FIXED_DETECTOR="sam3"
-SCORERS=("siglip" "clip_b32" "clip_l14" "eva02_l14")
+SCORERS=("siglip" "siglip2_384" "siglip2_512" "clip_b32" "clip_l14" "eva02_l14")
 
 for SC in "${SCORERS[@]}"; do
     echo "=========================================================================="
@@ -30,6 +35,10 @@ for SC in "${SCORERS[@]}"; do
     SC_PATH=""
     if [ "${SC}" == "siglip" ]; then
         SC_PATH="${SIGLIP_NAME}"
+    elif [ "${SC}" == "siglip2_384" ]; then
+        SC_PATH="${SIGLIP2_384_NAME}"
+    elif [ "${SC}" == "siglip2_512" ]; then
+        SC_PATH="${SIGLIP2_512_NAME}"
     elif [ "${SC}" == "clip_b32" ]; then
         SC_PATH="${CLIP_B32_NAME}"
     elif [ "${SC}" == "clip_l14" ]; then

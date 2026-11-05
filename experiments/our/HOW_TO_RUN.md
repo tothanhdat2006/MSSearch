@@ -99,6 +99,11 @@ python experiments/download/download_data.py \
 python experiments/download/download_auxiliary.py \
     --base_model_dir "${MODEL_DIR}"
 
+# Optional: also download Grounding DINO and Florence-2 for detector ablations
+python experiments/download/download_auxiliary.py \
+    --base_model_dir "${MODEL_DIR}" \
+    --download_ablations
+
 # Ensure spaCy English pipeline is linked in Python environment
 python -m spacy download en_core_web_sm
 ```
@@ -276,3 +281,53 @@ for model in qwen2.5_vl_7b llava_ov_7b internvl3_8b; do
     done
 done
 ```
+
+---
+
+## Step 4: Run Ablation Studies (`experiments/our/ablations/`)
+
+The ablation suite dissects components along three independent axes on candidate pool $N=5$:
+
+### 4.1 Detector Backbone Ablation (`run_ablation_detector.sh`)
+Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** vs. **DINOv3** (with fixed SigLIP scorer):
+```bash
+bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
+```
+
+### 4.2 Visual Screening Scorer Ablation (`run_ablation_scorer.sh`)
+Compares **SigLIP** vs. **SigLIP2** (384px, 512px) vs. **CLIP-ViT-B/32** vs. **CLIP-ViT-L/14** vs. **EVA-02-L/14** (with fixed SAM3 detector):
+```bash
+bash experiments/our/ablations/scripts/run_ablation_scorer.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
+```
+
+### 4.3 VLM Gating Threshold Ablation (`run_ablation_gate_threshold.sh`)
+Sweeps probability thresholds **0.3** (high recall), **0.7** (high precision), and **0.5** (balanced baseline):
+```bash
+bash experiments/our/ablations/scripts/run_ablation_gate_threshold.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
+```
+
+### 4.4 Full Matrix Sweep (`run_ablation_matrix.sh` or Slurm)
+```bash
+# Local execution
+bash experiments/our/ablations/scripts/run_ablation_matrix.sh Qwen/Qwen2.5-VL-7B-Instruct
+
+# HPC Slurm batch submission
+sbatch experiments/our/ablations/scripts/run_ablation_slurm.slurm
+```
+
+---
+
+## Step 5: Evaluate Results (`eval_stashbench.py`)
+
+Run the standardized evaluator on any output `.jsonl` file to compute Set-based vs. Strict Primary Image Accuracy, Answer Hit, Joint Accuracy, token usage, and stage-wise latencies:
+
+```bash
+# Evaluate a single results file
+python mssearch/eval/eval_stashbench.py --input results_our/results_our_Qwen2.5-VL-7B-Instruct_N_5_*.jsonl
+
+# Save structured summary JSON
+python mssearch/eval/eval_stashbench.py \
+    --input results_our/results_our_Qwen2.5-VL-7B-Instruct_N_5_*.jsonl \
+    --save_summary results_our/summary_qwen_n5.json
+```
+

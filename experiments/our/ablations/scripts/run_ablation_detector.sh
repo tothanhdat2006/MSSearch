@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# ABLATION EXPERIMENT: DETECTION BACKBONE (SAM3 vs Grounding DINO vs DINO-X)
+# ABLATION EXPERIMENT: DETECTION BACKBONE
+# (SAM3 vs Grounding DINO vs Florence-2 vs DINOv3)
 # Fixed Visual Scorer: SigLIP (google/siglip-base-patch16-384)
 # ==============================================================================
 set -euo pipefail
@@ -17,9 +18,13 @@ export PYTHONPATH="${MSSEARCH_ROOT}:${OUR_DIR}:${ABLATION_DIR}:${PYTHONPATH:-}"
 
 TARGET_MODEL="${1:-Qwen/Qwen2.5-VL-7B-Instruct}"
 POOL_MODE="${2:-N_5}"
-shift 2 || true
+if [ "$#" -ge 2 ]; then
+    shift 2
+elif [ "$#" -eq 1 ]; then
+    shift 1
+fi
 
-DETECTORS=("sam3" "grounding_dino" "dinox")
+DETECTORS=("sam3" "grounding_dino" "florence2" "dinov3")
 FIXED_SCORER="siglip"
 
 for DET in "${DETECTORS[@]}"; do
@@ -32,8 +37,10 @@ for DET in "${DETECTORS[@]}"; do
         DET_PATH="${SAM3_PATH}"
     elif [ "${DET}" == "grounding_dino" ]; then
         DET_PATH="${GROUNDING_DINO_PATH}"
-    elif [ "${DET}" == "dinox" ]; then
-        DET_PATH="${DINOX_PATH}"
+    elif [ "${DET}" == "florence2" ]; then
+        DET_PATH="${FLORENCE2_PATH}"
+    elif [ "${DET}" == "dinov3" ]; then
+        DET_PATH="${DINOV3_PATH}"
     fi
 
     "${PYTHON_BIN}" "${ABLATION_DIR}/eval_runner_ablation.py" \

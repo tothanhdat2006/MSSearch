@@ -21,7 +21,11 @@ export PYTHONPATH="${MSSEARCH_ROOT}:${OUR_DIR}:${PYTHONPATH:-}"
 
 MODEL_KEY="${1:-qwen2.5_vl_7b}"
 POOL_MODE="${2:-N_20}"
-shift 2 || true
+if [ "$#" -ge 2 ]; then
+    shift 2
+elif [ "$#" -eq 1 ]; then
+    shift 1
+fi
 
 case "${MODEL_KEY}" in
     qwen2.5_vl_7b|qwen|Qwen2.5-VL-7B-Instruct)

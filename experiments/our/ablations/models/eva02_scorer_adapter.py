@@ -3,6 +3,7 @@ EVA-02-L/14 Visual Scorer adapter for MSSearch ablation suite.
 Supports open_clip, timm, and HuggingFace AutoModel backbones.
 """
 
+import os
 from typing import List, Dict, Tuple, Optional, Any
 from PIL import Image
 import torch
@@ -17,8 +18,8 @@ class EVA02VisualScorer(BaseVisualScorer):
 
     def __init__(
         self,
-        model_name: str = "EVA02-L-14-336",
-        pretrained: str = "merged2b_s6b_b44k",
+        model_name: str = "timm/eva02_large_patch14_clip_336.merged2b_s6b_b61k",
+        pretrained: str = "merged2b_s6b_b61k",
         device: str = "cuda:0",
         torch_dtype: Optional[torch.dtype] = None,
         calib_center: float = 0.20,
@@ -45,14 +46,15 @@ class EVA02VisualScorer(BaseVisualScorer):
         # 1. Try loading via open_clip
         try:
             import open_clip  # type: ignore
-            print(f"[EVA02VisualScorer] Loading via open_clip: '{self.model_name}' ({self.pretrained}) on {self.device}...")
+            clip_id = f"hf-hub:{self.model_name}" if "/" in self.model_name and not self.model_name.startswith("hf-hub:") and not os.path.isdir(self.model_name) else self.model_name
+            print(f"[EVA02VisualScorer] Loading via open_clip: '{clip_id}' ({self.pretrained}) on {self.device}...")
             self.model, _, self.preprocess = open_clip.create_model_and_transforms(
-                self.model_name,
+                clip_id,
                 pretrained=self.pretrained,
                 device=self.device,
             )
             self.model.eval()
-            self.tokenizer = open_clip.get_tokenizer(self.model_name)
+            self.tokenizer = open_clip.get_tokenizer(clip_id)
             self.backend = "open_clip"
             return
         except Exception as e_clip:
@@ -60,7 +62,7 @@ class EVA02VisualScorer(BaseVisualScorer):
 
         # 2. Try loading via HuggingFace AutoModel / AutoProcessor
         from transformers import AutoModel, AutoProcessor
-        hf_repo = "QuanSun/EVA-CLIP" if "eva" in self.model_name.lower() else self.model_name
+        hf_repo = self.model_name if self.model_name else "timm/eva02_large_patch14_clip_336.merged2b_s6b_b61k"
         print(f"[EVA02VisualScorer] Loading via HuggingFace: '{hf_repo}' on {self.device}...")
         self.model = AutoModel.from_pretrained(
             hf_repo,

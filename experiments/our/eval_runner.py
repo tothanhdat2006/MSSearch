@@ -60,6 +60,8 @@ def parse_args():
     parser.add_argument("--start_idx", type=int, default=None)
     parser.add_argument("--end_idx", type=int, default=None)
     parser.add_argument("--max_samples", type=int, default=None)
+    parser.add_argument("--gate_threshold", type=float, default=None,
+                        help="VLM gating probability threshold in [0.0, 1.0] (e.g. 0.3, 0.5, 0.7).")
     parser.add_argument("--resume", action="store_true", default=False)
     parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
@@ -110,6 +112,7 @@ def main():
         siglip_name=args.siglip_name,
         nlp_model=args.nlp_model,
         config_path=args.config,
+        gate_threshold=args.gate_threshold,
         device=args.device
     )
     engines["config"].save_json(config_file)
@@ -166,6 +169,7 @@ def main():
 
             record = {
                 "sample_id": sample_id, "sample_index": s_idx, "pool_name": pool_name, "pool_N": len(candidate_meta),
+                "gate_threshold": getattr(engines["config"], "gate_threshold", args.gate_threshold or 0.5),
                 "question": question, "ground_truth_list": gt_list, "gt_image_id": gt_img_id, "gt_image_idx": gt_img_idx,
                 "primary_pred_image_id": prim_img_id, "primary_pred_image_idx": prim_img_idx, "is_primary_image_correct": is_prim_img_correct,
                 "pred_image_ids": evidence_img_ids, "pred_image_indices": evidence_indices, "is_image_correct": is_img_correct,

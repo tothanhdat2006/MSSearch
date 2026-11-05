@@ -209,7 +209,7 @@ def run_tool_based_fast_path(
             continue
 
         # 2. Extract and cache vision feature map for Stage 3 reuse
-        if config.reuse_stage2_features and 'vision_features' in backbone_out:
+        if config.reuse_stage2_features and backbone_out is not None and 'vision_features' in backbone_out:
             feat = backbone_out['vision_features']
             if isinstance(feat, torch.Tensor):
                 feat_np = feat.detach().cpu().float().numpy().squeeze(0)

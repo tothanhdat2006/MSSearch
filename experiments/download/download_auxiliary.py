@@ -9,9 +9,17 @@ from typing import Optional
 MODELSCOPE_SAM3_URL = "https://www.modelscope.cn/models/llp1995/sam3/resolve/master/sam3.tar.gz"
 MODELSCOPE_SPACY_URL = "https://www.modelscope.cn/models/llp1995/sam3/resolve/master/en_core_web_sm-3.8.0.tar.gz"
 SIGLIP_HF_REPO = "google/siglip-base-patch16-384"
+GROUNDING_DINO_HF_REPO = "IDEA-Research/grounding-dino-base"
+FLORENCE2_HF_REPO = "microsoft/Florence-2-large"
+CLIP_B32_HF_REPO = "openai/clip-vit-base-patch32"
+CLIP_L14_HF_REPO = "openai/clip-vit-large-patch14"
+EVA02_L14_HF_REPO = "timm/eva02_large_patch14_clip_336.merged2b_s6b_b61k"
+SIGLIP2_384_HF_REPO = "google/siglip2-so400m-patch16-384"
+SIGLIP2_512_HF_REPO = "google/siglip2-so400m-patch16-512"
+DINOV3_HF_REPO = "facebook/dinov3-vitl16-pretrain-lvd1689m"
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Download auxiliary weights (SAM3, SigLIP, spaCy).")
+    parser = argparse.ArgumentParser(description="Download auxiliary weights (SAM3, SigLIP, spaCy, and ablation models).")
     parser.add_argument("--base_model_dir", type=str, default="/data/shared/cvpr/dat/models",
                         help="Root directory for storing auxiliary models.")
     parser.add_argument("--sam3_url", type=str, default=MODELSCOPE_SAM3_URL,
@@ -20,6 +28,24 @@ def parse_args():
                         help="Direct download link for en_core_web_sm-3.8.0.tar.gz.")
     parser.add_argument("--siglip_repo", type=str, default=SIGLIP_HF_REPO,
                         help="HuggingFace repo ID for SigLIP.")
+    parser.add_argument("--download_ablations", action="store_true", default=False,
+                        help="Also download detector and scorer ablation models.")
+    parser.add_argument("--grounding_dino_repo", type=str, default=GROUNDING_DINO_HF_REPO,
+                        help="HuggingFace repo ID for Grounding DINO.")
+    parser.add_argument("--florence2_repo", type=str, default=FLORENCE2_HF_REPO,
+                        help="HuggingFace repo ID for Florence-2.")
+    parser.add_argument("--clip_b32_repo", type=str, default=CLIP_B32_HF_REPO,
+                        help="HuggingFace repo ID for CLIP-ViT-B/32.")
+    parser.add_argument("--clip_l14_repo", type=str, default=CLIP_L14_HF_REPO,
+                        help="HuggingFace repo ID for CLIP-ViT-L/14.")
+    parser.add_argument("--eva02_repo", type=str, default=EVA02_L14_HF_REPO,
+                        help="HuggingFace repo ID for EVA-02-L/14 CLIP.")
+    parser.add_argument("--siglip2_384_repo", type=str, default=SIGLIP2_384_HF_REPO,
+                        help="HuggingFace repo ID for SigLIP2-SO400M 384px.")
+    parser.add_argument("--siglip2_512_repo", type=str, default=SIGLIP2_512_HF_REPO,
+                        help="HuggingFace repo ID for SigLIP2-SO400M 512px.")
+    parser.add_argument("--dinov3_repo", type=str, default=DINOV3_HF_REPO,
+                        help="HuggingFace repo ID for DINOv3-ViT-L/16.")
     parser.add_argument("--hf_token", type=str, default=os.environ.get("HF_TOKEN", None),
                         help="Optional HuggingFace access token.")
     return parser.parse_args()
@@ -84,6 +110,41 @@ def main():
             token=args.hf_token
         )
     print(f"[Verified] SigLIP weights ready at '{siglip_target_dir}'.")
+
+    # 4. Ablation Models (Detectors and Scorers)
+    if args.download_ablations:
+        from huggingface_hub import snapshot_download
+
+        ablation_targets = [
+            ("grounding-dino-base", args.grounding_dino_repo, "Grounding DINO"),
+            ("Florence-2-large", args.florence2_repo, "Florence-2"),
+            ("dinov3-vitl16-pretrain-lvd1689m", args.dinov3_repo, "DINOv3-ViT-L/16"),
+            ("clip-vit-base-patch32", args.clip_b32_repo, "CLIP-ViT-B/32"),
+            ("clip-vit-large-patch14", args.clip_l14_repo, "CLIP-ViT-L/14"),
+            ("eva02_large_patch14_clip_336", args.eva02_repo, "EVA-02-L/14"),
+            ("siglip2-so400m-patch16-384", args.siglip2_384_repo, "SigLIP2-SO400M 384px"),
+            ("siglip2-so400m-patch16-512", args.siglip2_512_repo, "SigLIP2-SO400M 512px"),
+        ]
+
+        for folder_name, repo_id, label in ablation_targets:
+            target_dir = os.path.join(base_dir, folder_name)
+            has_files = os.path.exists(target_dir) and len(os.listdir(target_dir)) > 0
+            if not has_files:
+                print(f"[Download] Downloading {label} from Hugging Face '{repo_id}'...")
+                try:
+                    snapshot_download(
+                        repo_id=repo_id,
+                        local_dir=target_dir,
+                        local_dir_use_symlinks=False,
+                        token=args.hf_token
+                    )
+                    print(f"[Verified] {label} weights ready at '{target_dir}'.")
+                except Exception as e_dl:
+                    print(f"[Warning] Failed to download {label} from '{repo_id}': {e_dl}")
+                    if "401" in str(e_dl) or "gated" in str(e_dl).lower():
+                        print(f"[Info] '{repo_id}' is gated. Accept terms on HuggingFace and set --hf_token.")
+            else:
+                print(f"[Verified] {label} weights ready at '{target_dir}'.")
 
 if __name__ == "__main__":
     main()

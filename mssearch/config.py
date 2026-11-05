@@ -63,6 +63,7 @@ class MSSearchConfig:
     reuse_stage3_features: bool = True           # Reuse patch feature vectors from Stage 3
     sam3_group_det_threshold: float = 0.35       # SAM3 confidence threshold to keep a group
     enable_latent_gating: bool = True            # Query VLM latent confidence on centroid patch if no SAM3 det
+    gate_threshold: Optional[float] = None       # Probability threshold [0.0, 1.0] for VLM gating (default 0.5 -> 0.0 internal score)
     latent_confidence_threshold: float = 0.0     # Minimum VLM latent confidence [-1, 1] to keep group (default 0.0 -> P(Yes)>=0.5)
     latent_prompt_mode: str = "question_aware"   # "question_aware" (contextual QA prompt) or "target_object" (legacy target prompt)
     latent_prompt_template: str = "According to your common sense knowledge and the content of the image, is it possible to find a {} by further zooming the sub-patch? Answer Yes or No."
@@ -154,6 +155,15 @@ class MSSearchConfig:
     log_level: str = "summary"                   # "summary" (clean 1-line per stage), "verbose" (full internal loops), "quiet" (silent)
 
     def __post_init__(self):
+        # Synchronize gate_threshold probability [0, 1] with latent/existence [-1, 1] thresholds
+        if self.gate_threshold is not None:
+            p = float(self.gate_threshold)
+            score = round(2.0 * (p - 0.5), 4) if 0.0 <= p <= 1.0 else p
+            self.latent_confidence_threshold = score
+            self.existence_confidence_threshold = score
+        else:
+            self.gate_threshold = round((self.latent_confidence_threshold / 2.0) + 0.5, 4)
+
         # In multi-answer mode, disable early consensus exit to read all evidence crops across N images
         if self.multi_answer_mode:
             self.enable_early_consensus_exit = False

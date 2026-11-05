@@ -29,7 +29,8 @@ from eval_models_ablation import load_ablation_engines, run_ablation_pipeline
 
 def load_env_paths():
     """Loads ablation and base environment paths if available."""
-    for f_name in ["env_paths_ablation.sh", "env_paths.sh"]:
+    import re
+    for f_name in ["env_paths.sh", "env_paths_ablation.sh"]:
         p = os.path.join(_CUR_DIR, f_name)
         if not os.path.isfile(p):
             p = os.path.join(_OUR_DIR, f_name)
@@ -42,6 +43,10 @@ def load_env_paths():
                     if line and not line.startswith("#") and "=" in line:
                         k, v = line.split("=", 1)
                         k, v = k.strip(), v.strip().strip("'\"")
+                        m = re.match(r"^\$\{([A-Za-z0-9_]+):-(.*)\}$", v)
+                        if m:
+                            var_name, default_val = m.groups()
+                            v = os.environ.get(var_name, default_val)
                         if "${MODEL_DIR}" in v and "MODEL_DIR" in os.environ:
                             v = v.replace("${MODEL_DIR}", os.environ["MODEL_DIR"])
                         if k not in os.environ and v:
@@ -54,17 +59,21 @@ def parse_args():
 
     # Ablation Dimension 1: Detector Backbone
     parser.add_argument("--detector", type=str, default=os.environ.get("DETECTOR_TYPE", "sam3"),
-                        choices=["sam3", "grounding_dino", "dinox"],
-                        help="Detection backbone: 'sam3', 'grounding_dino', or 'dinox'.")
+                        choices=["sam3", "grounding_dino", "florence2", "dinov3"],
+                        help="Detection backbone: 'sam3', 'grounding_dino', 'florence2', or 'dinov3'.")
     parser.add_argument("--detector_path", type=str, default=os.environ.get("DETECTOR_PATH", None),
                         help="Path or HF ID for detection checkpoint.")
 
     # Ablation Dimension 2: Visual Screening Scorer
     parser.add_argument("--scorer", type=str, default=os.environ.get("SCORER_TYPE", "siglip"),
-                        choices=["siglip", "clip_b32", "clip_l14", "eva02_l14"],
-                        help="Visual screening scorer: 'siglip', 'clip_b32', 'clip_l14', or 'eva02_l14'.")
+                        choices=["siglip", "siglip2_384", "siglip2_512", "clip_b32", "clip_l14", "eva02_l14"],
+                        help="Visual screening scorer: 'siglip', 'siglip2_384', 'siglip2_512', 'clip_b32', 'clip_l14', or 'eva02_l14'.")
     parser.add_argument("--scorer_path", type=str, default=os.environ.get("SCORER_PATH", None),
                         help="Path or HF ID for screening checkpoint.")
+
+    # Ablation Dimension 3: Gating Confidence Threshold
+    parser.add_argument("--gate_threshold", type=float, default=None,
+                        help="VLM gating probability threshold in [0.0, 1.0] (e.g. 0.3, 0.5, 0.7).")
 
     # Base Pipeline Settings
     parser.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-VL-7B-Instruct"),
@@ -98,7 +107,8 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     m_name = os.path.basename(os.path.normpath(args.model_path))
 
-    prefix = f"results_ablation_{args.detector}_{args.scorer}_{m_name}_{args.pool_mode}"
+    gate_tag = f"_gate{args.gate_threshold}" if args.gate_threshold is not None else ""
+    prefix = f"results_ablation_{args.detector}_{args.scorer}{gate_tag}_{m_name}_{args.pool_mode}"
     cands = sorted(glob.glob(os.path.join(args.output_dir, f"{prefix}_*.jsonl")))
 
     if args.resume_from:
@@ -133,7 +143,7 @@ def main():
             print(f"[Auto-Resume] Found {len(completed_keys)} completed tasks in '{results_file}'.")
 
     remaining_tasks = [t for t in eval_tasks if f"{t[1].get('sample_id')}_{t[2]}" not in completed_keys]
-    print(f"[Ablation Queue] Detector: {args.detector} | Scorer: {args.scorer} | Tasks: {len(remaining_tasks)}/{len(eval_tasks)}")
+    print(f"[Ablation Queue] Detector: {args.detector} | Scorer: {args.scorer} | Gate: {args.gate_threshold or 0.5} | Tasks: {len(remaining_tasks)}/{len(eval_tasks)}")
 
     # Initialize engines
     engines = load_ablation_engines(
@@ -144,6 +154,7 @@ def main():
         scorer_name=args.scorer_path,
         nlp_model=args.nlp_model,
         config_path=args.config,
+        gate_threshold=args.gate_threshold,
         device=args.device,
     )
     engines["config"].save_json(config_file)
@@ -152,58 +163,84 @@ def main():
     # Evaluation loop
     with open(results_file, "a", encoding="utf-8") as out_f:
         for idx, (s_idx, sample, pool_name, pool_info) in enumerate(remaining_tasks):
-            t_start = time.time()
-            s_id = sample.get("sample_id", f"sample_{s_idx}")
-            pool_paths = pool_info.get("images", [])
+            sample_id = sample.get("sample_id", f"sample_{s_idx}")
+            question = sample.get("question") or sample.get("query", {}).get("question", "")
 
-            loaded_images = []
-            for p in pool_paths:
-                img = resolve_image(p, args.image_dir)
-                if img is not None:
-                    loaded_images.append(img)
+            ans_field = sample.get("answer")
+            if isinstance(ans_field, dict):
+                gt_list = ans_field.get("list", [])
+            elif isinstance(ans_field, list):
+                gt_list = ans_field
+            elif isinstance(ans_field, str):
+                gt_list = [ans_field]
+            else:
+                gt_list = []
 
-            if not loaded_images:
-                print(f"[Skip] Sample {s_id} ({pool_name}): no valid images resolved.")
-                continue
+            candidate_meta = pool_info.get("images", [])
+            images = [resolve_image(m, args.image_dir) for m in candidate_meta]
 
-            try:
-                resp = run_ablation_pipeline(engines, loaded_images, sample, s_idx)
-            except Exception as e:
-                print(f"[Error] Pipeline execution failed on {s_id}: {e}")
-                resp = {"response": "", "error": str(e), "telemetry": {}}
+            t0 = time.perf_counter()
+            resp = run_ablation_pipeline(engines, images, sample, s_idx)
+            latency = round(time.perf_counter() - t0, 3)
 
-            t_elapsed = time.time() - t_start
+            pred_text = resp.get("primary_answer", "")
+            telemetry = resp.get("telemetry", {})
+
+            gt_img = pool_info.get("gt_image") or sample.get("gt_image")
+            gt_img_id = gt_img.get("image_id") if isinstance(gt_img, dict) else (gt_img or "")
+            gt_idx = pool_info.get("gt_index")
+            gt_img_idx = (gt_idx - 1) if gt_idx is not None else next((i for i, m in enumerate(candidate_meta) if str(m.get("image_id")) == str(gt_img_id)), None)
+
+            evidence_indices = telemetry.get("evidence_images", [])
+            evidence_img_ids = [
+                candidate_meta[i].get("image_id") if isinstance(candidate_meta[i], dict) else str(candidate_meta[i])
+                for i in evidence_indices if 0 <= i < len(candidate_meta)
+            ]
+            is_img_correct = (str(gt_img_id) in [str(x) for x in evidence_img_ids]) if (evidence_img_ids and gt_img_id) else (False if gt_img_id else None)
+
+            prim_img_idx = telemetry.get("primary_evidence_image")
+            if prim_img_idx is None and evidence_indices:
+                prim_img_idx = evidence_indices[0]
+            prim_img_id = (
+                candidate_meta[prim_img_idx].get("image_id") if isinstance(candidate_meta[prim_img_idx], dict) else str(candidate_meta[prim_img_idx])
+            ) if (prim_img_idx is not None and 0 <= prim_img_idx < len(candidate_meta)) else None
+            is_prim_img_correct = (str(gt_img_id) == str(prim_img_id)) if (gt_img_id and prim_img_id) else (False if gt_img_id else None)
+
+            stage_stats = compute_stage_ret_rej_tokens(telemetry, gt_img_idx, sample.get("target_bbox"), images)
 
             record = {
-                "sample_id": s_id,
-                "dataset_sample_idx": s_idx,
-                "pool_name": pool_name,
-                "pool_size": len(loaded_images),
-                "model_name": m_name,
-                "detector_type": args.detector,
-                "scorer_type": args.scorer,
-                "prediction": resp.get("response", ""),
-                "ground_truth": sample.get("answer", ""),
-                "question": sample.get("question", ""),
-                "time_taken": round(t_elapsed, 3),
-                "telemetry": resp.get("telemetry", {}),
+                "sample_id": sample_id, "sample_index": s_idx, "pool_name": pool_name, "pool_N": len(candidate_meta),
+                "model_name": m_name, "detector_type": args.detector, "scorer_type": args.scorer,
+                "gate_threshold": getattr(engines["config"], "gate_threshold", args.gate_threshold or 0.5),
+                "question": question, "ground_truth_list": gt_list, "gt_image_id": gt_img_id, "gt_image_idx": gt_img_idx,
+                "primary_pred_image_id": prim_img_id, "primary_pred_image_idx": prim_img_idx, "is_primary_image_correct": is_prim_img_correct,
+                "pred_image_ids": evidence_img_ids, "pred_image_indices": evidence_indices, "is_image_correct": is_img_correct,
+                "prediction": pred_text, "route": telemetry.get("route", "UNKNOWN"),
+                "stage5_mode": telemetry.get("stage5_mode", ""), "stages_executed": telemetry.get("stages_executed", []),
+                "num_unified_crops": telemetry.get("num_unified_crops", 0), "timings_sec": telemetry.get("timings_sec", {}),
+                "stage_retention": stage_stats["stage_retention"], "stage_rejection": stage_stats["stage_rejection"],
+                "visual_tokens": stage_stats["visual_tokens"], "stage6_crop_sizes": stage_stats["stage6_crop_sizes"],
+                "latency_sec": latency,
             }
 
             out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
             out_f.flush()
             os.fsync(out_f.fileno())
 
-            for img in loaded_images:
-                try:
-                    img.close()
-                except Exception:
-                    pass
-            loaded_images.clear()
+            for img in images:
+                if img is not None:
+                    try:
+                        img.close()
+                    except Exception:
+                        pass
+            images.clear()
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            print(f"[{idx+1}/{len(remaining_tasks)}] {s_id} ({pool_name}) -> {record['prediction'][:40]} ({t_elapsed:.2f}s)")
+            route_str = "+".join(telemetry.get("routes_executed", [])) or telemetry.get("route", "UNKNOWN")
+            print(f"[{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) [{pool_name}|N={len(candidate_meta)}] "
+                  f"ImgOk:{is_img_correct} | Route:{route_str:<18} | Time:{latency:5.2f}s | Pred:'{pred_text[:40]}'")
 
     print(f"[Ablation Complete] All outputs saved to '{results_file}'.")
 

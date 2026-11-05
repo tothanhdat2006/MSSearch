@@ -10,6 +10,7 @@ def load_our_engines(
     siglip_name: str = "/data/shared/cvpr/dat/models/siglip-base-patch16-384",
     nlp_model: str = "/data/shared/cvpr/dat/models/spacy/en_core_web_sm-3.8.0",
     config_path: str = None,
+    gate_threshold: float = None,
     device: str = "cuda:0"
 ) -> Dict[str, Any]:
     """Initializes VLM, SAM3, SigLIP, and spaCy engines for MSSearch V2."""
@@ -56,6 +57,8 @@ def load_our_engines(
     if os.path.exists(cfg_file):
         with open(cfg_file, "r", encoding="utf-8") as f:
             cfg_dict = json.load(f)
+    if gate_threshold is not None:
+        cfg_dict["gate_threshold"] = float(gate_threshold)
     config = MSSearchConfig.from_dict(cfg_dict)
 
     return {

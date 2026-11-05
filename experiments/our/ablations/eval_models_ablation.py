@@ -24,11 +24,12 @@ def load_ablation_engines(
     scorer_name: Optional[str] = None,
     nlp_model: str = "en_core_web_sm",
     config_path: Optional[str] = None,
+    gate_threshold: Optional[float] = None,
     device: str = "cuda:0",
 ) -> Dict[str, Any]:
     """
-    Initializes VLM, perception detector (SAM3 / Grounding DINO / DINO-X),
-    visual screening scorer (SigLIP / CLIP-B/32 / CLIP-L/14 / EVA-02-L/14),
+    Initializes VLM, perception detector (SAM3 / Grounding DINO / Florence-2 / DINOv3),
+    visual screening scorer (SigLIP / SigLIP2 / CLIP-B/32 / CLIP-L/14 / EVA-02-L/14),
     and NLP pipeline for ablation experiments.
     """
     from mssearch.config import MSSearchConfig
@@ -78,6 +79,8 @@ def load_ablation_engines(
     if os.path.exists(cfg_file):
         with open(cfg_file, "r", encoding="utf-8") as f:
             cfg_dict = json.load(f)
+    if gate_threshold is not None:
+        cfg_dict["gate_threshold"] = float(gate_threshold)
     config = MSSearchConfig.from_dict(cfg_dict)
 
     return {

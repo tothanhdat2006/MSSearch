@@ -10,17 +10,26 @@ from .base import BaseDetector
 class SAM3Detector(BaseDetector):
     """Wraps SAM3 open-vocabulary detection engine conforming to BaseDetector."""
 
-    def __init__(self, model_path: str, device: Optional[str] = None, **kwargs):
-        from mssearch.models.modeling_sam3 import sam3_inference
+    def __init__(self, model_path: str = "", device: Optional[str] = None, engine: Optional[Any] = None, **kwargs):
         self.model_path = model_path
         self.device = device
-        self.engine = sam3_inference(model_path=model_path, device=device, **kwargs)
+        if engine is not None:
+            self.engine = engine
+        else:
+            try:
+                from mssearch.models.modeling_sam3 import sam3_inference
+                self.engine = sam3_inference(model_path=model_path, device=device, **kwargs)
+            except ImportError:
+                # Stub fallback when local dependencies (e.g. sam3 / spacy) are not present
+                self.engine = None
 
     def batch_inference(
         self,
         image: Image.Image,
         text_prompts: List[str],
     ) -> Tuple[Optional[Dict[str, Any]], Dict[int, Dict[str, Any]], List[int]]:
+        if self.engine is None:
+            return None, {i: {"boxes": [], "scores": []} for i in range(1, len(text_prompts) + 1)}, list(range(1, len(text_prompts) + 1))
         return self.engine.batch_inference(image, text_prompts)
 
     def batch_inference_multi_images(

@@ -241,7 +241,7 @@ def run_foveated_vlm_reading(
             break
 
     # 4. Semantic Deduplication of Answer Memory using clean final answers & Majority Voting
-    if is_singular and extractions:
+    if extractions:
         winner_ans, _, ranked_answers = resolve_by_majority_voting(
             extractions,
             similarity_thresh=getattr(config, "answer_dedup_similarity", 0.75),
@@ -249,12 +249,7 @@ def run_foveated_vlm_reading(
         )
         final_dedup_answers = ranked_answers if ranked_answers else []
     else:
-        clean_ans_list = [e.final_answer for e in extractions if e.final_answer]
-        final_dedup_answers = deduplicate_answers(
-            clean_ans_list,
-            similarity_threshold=config.answer_dedup_similarity,
-            verbose=config.verbose
-        )
+        final_dedup_answers = []
 
     # 5. Strict Evidence Pruning: Retain only image indices that yielded affirmative, non-negative answers
     valid_evidence_indices: List[int] = []

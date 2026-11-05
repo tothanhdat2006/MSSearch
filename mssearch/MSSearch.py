@@ -697,13 +697,19 @@ class MultiSourceSearchEngine:
         informative_answers = [a for a in harvested_answers if not is_negative_or_unanswerable(a)]
         final_answers_out = informative_answers if informative_answers else harvested_answers
 
-        is_singular = is_singular_query(question, question_type)
+        pred_list = []
+        for a in final_answers_out:
+            tokens = split_attribute_answer(a)
+            for t in tokens:
+                if t.lower() not in [x.lower() for x in pred_list]:
+                    pred_list.append(t)
+
         is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
 
         primary_answer = None
         primary_evidence_img_idx = None
 
-        if is_singular and final_result.extractions:
+        if final_result.extractions:
             voted_ans, voted_img_idx, _ = resolve_by_majority_voting(
                 final_result.extractions,
                 similarity_thresh=getattr(self.config, "answer_dedup_similarity", 0.75),
@@ -714,14 +720,7 @@ class MultiSourceSearchEngine:
                 primary_evidence_img_idx = voted_img_idx
 
         if primary_answer is None:
-            pred_list = []
-            for a in final_answers_out:
-                tokens = split_attribute_answer(a)
-                for t in tokens:
-                    if t.lower() not in [x.lower() for x in pred_list]:
-                        pred_list.append(t)
-
-            if is_attr_mode and pred_list and not is_singular:
+            if is_attr_mode and pred_list:
                 primary_answer = ", ".join(pred_list)
             elif informative_answers:
                 primary_answer = "; ".join(informative_answers) if is_multi else informative_answers[0]
