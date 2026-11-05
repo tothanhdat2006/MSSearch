@@ -5,6 +5,27 @@ from typing import List, Dict, Optional, Union, Any
 from PIL import Image
 import numpy as np
 from transformers import AutoTokenizer
+class _LlavaUnavailable:
+    _error: Optional[Exception] = None
+
+    @classmethod
+    def raise_err(cls, *args, **kwargs):
+        msg = "The 'llava' package is required to use ModelGlobalLocal. Please ensure it is installed in your environment."
+        if cls._error is not None:
+            raise ImportError(f"{msg} Original error: {cls._error}") from cls._error
+        raise ImportError(msg)
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        cls.raise_err()
+
+    def __init__(self, *args, **kwargs):
+        self.raise_err()
+
+    def __getattr__(self, name):
+        self.raise_err()
+
+
 try:
     from llava.model.language_model.llava_qwen import LlavaQwenForCausalLM
     from llava.model.language_model.llava_llama import LlavaLlamaForCausalLM, LlavaConfig
@@ -13,24 +34,7 @@ try:
     from llava.conversation import conv_templates
     from llava.mm_utils import tokenizer_image_token, process_images
 except (ModuleNotFoundError, ImportError) as e:
-    _llava_import_err = e
-    def _raise_llava_import_error(*args, **kwargs):
-        raise ImportError(
-            f"The 'llava' package is required to use ModelGlobalLocal. "
-            f"Please ensure it is installed in your environment. Original error: {_llava_import_err}"
-        ) from _llava_import_err
-
-    class _LlavaUnavailable:
-        def __init__(self, *args, **kwargs):
-            _raise_llava_import_error()
-
-        @classmethod
-        def from_pretrained(cls, *args, **kwargs):
-            _raise_llava_import_error()
-
-        def __getattr__(self, name):
-            _raise_llava_import_error()
-
+    _LlavaUnavailable._error = e
     LlavaQwenForCausalLM = _LlavaUnavailable
     LlavaLlamaForCausalLM = _LlavaUnavailable
     LlavaConfig = _LlavaUnavailable
@@ -38,8 +42,8 @@ except (ModuleNotFoundError, ImportError) as e:
     IMAGE_TOKEN_INDEX = -200
     DEFAULT_IMAGE_TOKEN = "<image>"
     conv_templates = {}
-    tokenizer_image_token = _raise_llava_import_error
-    process_images = _raise_llava_import_error
+    tokenizer_image_token = _LlavaUnavailable.raise_err
+    process_images = _LlavaUnavailable.raise_err
 from .tree import Node, NodeA
 from .utils import *
 from sentence_transformers import SentenceTransformer, util
@@ -48,7 +52,7 @@ class Model(ABC):
     def __init__(self, model_path: str, conv_type: str = "qwen_1_5", device: str = "cuda:0", torch_dtype=torch.float16,
                  attn_implementation="flash_attention_2", padding_side="left", **kwargs) -> None:
         if LlavaQwenForCausalLM is _LlavaUnavailable:
-            _raise_llava_import_error()
+            _LlavaUnavailable.raise_err()
 
         disable_torch_init()
         self.device = device
