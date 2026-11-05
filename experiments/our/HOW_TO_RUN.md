@@ -1,10 +1,23 @@
 # How to Run MSSearch V2 Evaluation Benchmark
 
-This guide summarizes execution of the complete MSSearch V2 benchmark on **STASHBench** (336 samples) across **3 Vision-Language Models** and **4 Candidate Pool Sizes** ($N \in \{1, 5, 10, 20\}$), totaling **12 evaluation configurations**.
+This guide outlines the standard 4-step workflow to evaluate MSSearch V2 on **STASHBench** (336 samples) across **3 Vision-Language Models** and **4 Candidate Pool Sizes** ($N \in \{1, 5, 10, 20\}$), totaling **12 evaluation configurations**:
+
+```
+[Step 1] Configure Global Paths (env_paths.sh)
+    │
+    ▼
+[Step 2] Download Data, Auxiliary Weights & VLMs
+    │
+    ▼
+[Step 3] Run Main Evaluation Scripts (A6000 / A100 / Colab / Modal)
+    │
+    ▼
+[Step 4] Evaluate Predictions & Calculate Metrics
+```
 
 ---
 
-## 1. Matrix Overview (3 Models $\times$ 4 Pool Sizes = 12 Configurations)
+## Evaluation Matrix Overview (12 Configurations)
 
 | Model Key | Full Model Identifier | Architecture | VRAM Requirement |
 | :--- | :--- | :--- | :--- |
@@ -12,73 +25,119 @@ This guide summarizes execution of the complete MSSearch V2 benchmark on **STASH
 | `llava_ov_7b` | `lmms-lab/llava-onevision-qwen2-7b-ov` | AnyRes Multi-Patch | ~24 GB (40GB/80GB GPU) |
 | `internvl3_8b` | `OpenGVLab/InternVL3-8B` | Dynamic High-Res ViT | ~24 GB (40GB/80GB GPU) |
 
-### Pool Sizes ($N$):
-- **`N_1`**: Ground-truth image only (no distractors, $N=1$).
-- **`N_5`**: Ground-truth image + 4 distractors ($N=5$).
-- **`N_10`**: Ground-truth image + 9 distractors ($N=10$).
-- **`N_20`**: Ground-truth image + 19 distractors ($N=20$).
+### Candidate Pool Sizes ($N$):
+- **`N_1`**: Ground-truth target image only (no distractors, $N=1$).
+- **`N_5`**: Ground-truth target image + 4 distractor images ($N=5$).
+- **`N_10`**: Ground-truth target image + 9 distractor images ($N=10$).
+- **`N_20`**: Ground-truth target image + 19 distractor images ($N=20$).
 
 ---
 
-## 2. One-Time Setup: Configure `env_paths.sh`
+## Step 1: Setup Global Environment & Paths (`env_paths.sh`)
 
-All local and HPC scripts load paths from a single file:  
+All runner scripts, Slurm batch files, and Python entrypoints load paths from a single centralized file:  
 `experiments/our/env_paths.sh`
 
-Edit this file once with your local dataset and model paths:
+Edit this file once with your cluster/workstation storage paths:
+
 ```bash
-# 1. Python Environment
+# ==============================================================================
+# experiments/our/env_paths.sh
+# ==============================================================================
+
+# 1. Python Environment Activation
 export CONDA_ENV_NAME="hrsearch"
 export VENV_PATH="/data/shared/cvpr/dat/.venv/bin/activate"
 
-# 2. Checkpoints
+# 2. Checkpoints Root & Auxiliary Models
 export MODEL_DIR="/data/shared/cvpr/dat/models"
 export SAM3_PATH="${MODEL_DIR}/sam3/sam3.pt"
 export SIGLIP_NAME="${MODEL_DIR}/siglip-base-patch16-384"
 export NLP_MODEL="${MODEL_DIR}/spacy/en_core_web_sm-3.8.0"
 
-# 3. STASHBench Dataset
+# 3. STASHBench Dataset & Pool Images
 export DATASET_PATH="/data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json"
 export IMAGE_DIR="/data/shared/cvpr/dat/simple/data/STASHBench/pool"
+
+# 4. Optional Base Output Directory (defaults to repo results folder if empty)
+export OUTPUT_BASE_DIR=""
 ```
-*(If `/data/shared/...` is not found, scripts automatically fall back to repo-relative paths: `<repo>/models/` and `<repo>/data/STASHBench/`)*.
+
+*(If `/data/shared/...` paths do not exist, scripts automatically fall back to repo-relative paths: `<repo>/models/` and `<repo>/data/STASHBench/`)*.
 
 ---
 
-## 3. Prerequisite: Download Auxiliary Models (SAM3, SigLIP, spaCy)
+## Step 2: Run Download Scripts for Data & Models
 
-> **Important**: Evaluation runner scripts do **not** automatically download SAM3 checkpoint weights or auxiliary assets to `$MODEL_DIR`.
->
-> - **SAM3 (`sam3.pt`)**: **Must be pre-downloaded**. If `SAM3_PATH` does not point to an existing file, the runner throws `FileNotFoundError`.
-> - **SigLIP & VLMs**: If not found in `$MODEL_DIR`, Hugging Face downloads them into `~/.cache/huggingface/hub/` (not into `$MODEL_DIR`).
-> - **spaCy**: Requires `en_core_web_sm` installed in your Python environment.
+> **Important**: The evaluation runner scripts do **not** automatically download SAM3 checkpoint weights or datasets. Missing weights trigger `FileNotFoundError`. Pre-downloading ensures offline reproducibility and prevents runtime download latency.
 
-Before running evaluations on A6000 or A100 clusters, download all required auxiliary models once:
+Source your environment variables from Step 1, then run the download utilities:
 
 ```bash
-# 1. Download SAM3, SigLIP, and spaCy into your configured MODEL_DIR
-python experiments/download/download_auxiliary.py \
-    --base_model_dir /data/shared/cvpr/dat/models
+# Source paths configured in Step 1
+source experiments/our/env_paths.sh
+```
 
-# 2. Ensure the spaCy English pipeline is installed in your Python environment
-python -m spacy download en_core_web_sm
+### Option A: Download Everything in One Command
+Downloads dataset annotations, pool images, auxiliary weights (SAM3, SigLIP, spaCy), and target models into the paths configured in `env_paths.sh`:
 
-# Or download everything (dataset + auxiliary weights) in one step:
+```bash
 python experiments/download/download_all.py \
-    --base_model_dir /data/shared/cvpr/dat/models \
-    --data_dir /data/shared/cvpr/dat/simple/data/STASHBench
+    --base_model_dir "${MODEL_DIR}" \
+    --data_dir "$(dirname "${DATASET_PATH}")" \
+    --models Qwen2.5-VL-7B LLaVA-OV-7B InternVL3-8B
+```
+
+### Option B: Download Step-by-Step
+
+#### 1. Download STASHBench Dataset & Candidate Pool
+```bash
+python experiments/download/download_data.py \
+    --data_dir "$(dirname "${DATASET_PATH}")"
+```
+
+#### 2. Download Auxiliary Models (SAM3, SigLIP, spaCy)
+```bash
+# Downloads sam3.pt, siglip-base-patch16-384, and spacy model into MODEL_DIR
+python experiments/download/download_auxiliary.py \
+    --base_model_dir "${MODEL_DIR}"
+
+# Ensure spaCy English pipeline is linked in Python environment
+python -m spacy download en_core_web_sm
+```
+
+#### 3. Download Target Vision-Language Models (VLMs)
+```bash
+# Qwen2.5-VL-7B-Instruct
+python experiments/download/download_model.py \
+    --model_name Qwen2.5-VL-7B \
+    --base_model_dir "${MODEL_DIR}"
+
+# LLaVA-OneVision-7B
+python experiments/download/download_model.py \
+    --model_name LLaVA-OV-7B \
+    --base_model_dir "${MODEL_DIR}"
+
+# InternVL3-8B
+python experiments/download/download_model.py \
+    --model_name InternVL3-8B \
+    --base_model_dir "${MODEL_DIR}"
 ```
 
 ---
 
-## 4. Option A: Local Workstation / Server (Recommended)
+## Step 3: Run Main Evaluation Scripts
 
 Navigate to the repository root:
 ```bash
 cd /path/to/MSSearch
 ```
 
-### A. Run an Individual Configuration
+Choose your execution target:
+
+### 3.1 Local Workstation / Server (A6000 / Single GPU)
+
+#### A. Run an Individual Model & Pool Size
 ```bash
 # Qwen2.5-VL-7B
 bash experiments/our/scripts/A6000/run_our_qwen2.5_vl_7b_n1.sh
@@ -99,44 +158,35 @@ bash experiments/our/scripts/A6000/run_our_internvl3_8b_n10.sh
 bash experiments/our/scripts/A6000/run_our_internvl3_8b_n20.sh
 ```
 
-### B. Run All 3 Models on a Specific Pool Size
+#### B. Run All 3 Models on a Specific Pool Size
 ```bash
-# Sequentially runs Qwen, LLaVA, and InternVL on N=1
 bash experiments/our/scripts/A6000/run_our_all_n1.sh
-
-# Sequentially runs Qwen, LLaVA, and InternVL on N=5
 bash experiments/our/scripts/A6000/run_our_all_n5.sh
-
-# Sequentially runs Qwen, LLaVA, and InternVL on N=10
 bash experiments/our/scripts/A6000/run_our_all_n10.sh
-
-# Sequentially runs Qwen, LLaVA, and InternVL on N=20
 bash experiments/our/scripts/A6000/run_our_all_n20.sh
 ```
 
-### C. Run Full 12-Configuration Matrix Sweep
+#### C. Run Full 12-Configuration Sweep
 ```bash
-# Sequentially executes all 12 configurations across N=1, 5, 10, 20
+# Sequentially executes all 12 combinations
 bash experiments/our/scripts/A6000/run_our_sweep.sh
 ```
 
-### Passing Runtime Options (Resume & Subsetting)
+#### Passing Runtime Options
 Append CLI flags to any `.sh` script:
 ```bash
-# Resume an interrupted run from existing JSONL log:
+# Resume an interrupted run from existing JSONL output:
 bash experiments/our/scripts/A6000/run_our_qwen2.5_vl_7b_n5.sh --resume
 
-# Run a quick test slice (e.g. first 20 samples):
-bash experiments/our/scripts/A6000/run_our_qwen2.5_vl_7b_n5.sh --start_idx 0 --end_idx 20
+# Run a quick test slice (e.g. first 10 samples):
+bash experiments/our/scripts/A6000/run_our_qwen2.5_vl_7b_n5.sh --start_idx 0 --end_idx 10
 ```
 
 ---
 
-## 5. Option B: HPC Cluster (Slurm / A100)
+### 3.2 HPC Cluster (Slurm / A100)
 
-Ensure you have access to a node with at least 1x A100 (40GB/80GB):
-
-### A. Submit an Individual Slurm Job
+#### A. Submit an Individual Slurm Job
 ```bash
 # Qwen2.5-VL-7B
 sbatch experiments/our/scripts/A100/run_our_qwen2.5_vl_7b_n1.slurm
@@ -157,7 +207,7 @@ sbatch experiments/our/scripts/A100/run_our_internvl3_8b_n10.slurm
 sbatch experiments/our/scripts/A100/run_our_internvl3_8b_n20.slurm
 ```
 
-### B. Submit All 3 Models for a Pool Size
+#### B. Submit All 3 Models for a Pool Size
 ```bash
 bash experiments/our/scripts/A100/run_our_all_n1.slurm
 bash experiments/our/scripts/A100/run_our_all_n5.slurm
@@ -165,7 +215,7 @@ bash experiments/our/scripts/A100/run_our_all_n10.slurm
 bash experiments/our/scripts/A100/run_our_all_n20.slurm
 ```
 
-### C. Submit Full Matrix Sweep
+#### C. Submit Full Matrix Sweep
 ```bash
 # Submits all 12 Slurm batch jobs to the cluster queue at once
 bash experiments/our/scripts/A100/run_our_sweep.slurm
@@ -173,9 +223,9 @@ bash experiments/our/scripts/A100/run_our_sweep.slurm
 
 ---
 
-## 6. Option C: Google Colab Pro (`notebook/`)
+### 3.3 Google Colab Pro (`notebook/`)
 
-Each notebook in `experiments/our/notebook/` is fully self-contained for a specific model and pool size:
+Each notebook in `experiments/our/notebook/` is self-contained with automatic Google Drive mounting:
 
 | Model | $N=1$ | $N=5$ | $N=10$ | $N=20$ |
 | :--- | :--- | :--- | :--- | :--- |
@@ -183,51 +233,48 @@ Each notebook in `experiments/our/notebook/` is fully self-contained for a speci
 | **LLaVA-OV-7B** | `run_our_colab_llava_ov_7b_n1.ipynb` | `run_our_colab_llava_ov_7b_n5.ipynb` | `run_our_colab_llava_ov_7b_n10.ipynb` | `run_our_colab_llava_ov_7b_n20.ipynb` |
 | **InternVL3-8B** | `run_our_colab_internvl3_8b_n1.ipynb` | `run_our_colab_internvl3_8b_n5.ipynb` | `run_our_colab_internvl3_8b_n10.ipynb` | `run_our_colab_internvl3_8b_n20.ipynb` |
 
-**Steps in Colab:**
+**Execution Steps in Colab:**
 1. Open the notebook in Google Colab (Select **Runtime > Change runtime type > A100 GPU**).
-2. Store your GitHub token under Secrets (the key 🔑 icon) as `GITHUB_TOKEN`.
-3. **Run Cell 1**: Mounts Google Drive and auto-detects `annotations_part1234_merged.json` and `pool/`.
-4. **Run Cell 2**: Clones branch `draft/improve_all`.
-5. **Run Cell 3**: Installs dependencies and downloads SAM3 weights if missing.
-6. **Run Cell 4**: Starts evaluation. Results are written directly to Google Drive.
+2. Set your GitHub personal access token under Colab Secrets (the 🔑 icon) as `GITHUB_TOKEN`.
+3. Run **Cell 1** to mount Drive and auto-detect dataset folders.
+4. Run **Cells 2–4** to clone code, install dependencies, and launch evaluation. Results stream directly to your Drive.
 
 ---
 
-## 7. Option D: Modal Serverless Cloud (`scripts/modal/`)
+### 3.4 Modal Serverless Cloud (`scripts/modal/`)
 
-Ensure `modal` is configured (`modal setup` or token set). Target GPU is automatically assigned as **L40S (48GB)**.
+Ensure Modal is authenticated (`modal setup`). Target GPU is automatically assigned as **L40S (48GB)**.
 
-### A. Run in Foreground (Live Streaming Logs)
+#### A. Foreground Execution (Live Terminal Logs)
 ```bash
-# Using the run_modal.sh wrapper
 bash experiments/our/scripts/modal/run_modal.sh qwen2.5_vl_7b N_5
 bash experiments/our/scripts/modal/run_modal.sh llava_ov_7b N_5
 bash experiments/our/scripts/modal/run_modal.sh internvl3_8b N_5
 ```
 
-### B. Run Asynchronously in Background (`--detach`)
-Add `--detach` to run in the cloud without keeping your local terminal open:
+#### B. Background Execution (`--detach`)
+Add `--detach` to run jobs remotely in the cloud without keeping your local terminal open:
 ```bash
-# Launch background job
+# Launch detached job via wrapper
 bash experiments/our/scripts/modal/run_modal.sh qwen2.5_vl_7b N_5 --detach
 
-# Or direct Modal command (flag must precede script path):
+# Or direct Modal command (flag precedes script path):
 modal run --detach experiments/our/scripts/modal/run_our_modal.py \
     --model Qwen/Qwen2.5-VL-7B-Instruct \
     --pool-mode N_5
 ```
 
-Check status and retrieve logs anytime:
+Check status and retrieve live logs:
 ```bash
 modal app list
 modal app logs <app-id>
 ```
 
-### C. Launch All 12 Modal Jobs in Background
+#### C. Launch All 12 Modal Jobs in Background
 ```bash
 for model in qwen2.5_vl_7b llava_ov_7b internvl3_8b; do
     for pool in N_1 N_5 N_10 N_20; do
-        echo "Spawning Modal run: ${model} (${pool})"
+        echo "Launching Modal job: ${model} (${pool})"
         bash experiments/our/scripts/modal/run_modal.sh "${model}" "${pool}" --detach
     done
 done
@@ -235,18 +282,18 @@ done
 
 ---
 
-## 8. Evaluating Predictions & Summarizing Metrics
+## Step 4: Evaluate Predictions & Calculate Metrics
 
-After a run completes, evaluate the resulting `.jsonl` file against STASHBench ground truth:
+Once evaluation completes, compute benchmark scores against the STASHBench ground truth:
 
 ```bash
 python mssearch/eval/eval_stashbench.py \
     --results_file experiments/our/results_our_a6000_Qwen2.5-VL-7B-Instruct_N_5_*.jsonl \
-    --dataset_file data/STASHBench/annotations_part1234_merged.json
+    --dataset_file "${DATASET_PATH}"
 ```
 
-### Output Report
-The evaluator prints two sets of accuracy metrics:
+### Metrics Reported
+The evaluation tool reports both set-based and strict primary attribution accuracy:
 1. **Set-Based Evidence Accuracy**:
    - `Image Accuracy (Set)`: The ground-truth image is included anywhere in `telemetry.evidence_images`.
    - `Joint Accuracy (Set)`: Prediction text matches ground truth AND the GT image is in the evidence set.
