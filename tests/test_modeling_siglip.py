@@ -32,7 +32,7 @@ class TestSigLIPScorer(unittest.TestCase):
         self.assertTrue(torch.equal(_extract_embedding_tensor(mock_obj), t))
 
     def test_score_crops_huggingface_native(self):
-        scorer = SigLIPScorer(model_name="google/siglip-base-patch16-384", device="cpu")
+        scorer = SigLIPScorer(model_name="google/siglip2-so400m-patch16-512", device="cpu")
         scorer.is_siglip = True
 
         mock_model = MagicMock()

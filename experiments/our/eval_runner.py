@@ -42,7 +42,7 @@ def parse_args():
                         help="Path or HuggingFace ID of VLM checkpoint.")
     parser.add_argument("--sam3_path", type=str, default=os.environ.get("SAM3_PATH", "/data/shared/cvpr/dat/models/sam3/sam3.pt"),
                         help="Path to sam3.pt.")
-    parser.add_argument("--siglip_name", type=str, default=os.environ.get("SIGLIP_NAME", "/data/shared/cvpr/dat/models/siglip-base-patch16-384"),
+    parser.add_argument("--siglip_name", type=str, default=os.environ.get("SIGLIP_NAME", "/data/shared/cvpr/dat/models/siglip2-so400m-patch16-512"),
                         help="Path or HF ID for SigLIP.")
     parser.add_argument("--nlp_model", type=str, default=os.environ.get("NLP_MODEL", "/data/shared/cvpr/dat/models/spacy/en_core_web_sm-3.8.0"),
                         help="Path or name of spaCy model.")

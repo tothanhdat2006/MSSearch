@@ -103,7 +103,7 @@ def evaluate_ablation_modal(
         "dinov3": ("/models/dinov3-vitl16-pretrain-lvd1689m", "facebook/dinov3-vitl16-pretrain-lvd1689m"),
     }
     sc_map = {
-        "siglip": ("/models/siglip-base-patch16-384", "google/siglip-base-patch16-384"),
+        "siglip": ("/models/siglip2-so400m-patch16-512", "google/siglip2-so400m-patch16-512"),
         "siglip2_384": ("/models/siglip2-so400m-patch16-384", "google/siglip2-so400m-patch16-384"),
         "siglip2_512": ("/models/siglip2-so400m-patch16-512", "google/siglip2-so400m-patch16-512"),
         "clip_b32": ("/models/clip-vit-base-patch32", "openai/clip-vit-base-patch32"),

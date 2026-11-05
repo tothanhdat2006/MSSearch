@@ -94,7 +94,7 @@ class MSSearchConfig:
     # -------------------------------------------------------------------------
     # Stage 5: Direct Unified Candidate Pool Aggregation & Spatial NMS
     # -------------------------------------------------------------------------
-    siglip_model_name: str = "google/siglip-base-patch16-384"
+    siglip_model_name: str = "google/siglip2-so400m-patch16-512"
     siglip_device: str = "cuda:0"                # Shared on GPU 0 with Qwen2.5-VL layers 0-14
     enable_ios_containment_merging: bool = True  # Merge nested candidate boxes with IoS >= threshold (Area(A cap B) / Area(A) >= 0.95)
     ios_containment_threshold: float = 0.95      # Intersection-over-Self (IoS) threshold for nested containment pruning

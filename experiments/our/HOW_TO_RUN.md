@@ -49,7 +49,7 @@ export VENV_PATH="/data/shared/cvpr/dat/.venv/bin/activate"
 # 2. Checkpoints Root & Auxiliary Models
 export MODEL_DIR="/data/shared/cvpr/dat/models"
 export SAM3_PATH="${MODEL_DIR}/sam3/sam3.pt"
-export SIGLIP_NAME="${MODEL_DIR}/siglip-base-patch16-384"
+export SIGLIP_NAME="${MODEL_DIR}/siglip2-so400m-patch16-512"
 export NLP_MODEL="${MODEL_DIR}/spacy/en_core_web_sm-3.8.0"
 
 # 3. STASHBench Dataset & Pool Images
@@ -95,7 +95,7 @@ python experiments/download/download_data.py \
 
 #### 2. Download Auxiliary Models (SAM3, SigLIP, spaCy)
 ```bash
-# Downloads sam3.pt, siglip-base-patch16-384, and spacy model into MODEL_DIR
+# Downloads sam3.pt, siglip2-so400m-patch16-512, and spacy model into MODEL_DIR
 python experiments/download/download_auxiliary.py \
     --base_model_dir "${MODEL_DIR}"
 

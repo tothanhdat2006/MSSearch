@@ -62,7 +62,7 @@ export VENV_PATH="/data/shared/cvpr/dat/.venv/bin/activate"
 # Model & Perceptual Checkpoints
 export MODEL_DIR="/data/shared/cvpr/dat/models"
 export SAM3_PATH="${MODEL_DIR}/sam3/sam3.pt"
-export SIGLIP_NAME="${MODEL_DIR}/siglip-base-patch16-384"
+export SIGLIP_NAME="${MODEL_DIR}/siglip2-so400m-patch16-512"
 export NLP_MODEL="${MODEL_DIR}/spacy/en_core_web_sm-3.8.0"
 
 # STASHBench Dataset & Pool Images

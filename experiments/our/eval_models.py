@@ -7,7 +7,7 @@ from PIL import Image
 def load_our_engines(
     model_path: str = "Qwen/Qwen2.5-VL-7B-Instruct",
     sam3_path: str = "/data/shared/cvpr/dat/models/sam3/sam3.pt",
-    siglip_name: str = "/data/shared/cvpr/dat/models/siglip-base-patch16-384",
+    siglip_name: str = "/data/shared/cvpr/dat/models/siglip2-so400m-patch16-512",
     nlp_model: str = "/data/shared/cvpr/dat/models/spacy/en_core_web_sm-3.8.0",
     config_path: str = None,
     gate_threshold: float = None,

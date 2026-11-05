@@ -54,7 +54,7 @@ def main():
     parser.add_argument("--benchmark", type=str, default="hr-bench_multisource")
     parser.add_argument("--sam-model-path", type=str, default="/kaggle/input/datasets/thnhtt/vs-sam3/sam3/sam3/sam3.pt")
     parser.add_argument("--model-path", type=str, default="Qwen/Qwen2.5-VL-7B-Instruct")
-    parser.add_argument("--siglip-model-name", type=str, default="google/siglip-base-patch16-384")
+    parser.add_argument("--siglip-model-name", type=str, default="google/siglip2-so400m-patch16-512")
     parser.add_argument("--nlp-model-path", type=str, default="en_core_web_sm")
 
     # Ablation & Diagnostic Flags

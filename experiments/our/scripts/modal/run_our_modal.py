@@ -133,9 +133,9 @@ def evaluate_our_modal(
             if os.path.isfile(nested) and not os.path.isfile(sam3_path): shutil.copyfile(nested, sam3_path)
             models_volume.commit()
 
-    siglip_name = "/models/siglip-base-patch16-384"
+    siglip_name = "/models/siglip2-so400m-patch16-512"
     if not os.path.isdir(siglip_name):
-        siglip_name = "google/siglip-base-patch16-384"
+        siglip_name = "google/siglip2-so400m-patch16-512"
     nlp_model = "en_core_web_sm"
 
     engines = load_our_engines(

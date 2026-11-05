@@ -8,7 +8,7 @@ ANNOTATION_PATH="/kaggle/input/datasets/thnhtt/vs-dataset/anno.json"
 BASE_DATA_DIR="/kaggle/input/datasets/thnhtt/vs-dataset"
 MODEL_PATH="Qwen/Qwen2.5-VL-7B-Instruct"
 SAM_MODEL_PATH="/kaggle/input/datasets/thnhtt/vs-sam3/sam3/sam3/sam3.pt"
-SIGLIP_MODEL="google/siglip-base-patch16-384"
+SIGLIP_MODEL="google/siglip2-so400m-patch16-512"
 BENCHMARK="hr-bench_multisource"
 
 NUM_CHUNKS=1

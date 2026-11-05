@@ -85,9 +85,13 @@ def load_visual_scorer(
         from mssearch.models.modeling_siglip import SigLIPScorer
         name = model_name_or_path or "google/siglip2-so400m-patch16-512"
         return SigLIPScorer(model_name=name, device=device, **kwargs)
-    elif "siglip" in sc_lower:
+    elif sc_lower in ("siglip_base", "siglip_base_patch16_384"):
         from mssearch.models.modeling_siglip import SigLIPScorer
         name = model_name_or_path or "google/siglip-base-patch16-384"
+        return SigLIPScorer(model_name=name, device=device, **kwargs)
+    elif "siglip" in sc_lower:
+        from mssearch.models.modeling_siglip import SigLIPScorer
+        name = model_name_or_path or "google/siglip2-so400m-patch16-512"
         return SigLIPScorer(model_name=name, device=device, **kwargs)
     elif sc_lower in ("clip_b32", "clip_vit_b32", "clip_b_32"):
         name = model_name_or_path or "openai/clip-vit-base-patch32"

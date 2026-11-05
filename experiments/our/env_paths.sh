@@ -7,10 +7,10 @@
 # - Colab and Modal evaluations
 # ==============================================================================
 
-# Derive repo root relative to this configuration file
-_CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_MSSEARCH_ROOT="$(cd "${_CONFIG_DIR}/../.." && pwd)"
-_REPO_ROOT="$(cd "${_MSSEARCH_ROOT}/../.." && pwd)"
+# Explicit directory configuration (override via env; no dynamic BASH_SOURCE or executing dir)
+export _REPO_ROOT="${_REPO_ROOT:-/data/shared/cvpr/dat/simple}"
+export _MSSEARCH_ROOT="${_MSSEARCH_ROOT:-/data/shared/cvpr/dat/simple/experiments/multisource/MSSearch}"
+export _CONFIG_DIR="${_CONFIG_DIR:-/data/shared/cvpr/dat/simple/experiments/multisource/MSSearch/experiments/our}"
 
 # ------------------------------------------------------------------------------
 # 1. Python Environment Activation
@@ -31,11 +31,11 @@ if [ ! -f "${SAM3_PATH}" ] && [ -f "${_REPO_ROOT}/models/sam3/sam3.pt" ]; then
     export SAM3_PATH="${_REPO_ROOT}/models/sam3/sam3.pt"
 fi
 
-export SIGLIP_NAME="${SIGLIP_NAME:-${MODEL_DIR}/siglip-base-patch16-384}"
-if [ ! -d "${SIGLIP_NAME}" ] && [ -d "${_REPO_ROOT}/models/siglip-base-patch16-384" ]; then
-    export SIGLIP_NAME="${_REPO_ROOT}/models/siglip-base-patch16-384"
+export SIGLIP_NAME="${SIGLIP_NAME:-${MODEL_DIR}/siglip2-so400m-patch16-512}"
+if [ ! -d "${SIGLIP_NAME}" ] && [ -d "${_REPO_ROOT}/models/siglip2-so400m-patch16-512" ]; then
+    export SIGLIP_NAME="${_REPO_ROOT}/models/siglip2-so400m-patch16-512"
 elif [ ! -d "${SIGLIP_NAME}" ]; then
-    export SIGLIP_NAME="google/siglip-base-patch16-384"
+    export SIGLIP_NAME="google/siglip2-so400m-patch16-512"
 fi
 
 export NLP_MODEL="${NLP_MODEL:-${MODEL_DIR}/spacy/en_core_web_sm-3.8.0}"

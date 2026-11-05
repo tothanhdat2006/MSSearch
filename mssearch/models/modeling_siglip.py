@@ -60,7 +60,7 @@ class SigLIPScorer:
 
     def __init__(
         self,
-        model_name: str = "google/siglip-base-patch16-384",
+        model_name: str = "google/siglip2-so400m-patch16-512",
         device: str = "cuda:0",
         torch_dtype: torch.dtype = torch.float16,
         **kwargs,

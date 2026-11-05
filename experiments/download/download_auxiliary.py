@@ -8,7 +8,7 @@ from typing import Optional
 
 MODELSCOPE_SAM3_URL = "https://www.modelscope.cn/models/llp1995/sam3/resolve/master/sam3.tar.gz"
 MODELSCOPE_SPACY_URL = "https://www.modelscope.cn/models/llp1995/sam3/resolve/master/en_core_web_sm-3.8.0.tar.gz"
-SIGLIP_HF_REPO = "google/siglip-base-patch16-384"
+SIGLIP_HF_REPO = "google/siglip2-so400m-patch16-512"
 GROUNDING_DINO_HF_REPO = "IDEA-Research/grounding-dino-base"
 FLORENCE2_HF_REPO = "microsoft/Florence-2-large"
 CLIP_B32_HF_REPO = "openai/clip-vit-base-patch32"
@@ -99,7 +99,7 @@ def main():
     print(f"[Verified] spaCy pipeline ready at '{spacy_model_path}'.")
 
     # 3. SigLIP
-    siglip_target_dir = os.path.join(base_dir, "siglip-base-patch16-384")
+    siglip_target_dir = os.path.join(base_dir, "siglip2-so400m-patch16-512")
     if not os.path.exists(siglip_target_dir) or not os.path.exists(os.path.join(siglip_target_dir, "config.json")):
         print(f"[Download] Downloading SigLIP from Hugging Face '{args.siglip_repo}'...")
         from huggingface_hub import snapshot_download
