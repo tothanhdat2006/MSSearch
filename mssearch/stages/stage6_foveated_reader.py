@@ -20,6 +20,7 @@ from .utils_stage6 import (
     split_attribute_answer,
     deduplicate_answers,
     is_singular_query,
+    resolve_by_majority_voting,
 )
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     "split_attribute_answer",
     "deduplicate_answers",
     "is_singular_query",
+    "resolve_by_majority_voting",
     "run_foveated_vlm_reading",
 ]
 
@@ -202,7 +204,8 @@ def run_foveated_vlm_reading(
                         expanded_box=exp_box,
                         raw_answer=raw_answer,
                         source_branch=item.source_branch,
-                        final_answer=final_ans
+                        final_answer=final_ans,
+                        crop_score=float(getattr(item, "score", 0.0) or 0.0)
                     )
                 )
                 evidence_indices.add(img_idx)
@@ -237,13 +240,21 @@ def run_foveated_vlm_reading(
         if early_exit_halted:
             break
 
-    # 4. Semantic Deduplication of Answer Memory using clean final answers
-    clean_ans_list = [e.final_answer for e in extractions if e.final_answer]
-    final_dedup_answers = deduplicate_answers(
-        clean_ans_list,
-        similarity_threshold=config.answer_dedup_similarity,
-        verbose=config.verbose
-    )
+    # 4. Semantic Deduplication of Answer Memory using clean final answers & Majority Voting
+    if is_singular and extractions:
+        winner_ans, _, ranked_answers = resolve_by_majority_voting(
+            extractions,
+            similarity_thresh=getattr(config, "answer_dedup_similarity", 0.75),
+            verbose=config.verbose
+        )
+        final_dedup_answers = ranked_answers if ranked_answers else []
+    else:
+        clean_ans_list = [e.final_answer for e in extractions if e.final_answer]
+        final_dedup_answers = deduplicate_answers(
+            clean_ans_list,
+            similarity_threshold=config.answer_dedup_similarity,
+            verbose=config.verbose
+        )
 
     # 5. Strict Evidence Pruning: Retain only image indices that yielded affirmative, non-negative answers
     valid_evidence_indices: List[int] = []

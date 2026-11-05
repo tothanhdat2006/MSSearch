@@ -6,7 +6,10 @@ from typing import List, Dict, Tuple, Optional, Union
 import numpy as np
 from PIL import Image
 
-from sklearn.cluster import AgglomerativeClustering
+try:
+    from sklearn.cluster import AgglomerativeClustering
+except ImportError:
+    AgglomerativeClustering = None
 
 from ..config import MSSearchConfig
 from .stage3_partitioning import BoundedPatch

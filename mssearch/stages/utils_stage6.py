@@ -18,6 +18,7 @@ class EvidenceExtraction:
     raw_answer: str
     source_branch: str
     final_answer: str = ""
+    crop_score: float = 0.0
 
 
 @dataclass
@@ -240,3 +241,64 @@ def is_singular_query(question: str, question_type: Optional[str] = None) -> boo
     if question_type in ["counting"]:
         return False
     return True
+
+
+def resolve_by_majority_voting(
+    extractions: List[EvidenceExtraction],
+    similarity_thresh: float = 0.75,
+    verbose: bool = False
+) -> Tuple[Optional[str], Optional[int], List[str]]:
+    """
+    Resolves conflicting candidate answers via semantic frequency and confidence majority voting.
+    Returns:
+        (primary_answer, primary_evidence_img_idx, ranked_answers)
+    """
+    valid = [e for e in extractions if e.final_answer and not is_negative_or_unanswerable(e.final_answer)]
+    if not valid:
+        return None, None, []
+
+    clusters: List[Dict[str, Any]] = []
+    for e in valid:
+        ans = e.final_answer.strip()
+        ans_clean = re.sub(r"^(?:a|an|the)\s+", "", ans, flags=re.IGNORECASE).strip().lower()
+        matched_cluster = None
+        for c in clusters:
+            rep_clean = re.sub(r"^(?:a|an|the)\s+", "", c["rep"], flags=re.IGNORECASE).strip().lower()
+            ratio = SequenceMatcher(None, ans_clean, rep_clean).ratio()
+            has_sub = (len(ans_clean) >= 3 and ans_clean in rep_clean) or (len(rep_clean) >= 3 and rep_clean in ans_clean)
+            if ratio >= similarity_thresh or has_sub:
+                matched_cluster = c
+                break
+
+        box = getattr(e, "expanded_box", None) or getattr(e, "box", None)
+        area = max(0, (box[2] - box[0]) * (box[3] - box[1])) if box else 0
+        crop_weight = max(0.0, float(getattr(e, "crop_score", 0.0) or 0.0))
+
+        if matched_cluster is not None:
+            matched_cluster["count"] += 1
+            matched_cluster["weighted_score"] += (1.0 + crop_weight)
+            matched_cluster["extractions"].append(e)
+            best_curr = matched_cluster["best_extraction"]
+            best_curr_weight = max(0.0, float(getattr(best_curr, "crop_score", 0.0) or 0.0))
+            if (crop_weight > best_curr_weight) or (crop_weight == best_curr_weight and area > matched_cluster["max_area"]):
+                matched_cluster["best_extraction"] = e
+                matched_cluster["max_area"] = area
+            if len(ans) > len(matched_cluster["rep"]) and len(ans.split()) <= 4:
+                matched_cluster["rep"] = ans
+        else:
+            clusters.append({
+                "rep": ans,
+                "count": 1,
+                "weighted_score": 1.0 + crop_weight,
+                "max_area": area,
+                "best_extraction": e,
+                "extractions": [e]
+            })
+
+    clusters.sort(key=lambda c: (c["count"], c["weighted_score"], c["max_area"]), reverse=True)
+    if verbose:
+        print(f"[Stage 6 Majority Vote] Evaluated {len(clusters)} clusters: {[(c['rep'], c['count'], round(c['weighted_score'], 2)) for c in clusters]}")
+
+    ranked_answers = [c["rep"] for c in clusters]
+    winner = clusters[0]
+    return winner["rep"], winner["best_extraction"].img_idx, ranked_answers

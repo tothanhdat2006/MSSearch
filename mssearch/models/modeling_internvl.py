@@ -75,7 +75,7 @@ class ModelInternvl:
             trust_remote_code=True).eval()
 
         try:
-            if hasattr(self.model, "language_model"):
+            if hasattr(self.model, "language_model") and "internlm" in self.model.language_model.__class__.__name__.lower():
                 lm_model = self.model.language_model  # InternLM2ForCausalLM
                 lm_class = lm_model.__class__
 
@@ -418,8 +418,10 @@ class ModelInternvl:
             num_patches_list.append(pixel_values.shape[0])
         full_pixel_values = torch.cat(full_pixel_values, dim=0)
         full_pixel_values = full_pixel_values.to(dtype=self.dtype, device=self.device)
-        generation_cfg = dict(self.generation_config) if isinstance(self.generation_config, dict) else self.generation_config
-        outputs = self.model.chat(self.tokenizer, full_pixel_values, qs, generation_cfg, max_new_tokens=max_new_tokens)
+        generation_cfg = dict(self.generation_config) if isinstance(self.generation_config, dict) else dict(max_new_tokens=1024, do_sample=False)
+        if max_new_tokens is not None:
+            generation_cfg["max_new_tokens"] = max_new_tokens
+        outputs = self.model.chat(self.tokenizer, full_pixel_values, qs, generation_cfg, num_patches_list=num_patches_list)
         if return_zoomed_view:
             response = {'text': outputs, 'output_image': image_input[1] if len(image_input) > 1 else image_input[0]}
             return response
@@ -431,8 +433,10 @@ class ModelInternvl:
         """Direct free-form text response generation interface for single image, crop, or text-only query."""
         if image_pil is None:
             clean_q = question[len("<image>\n"):].strip() if question.startswith("<image>\n") else question.strip()
-            generation_cfg = dict(self.generation_config) if isinstance(self.generation_config, dict) else self.generation_config
-            return self.model.chat(self.tokenizer, None, clean_q, generation_cfg, max_new_tokens=max_new_tokens)
+            generation_cfg = dict(self.generation_config) if isinstance(self.generation_config, dict) else dict(max_new_tokens=1024, do_sample=False)
+            if max_new_tokens is not None:
+                generation_cfg["max_new_tokens"] = max_new_tokens
+            return self.model.chat(self.tokenizer, None, clean_q, generation_cfg)
         return self.free_form_using_nodes(
             image_pil=image_pil,
             question=question,

@@ -660,7 +660,12 @@ class MultiSourceSearchEngine:
         telemetry["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
         telemetry["stages_executed"].append("stage6_foveated_reading")
 
-        from .stages.stage6_foveated_reader import is_negative_or_unanswerable, split_attribute_answer
+        from .stages.stage6_foveated_reader import (
+            is_negative_or_unanswerable,
+            split_attribute_answer,
+            is_singular_query,
+            resolve_by_majority_voting
+        )
 
         # Harvest Stage 6 informative answers
         s6_informative = [a for a in final_result.answers if not is_negative_or_unanswerable(a)]
@@ -684,36 +689,53 @@ class MultiSourceSearchEngine:
                 "expanded_box": list(e.expanded_box),
                 "raw_answer": e.raw_answer,
                 "final_answer": e.final_answer,
-                "source_branch": e.source_branch
+                "source_branch": e.source_branch,
+                "crop_score": getattr(e, "crop_score", 0.0)
             })
 
         # Final answers consolidation
         informative_answers = [a for a in harvested_answers if not is_negative_or_unanswerable(a)]
         final_answers_out = informative_answers if informative_answers else harvested_answers
 
-        pred_list = []
-        for a in final_answers_out:
-            tokens = split_attribute_answer(a)
-            for t in tokens:
-                if t.lower() not in [x.lower() for x in pred_list]:
-                    pred_list.append(t)
-
+        is_singular = is_singular_query(question, question_type)
         is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
-        if is_attr_mode and pred_list:
-            primary_answer = ", ".join(pred_list)
-        elif informative_answers:
-            primary_answer = "; ".join(informative_answers) if is_multi else informative_answers[0]
-        elif harvested_answers:
-            primary_answer = "; ".join(harvested_answers) if is_multi else harvested_answers[0]
-        else:
-            primary_answer = "No answer found"
 
+        primary_answer = None
         primary_evidence_img_idx = None
-        for e in harvested_extractions:
-            cand_clean = e.get("final_answer") or e.get("raw_answer")
-            if cand_clean and (cand_clean == primary_answer or cand_clean in informative_answers):
-                primary_evidence_img_idx = e.get("img_idx")
-                break
+
+        if is_singular and final_result.extractions:
+            voted_ans, voted_img_idx, _ = resolve_by_majority_voting(
+                final_result.extractions,
+                similarity_thresh=getattr(self.config, "answer_dedup_similarity", 0.75),
+                verbose=self.config.verbose
+            )
+            if voted_ans:
+                primary_answer = voted_ans
+                primary_evidence_img_idx = voted_img_idx
+
+        if primary_answer is None:
+            pred_list = []
+            for a in final_answers_out:
+                tokens = split_attribute_answer(a)
+                for t in tokens:
+                    if t.lower() not in [x.lower() for x in pred_list]:
+                        pred_list.append(t)
+
+            if is_attr_mode and pred_list and not is_singular:
+                primary_answer = ", ".join(pred_list)
+            elif informative_answers:
+                primary_answer = "; ".join(informative_answers) if is_multi else informative_answers[0]
+            elif harvested_answers:
+                primary_answer = "; ".join(harvested_answers) if is_multi else harvested_answers[0]
+            else:
+                primary_answer = "No answer found"
+
+        if primary_evidence_img_idx is None:
+            for e in harvested_extractions:
+                cand_clean = e.get("final_answer") or e.get("raw_answer")
+                if cand_clean and (cand_clean == primary_answer or cand_clean in informative_answers):
+                    primary_evidence_img_idx = e.get("img_idx")
+                    break
         if primary_evidence_img_idx is None and harvested_evidence_images:
             primary_evidence_img_idx = harvested_evidence_images[0]
 

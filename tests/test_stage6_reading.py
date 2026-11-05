@@ -100,6 +100,38 @@ class TestStage6Reading(unittest.TestCase):
         self.assertEqual(extract_final_answer("<answer>Red</answer>"), "Red")
         self.assertEqual(extract_final_answer("(A)"), "A")
 
+    def test_majority_voting_conflicts(self):
+        from mssearch.stages.utils_stage6 import EvidenceExtraction, resolve_by_majority_voting
+
+        # Scenario 1: Clear frequency majority (2 vs 1)
+        exts_1 = [
+            EvidenceExtraction(img_idx=1, box=(0, 0, 50, 50), expanded_box=(0, 0, 60, 60), raw_answer="Blue", final_answer="Blue", source_branch="test", crop_score=0.7),
+            EvidenceExtraction(img_idx=2, box=(0, 0, 50, 50), expanded_box=(0, 0, 60, 60), raw_answer="Red", final_answer="Red", source_branch="test", crop_score=0.9),
+            EvidenceExtraction(img_idx=3, box=(0, 0, 50, 50), expanded_box=(0, 0, 60, 60), raw_answer="Dark Blue", final_answer="Dark Blue", source_branch="test", crop_score=0.8),
+        ]
+        winner, win_img, ranked = resolve_by_majority_voting(exts_1)
+        self.assertIn("blue", winner.lower())
+        self.assertIn(win_img, [1, 3])
+        self.assertEqual(len(ranked), 2)
+
+        # Scenario 2: Tie break by confidence score (1 vs 1)
+        exts_2 = [
+            EvidenceExtraction(img_idx=0, box=(0, 0, 50, 50), expanded_box=(0, 0, 60, 60), raw_answer="Black", final_answer="Black", source_branch="test", crop_score=0.95),
+            EvidenceExtraction(img_idx=1, box=(0, 0, 50, 50), expanded_box=(0, 0, 60, 60), raw_answer="White", final_answer="White", source_branch="test", crop_score=0.40),
+        ]
+        winner, win_img, ranked = resolve_by_majority_voting(exts_2)
+        self.assertEqual(winner, "Black")
+        self.assertEqual(win_img, 0)
+
+        # Scenario 3: Negative answer filtering
+        exts_3 = [
+            EvidenceExtraction(img_idx=0, box=(0, 0, 50, 50), expanded_box=(0, 0, 60, 60), raw_answer="None", final_answer="None", source_branch="test", crop_score=0.9),
+            EvidenceExtraction(img_idx=1, box=(0, 0, 50, 50), expanded_box=(0, 0, 60, 60), raw_answer="Green", final_answer="Green", source_branch="test", crop_score=0.5),
+        ]
+        winner, win_img, ranked = resolve_by_majority_voting(exts_3)
+        self.assertEqual(winner, "Green")
+        self.assertEqual(win_img, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

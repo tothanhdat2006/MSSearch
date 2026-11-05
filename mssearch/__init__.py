@@ -14,6 +14,13 @@ logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
 
 from .config import MSSearchConfig
 
-from .MSSearch import MultiSourceSearchEngine, get_mssearch_response
+
+def __getattr__(name):
+    if name in ("MultiSourceSearchEngine", "get_mssearch_response"):
+        from .MSSearch import MultiSourceSearchEngine, get_mssearch_response
+        return locals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = ["MSSearchConfig", "MultiSourceSearchEngine", "get_mssearch_response"]
 
