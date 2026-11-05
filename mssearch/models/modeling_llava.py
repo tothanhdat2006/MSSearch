@@ -13,14 +13,27 @@ try:
     from llava.conversation import conv_templates
     from llava.mm_utils import tokenizer_image_token, process_images
 except (ModuleNotFoundError, ImportError) as e:
+    _llava_import_err = e
     def _raise_llava_import_error(*args, **kwargs):
         raise ImportError(
             f"The 'llava' package is required to use ModelGlobalLocal. "
-            f"Please ensure it is installed in your environment. Original error: {e}"
-        ) from e
-    LlavaQwenForCausalLM = _raise_llava_import_error
-    LlavaLlamaForCausalLM = _raise_llava_import_error
-    LlavaConfig = _raise_llava_import_error
+            f"Please ensure it is installed in your environment. Original error: {_llava_import_err}"
+        ) from _llava_import_err
+
+    class _LlavaUnavailable:
+        def __init__(self, *args, **kwargs):
+            _raise_llava_import_error()
+
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            _raise_llava_import_error()
+
+        def __getattr__(self, name):
+            _raise_llava_import_error()
+
+    LlavaQwenForCausalLM = _LlavaUnavailable
+    LlavaLlamaForCausalLM = _LlavaUnavailable
+    LlavaConfig = _LlavaUnavailable
     disable_torch_init = lambda: None
     IMAGE_TOKEN_INDEX = -200
     DEFAULT_IMAGE_TOKEN = "<image>"
@@ -34,6 +47,9 @@ from sentence_transformers import SentenceTransformer, util
 class Model(ABC):
     def __init__(self, model_path: str, conv_type: str = "qwen_1_5", device: str = "cuda:0", torch_dtype=torch.float16,
                  attn_implementation="flash_attention_2", padding_side="left", **kwargs) -> None:
+        if LlavaQwenForCausalLM is _LlavaUnavailable:
+            _raise_llava_import_error()
+
         disable_torch_init()
         self.device = device
         self.dtype = torch_dtype
@@ -41,23 +57,46 @@ class Model(ABC):
 
         print("padding side:", self.tokenizer.padding_side)
 
+        attn_impl = kwargs.pop("attn_implementation", attn_implementation) or os.environ.get("ATTN_IMPLEMENTATION", "sdpa")
+
+        def _load_causal_lm(model_cls, *load_args, **load_kwargs):
+            try:
+                return model_cls.from_pretrained(*load_args, **load_kwargs)
+            except Exception as e_attn:
+                curr_attn = load_kwargs.get("attn_implementation")
+                if curr_attn == "flash_attention_2":
+                    print(f"[ModelGlobalLocal] Warning: FlashAttention-2 failed ({e_attn}). Falling back to 'sdpa'.")
+                    load_kwargs["attn_implementation"] = "sdpa"
+                    try:
+                        return model_cls.from_pretrained(*load_args, **load_kwargs)
+                    except Exception:
+                        load_kwargs["attn_implementation"] = "eager"
+                        return model_cls.from_pretrained(*load_args, **load_kwargs)
+                elif curr_attn == "sdpa":
+                    print(f"[ModelGlobalLocal] Warning: SDPA failed ({e_attn}). Falling back to 'eager'.")
+                    load_kwargs["attn_implementation"] = "eager"
+                    return model_cls.from_pretrained(*load_args, **load_kwargs)
+                raise
+
         if "qwen" in model_path:
-            self.model = LlavaQwenForCausalLM.from_pretrained(
+            self.model = _load_causal_lm(
+                LlavaQwenForCausalLM,
                 model_path,
                 low_cpu_mem_usage=True,
                 torch_dtype=self.dtype,
-                attn_implementation=attn_implementation,
+                attn_implementation=attn_impl,
             )
         else:
             llava_cfg = LlavaConfig.from_pretrained(model_path)
             if "v1.5" in model_path.lower():
                 llava_cfg.delay_load = True
-            self.model = LlavaLlamaForCausalLM.from_pretrained(
+            self.model = _load_causal_lm(
+                LlavaLlamaForCausalLM,
                 model_path,
                 low_cpu_mem_usage=True,
                 torch_dtype=self.dtype,
-                attn_implementation=attn_implementation,
-                config=llava_cfg
+                attn_implementation=attn_impl,
+                config=llava_cfg,
             )
         print("model:", type(self.model))
         self.model.config.tokenizer_padding_side = padding_side

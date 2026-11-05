@@ -34,7 +34,7 @@ eval_image = (
     )
     .pip_install_from_requirements(req_file)
     .run_commands("python -m spacy download en_core_web_sm")
-    .add_local_python_source("mssearch", "experiments", "sam3")
+    .add_local_python_source("mssearch", "experiments", "sam3", "llava")
 )
 
 data_volume = modal.Volume.from_name("mssearch-data", create_if_missing=True)

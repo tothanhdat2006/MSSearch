@@ -23,7 +23,7 @@ eval_image = (
         extra_index_url="https://download.pytorch.org/whl/cu126"
     )
     .pip_install_from_requirements(req_file)
-    .add_local_python_source("mssearch", "experiments")
+    .add_local_python_source("mssearch", "experiments", "llava")
 )
 
 data_volume = modal.Volume.from_name("mssearch-data", create_if_missing=True)
