@@ -153,6 +153,7 @@ class MultiSourceSearchEngine:
             "target_object": target_obj,
             "stage3_boxes": [],
             "stage4_boxes": [],
+            "stage4_image_scores": {},
             "stage5_boxes": [],
         }
 
@@ -441,6 +442,11 @@ class MultiSourceSearchEngine:
         telemetry["stage4_kept_groups"] = sum(1 for g in stage4_groups if g.get("status") == "KEPT")
         telemetry["stage4_pruned_groups"] = sum(1 for g in stage4_groups if g.get("status") == "PRUNED")
         telemetry["stage4_boxes"] = [{"img_idx": p.img_idx, "box": list(map(int, p.box))} for p in remaining_patches]
+        stage4_img_scores = {}
+        for i in range(len(candidate_images)):
+            scores_i = [p.siglip_score for p in bounded_patches if p.img_idx == i and p.siglip_score is not None]
+            stage4_img_scores[i] = round(float(max(scores_i)), 4) if scores_i else 0.0
+        telemetry["stage4_image_scores"] = stage4_img_scores
         telemetry["stages_executed"].append("stage4_grouping_gating")
         if not is_quiet:
             print(f"[Stage 4: Grouping & Gating] Decision: Evaluated {len(stage4_groups)} semantic groups -> Kept {telemetry['stage4_kept_groups']} groups ({len(remaining_patches)} patches), Pruned {telemetry['stage4_pruned_groups']} groups (Latency: {lat_s4}s)")

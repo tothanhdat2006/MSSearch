@@ -1,7 +1,7 @@
 """
 Engine loader and pipeline executor for MSSearch ablation studies.
-Seamlessly injects alternative detection backbones (Grounding DINO, DINO-X)
-and screening scorers (CLIP-ViT-B/32, CLIP-ViT-L/14, EVA-02-L/14).
+Seamlessly injects alternative detection backbones (Grounding DINO, Florence-2, DINOv3)
+and screening scorers (SigLIP2, CLIP-ViT-B/32, CLIP-ViT-L/14, EVA-02-L/14).
 """
 
 import os

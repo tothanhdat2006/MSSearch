@@ -177,6 +177,11 @@ def evaluate_ablation_modal(
                 "num_unified_crops": telemetry.get("num_unified_crops", 0), "timings_sec": telemetry.get("timings_sec", {}),
                 "stage_retention": stage_stats["stage_retention"], "stage_rejection": stage_stats["stage_rejection"],
                 "visual_tokens": stage_stats["visual_tokens"], "stage6_crop_sizes": stage_stats["stage6_crop_sizes"],
+                "has_gt_bbox": stage_stats["has_gt_bbox"], "max_iou_stage4": stage_stats["max_iou_stage4"],
+                "gt_survived_stage4": stage_stats["gt_survived_stage4"], "distractor_imgs_pruned": stage_stats["distractor_imgs_pruned"],
+                "stage4_image_scores": stage_stats["stage4_image_scores"], "gt_rank_stage4": stage_stats["gt_rank_stage4"],
+                "stage4_r1": stage_stats["stage4_r1"], "stage4_mrr": stage_stats["stage4_mrr"],
+                "s6_visual_tokens": stage_stats["s6_visual_tokens"],
                 "latency_sec": latency,
             }
 

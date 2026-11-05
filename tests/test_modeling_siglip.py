@@ -2,10 +2,14 @@
 Unit tests for SigLIP / CLIP Scorer (mssearch/models/modeling_siglip.py).
 """
 
+import sys
+import os
 import unittest
 from unittest.mock import MagicMock
 from PIL import Image
 import torch
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from mssearch.models.modeling_siglip import SigLIPScorer, _extract_embedding_tensor, format_text_queries
 

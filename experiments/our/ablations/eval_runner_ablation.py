@@ -1,7 +1,7 @@
 """
 Evaluation runner for MSSearch ablation studies.
-Ablates Detection Backbone (SAM3 vs Grounding DINO vs DINO-X)
-and Screening Scorer (SigLIP vs CLIP-ViT-B/32 vs CLIP-ViT-L/14 vs EVA-02-L/14).
+Ablates Detection Backbone (SAM3 vs Grounding DINO vs Florence-2 vs DINOv3)
+and Screening Scorer (SigLIP vs SigLIP2 vs CLIP-B/32 vs CLIP-L/14 vs EVA-02-L/14).
 """
 
 import os
@@ -220,23 +220,23 @@ def main():
                 "num_unified_crops": telemetry.get("num_unified_crops", 0), "timings_sec": telemetry.get("timings_sec", {}),
                 "stage_retention": stage_stats["stage_retention"], "stage_rejection": stage_stats["stage_rejection"],
                 "visual_tokens": stage_stats["visual_tokens"], "stage6_crop_sizes": stage_stats["stage6_crop_sizes"],
+                "has_gt_bbox": stage_stats["has_gt_bbox"], "max_iou_stage4": stage_stats["max_iou_stage4"],
+                "gt_survived_stage4": stage_stats["gt_survived_stage4"], "distractor_imgs_pruned": stage_stats["distractor_imgs_pruned"],
+                "stage4_image_scores": stage_stats["stage4_image_scores"], "gt_rank_stage4": stage_stats["gt_rank_stage4"],
+                "stage4_r1": stage_stats["stage4_r1"], "stage4_mrr": stage_stats["stage4_mrr"],
+                "s6_visual_tokens": stage_stats["s6_visual_tokens"],
                 "latency_sec": latency,
             }
 
             out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            out_f.flush()
-            os.fsync(out_f.fileno())
+            out_f.flush(); os.fsync(out_f.fileno())
 
             for img in images:
                 if img is not None:
-                    try:
-                        img.close()
-                    except Exception:
-                        pass
-            images.clear()
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                    try: img.close()
+                    except Exception: pass
+            images.clear(); gc.collect()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
 
             route_str = "+".join(telemetry.get("routes_executed", [])) or telemetry.get("route", "UNKNOWN")
             print(f"[{idx+1}/{len(remaining_tasks)}] #{s_idx} ({sample_id}) [{pool_name}|N={len(candidate_meta)}] "

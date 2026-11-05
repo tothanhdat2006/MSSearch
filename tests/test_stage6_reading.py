@@ -1,5 +1,10 @@
+import sys
+import os
 import unittest
 from PIL import Image
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from mssearch.config import MSSearchConfig
 from mssearch.stages.stage5_screening import CandidateCrop
 from mssearch.stages.stage6_foveated_reader import run_foveated_vlm_reading, FinalSearchResult

@@ -88,6 +88,13 @@ def main():
     token_sums = {"stage2_direct_tokens": 0, "stage6_reader_tokens": 0, "total_vlm_tokens": 0}
     timing_sums: Dict[str, float] = {}
     routes: Dict[str, int] = {}
+    s4_r1_list: List[float] = []
+    s4_mrr_list: List[float] = []
+    s4_surv_list: List[int] = []
+    s4_iou_list: List[float] = []
+    distractor_pruned_list: List[float] = []
+    total_distractor_imgs = 0
+    total_distractors_pruned = 0
     per_sample_details = []
 
     for r in records:
@@ -137,6 +144,22 @@ def main():
 
         for t_key in token_sums:
             token_sums[t_key] += r.get("visual_tokens", {}).get(t_key, 0)
+
+        if r.get("stage4_r1") is not None:
+            s4_r1_list.append(float(r["stage4_r1"]))
+        if r.get("stage4_mrr") is not None:
+            s4_mrr_list.append(float(r["stage4_mrr"]))
+        if r.get("gt_survived_stage4") is not None:
+            s4_surv_list.append(int(bool(r["gt_survived_stage4"])))
+        if r.get("has_gt_bbox") and r.get("max_iou_stage4") is not None:
+            s4_iou_list.append(float(r["max_iou_stage4"]))
+        if r.get("distractor_imgs_pruned") is not None:
+            distractor_pruned_list.append(float(r["distractor_imgs_pruned"]))
+
+        p_n = r.get("pool_N") or len(r.get("pred_image_ids", [])) or 1
+        if p_n > 1:
+            total_distractor_imgs += (p_n - 1)
+            total_distractors_pruned += r.get("distractor_imgs_pruned", 0)
 
         for k_t, v_t in r.get("timings_sec", {}).items():
             timing_sums[k_t] = timing_sums.get(k_t, 0.0) + float(v_t)
@@ -200,6 +223,31 @@ def main():
     print("Execution Routes:")
     for rt, cnt in sorted(routes.items(), key=lambda x: -x[1]):
         print(f"  {rt:<24}: {cnt:3d} ({cnt / n * 100.0:5.1f}%)")
+    s4_rec_iou05 = (sum(1 for iou in s4_iou_list if iou >= 0.5) / len(s4_iou_list) * 100.0) if s4_iou_list else None
+    gating_sensitivity = (sum(s4_surv_list) / len(s4_surv_list) * 100.0) if s4_surv_list else None
+    gating_spec_img = (total_distractors_pruned / total_distractor_imgs * 100.0) if total_distractor_imgs > 0 else None
+    s3_n = rejection_sums["stage3_noise_patches"]
+    s4_n = rejection_sums["stage4_noise_patches"]
+    gating_spec_patch = ((s3_n - s4_n) / s3_n * 100.0) if s3_n > 0 else None
+
+    if s4_r1_list or s4_surv_list or s4_iou_list:
+        print("-" * 72)
+        print("Ablation Diagnostics (Stages 4 & 5):")
+        if s4_rec_iou05 is not None:
+            iou05_cnt = sum(1 for iou in s4_iou_list if iou >= 0.5)
+            print(f"  Target Recall @ IoU 0.5 (S4): {s4_rec_iou05:5.1f}% ({iou05_cnt}/{len(s4_iou_list)})")
+            print(f"  Stage 4 Mean Max-IoU        : {sum(s4_iou_list) / len(s4_iou_list):5.3f}")
+        if s4_r1_list:
+            print(f"  Stage 4 Image R@1           : {sum(s4_r1_list) / len(s4_r1_list) * 100.0:5.1f}%")
+            print(f"  Stage 4 Image MRR           : {sum(s4_mrr_list) / len(s4_mrr_list):5.3f}")
+        if gating_sensitivity is not None:
+            print(f"  Gating Sensitivity (GT Keep): {gating_sensitivity:5.1f}% ({sum(s4_surv_list)}/{len(s4_surv_list)})")
+        if gating_spec_img is not None:
+            print(f"  Gating Specificity (Image)  : {gating_spec_img:5.1f}% ({total_distractors_pruned}/{total_distractor_imgs})")
+        if gating_spec_patch is not None:
+            print(f"  Gating Specificity (Patch)  : {gating_spec_patch:5.1f}% ({s3_n - s4_n}/{s3_n})")
+        if distractor_pruned_list:
+            print(f"  Avg Distractor Imgs Pruned  : {sum(distractor_pruned_list) / len(distractor_pruned_list):5.2f}")
     print("=" * 72)
 
     if args.verbose:
@@ -226,6 +274,16 @@ def main():
         "avg_visual_tokens": {k: round(v / n, 1) for k, v in token_sums.items()},
         "avg_timings_sec": {k: round(v / n, 3) for k, v in timing_sums.items()},
         "routes": routes,
+        "ablation_diagnostics": {
+            "target_recall_iou05_stage4": round(s4_rec_iou05, 2) if s4_rec_iou05 is not None else None,
+            "stage4_mean_max_iou": round(sum(s4_iou_list) / len(s4_iou_list), 4) if s4_iou_list else None,
+            "stage4_r1": round(sum(s4_r1_list) / len(s4_r1_list) * 100.0, 2) if s4_r1_list else None,
+            "stage4_mrr": round(sum(s4_mrr_list) / len(s4_mrr_list), 4) if s4_mrr_list else None,
+            "gating_sensitivity": round(gating_sensitivity, 2) if gating_sensitivity is not None else None,
+            "gating_specificity_image": round(gating_spec_img, 2) if gating_spec_img is not None else None,
+            "gating_specificity_patch": round(gating_spec_patch, 2) if gating_spec_patch is not None else None,
+            "avg_distractor_imgs_pruned": round(sum(distractor_pruned_list) / len(distractor_pruned_list), 2) if distractor_pruned_list else None,
+        },
     }
     with open(summary_file, "w", encoding="utf-8") as sf:
         json.dump(summary_data, sf, indent=2, ensure_ascii=False)

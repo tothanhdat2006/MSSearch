@@ -56,6 +56,7 @@ MSSearch/experiments/our/ablations/
 │   ├── sam3_adapter.py            # SAM3 wrapper conforming to BaseDetector
 │   ├── grounding_dino_adapter.py  # Grounding DINO adapter via HF Transformers
 │   ├── florence2_adapter.py       # Florence-2-large adapter via HF Transformers
+│   ├── dinov3_adapter.py          # DINOv3 adapter with dense patch proposals
 │   ├── clip_scorer_adapter.py     # CLIP-ViT-B/32 and CLIP-ViT-L/14 scorer
 │   └── eva02_scorer_adapter.py    # EVA-02-L/14 scorer (open_clip / timm / HF)
 ├── scripts/

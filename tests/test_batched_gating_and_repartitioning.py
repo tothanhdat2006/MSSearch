@@ -1,6 +1,10 @@
+import sys
+import os
 import unittest
 import numpy as np
 from PIL import Image
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from mssearch.config import MSSearchConfig
 from mssearch.stages.stage3_partitioning import BoundedPatch
