@@ -66,6 +66,9 @@ def group_patches_by_cosine_similarity(
 
     # 2. Pairwise Cosine Distance: D = 1.0 - CosineSimilarity
     sim_mat = np.matmul(norm_feats, norm_feats.T)
+    # Different source images must never share a gating cluster.
+    source_ids = np.asarray([p.img_idx for p in patches], dtype=np.int64)
+    sim_mat[source_ids[:, None] != source_ids[None, :]] = -1.0
     dist_mat = np.clip(1.0 - sim_mat, 0.0, 2.0)
 
     # 3. Agglomerative Clustering with distance threshold

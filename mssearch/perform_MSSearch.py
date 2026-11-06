@@ -62,7 +62,6 @@ def main():
     parser.add_argument("--direct-answer-threshold", type=float, default=0.60, help="Confidence threshold for Phase 1 Direct Answer")
     parser.add_argument("--disable-fast-path", action="store_true", help="Disable Stage 2 Tool-Based Fast Path")
     parser.add_argument("--fast-path-threshold", type=float, default=0.70, help="Confidence threshold for Stage 2 Fast Path")
-    parser.add_argument("--early-consensus-threshold", type=float, default=0.75, help="Similarity threshold for Stage 6 early consensus exit")
     parser.add_argument("--disable-visual-prompt-bbox", action="store_true")
     parser.add_argument("--enable-textual-prompt-coords", action="store_true")
     parser.add_argument("--entropy-threshold", type=float, default=0.35)
@@ -73,11 +72,6 @@ def main():
     parser.add_argument("--max-plateau-size", type=int, default=1536, help="Scale ceiling for saliency plateau stopping (GPU safety)")
     parser.add_argument("--saliency-plateau-gain-threshold", type=float, default=0.04, help="Minimum saliency gain required to descend deeper")
     parser.add_argument("--bbox-expansion-factor", type=float, default=1.25)
-    parser.add_argument("--answer-type", "--answer_type", dest="answer_type", type=str, default="free_form",
-                        choices=["free_form", "option_single", "multiple_choice", "mc"],
-                        help="Prompt answer format: 'free_form' (default open-ended prompt without options) or 'option_single' / 'multiple_choice' (appends candidate options)")
-    parser.add_argument("--include-options-in-prompt", "--add-options-to-prompt", dest="include_options_in_prompt", action="store_true",
-                        help="Explicit flag to include options in the reading prompt (equivalent to --answer-type option_single)")
     parser.add_argument("--verbose", action="store_true", default=True, help="Enable verbose debug logging on fallback/non-fallback decisions")
     parser.add_argument("--quiet", action="store_true", help="Silence verbose debug logging")
 
@@ -93,8 +87,8 @@ def main():
     print(f"[MSSearch] Destination file: {args.answers_file}")
 
     # Build typed configuration dataclass
-    opt_in_prompt = args.include_options_in_prompt or (args.answer_type in ["option_single", "option_list", "multiple_choice", "mc"])
-    chosen_answer_type = "option_single" if args.include_options_in_prompt and args.answer_type == "free_form" else args.answer_type
+    opt_in_prompt = False
+    chosen_answer_type = "free_form"
 
     config = MSSearchConfig(
         enable_direct_answer=not args.disable_direct_answer,
@@ -102,7 +96,6 @@ def main():
         enable_fast_path=not args.disable_fast_path,
         fast_path_conf_threshold=args.fast_path_threshold,
         use_mllm_object_parser=True,
-        early_consensus_threshold=args.early_consensus_threshold,
         enable_visual_prompt_bbox=not args.disable_visual_prompt_bbox,
         enable_textual_prompt_coords=args.enable_textual_prompt_coords,
         entropy_threshold=args.entropy_threshold,
@@ -184,10 +177,7 @@ def main():
                 print(f"[MSSearch] Warning: No candidate images found on disk for sample {anno.get('id', idx)}!")
                 continue
 
-            if chosen_answer_type != "free_form":
-                anno['answer_type'] = chosen_answer_type
-            elif 'answer_type' not in anno:
-                anno['answer_type'] = 'free_form'
+            anno['answer_type'] = 'free_form'
 
             resp = get_mssearch_response(
                 sam_model=sam3,

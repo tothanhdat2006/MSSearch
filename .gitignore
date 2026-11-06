@@ -9,3 +9,9 @@ results/
 answers/
 vis/
 *.jsonl
+
+AGENTS.md
+KNOWLEDGE_LOG.md
+.agents/
+.venv/
+paper/

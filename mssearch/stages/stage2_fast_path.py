@@ -134,6 +134,7 @@ def run_direct_global_assessment(
                 evidence_img_idx=img_idx,
                 answers=[final_ans],
                 evidence_images=[img_idx],
+                source_records=[{"img_idx": img_idx, "answer": final_ans, "raw_response": raw_answer, "confidence": conf}],
             )
 
     if collected_direct:
@@ -156,6 +157,7 @@ def run_direct_global_assessment(
             evidence_img_idx=ev_imgs[0],
             answers=ans_list,
             evidence_images=ev_imgs,
+            source_records=collected_direct,
         )
 
     return DirectAnswerResult(triggered=False, confidence=max_observed_conf)
@@ -352,6 +354,7 @@ def run_tool_based_fast_path(
                 answers=[final_ans],
                 evidence_images=[img_idx],
                 boxes_by_image={img_idx: matched_boxes_by_obj},
+                source_records=[{"img_idx": img_idx, "answer": final_ans, "raw_response": answer_text, "confidence": float(existence_conf), "boxes": matched_boxes_by_obj}],
             )
         else:
             if config.verbose:
@@ -384,6 +387,7 @@ def run_tool_based_fast_path(
             answers=ans_list,
             evidence_images=ev_imgs,
             boxes_by_image={r["img_idx"]: r["boxes"] for r in collected_fp},
+            source_records=collected_fp,
         )
 
     if config.verbose:

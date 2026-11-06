@@ -80,22 +80,17 @@ def compute_spatial_entropy(
     norm_shannon = shannon_entropy / 8.0  # Max entropy for 256 bins is 8.0 bits
 
     # 2. Sobel Gradient Density & 3. Laplacian Variance
-    if cv2 is not None:
-        sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-        sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-        sobel_mag = np.sqrt(sobel_x ** 2 + sobel_y ** 2)
-        mean_grad = float(np.mean(sobel_mag))
-        norm_sobel = min(1.0, mean_grad / 64.0)
+    if cv2 is None:
+        raise RuntimeError("OpenCV is required for the defined Sobel/Laplacian entropy score")
+    sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    sobel_mag = np.sqrt(sobel_x ** 2 + sobel_y ** 2)
+    mean_grad = float(np.mean(sobel_mag))
+    norm_sobel = min(1.0, mean_grad / 64.0)
 
-        laplacian = cv2.Laplacian(gray, cv2.CV_32F)
-        var_lap = float(np.var(laplacian))
-        norm_lap = min(1.0, math.log1p(var_lap) / 10.0)
-    else:
-        diff_x = np.diff(gray, axis=1)
-        diff_y = np.diff(gray, axis=0)
-        mean_grad = float(np.mean(np.abs(diff_x)) + np.mean(np.abs(diff_y)))
-        norm_sobel = min(1.0, mean_grad / 32.0)
-        norm_lap = norm_sobel
+    laplacian = cv2.Laplacian(gray, cv2.CV_32F)
+    var_lap = float(np.var(laplacian))
+    norm_lap = min(1.0, math.log1p(var_lap) / 10.0)
 
     w1, w2, w3 = weights
     h_total = w1 * norm_shannon + w2 * norm_sobel + w3 * norm_lap

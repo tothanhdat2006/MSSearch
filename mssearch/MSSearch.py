@@ -34,6 +34,25 @@ from .stages import (
 from .stages.stage3_partitioning import BoundedPatch
 
 
+def _vote_all_sources(source_records: List[Dict[str, Any]], threshold: float = 0.85):
+    """Vote on *all* valid source-attributed answers, including earlier stages."""
+    from .stages.utils_stage6 import EvidenceExtraction, is_negative_or_unanswerable, resolve_by_majority_voting
+    items = []
+    for record in source_records:
+        ans = (record.get("final_answer") or "").strip()
+        if not ans or is_negative_or_unanswerable(ans):
+            continue
+        box = tuple(int(v) for v in (record.get("box") or (0, 0, 0, 0)))
+        enlarged = tuple(int(v) for v in (record.get("expanded_box") or box))
+        items.append(EvidenceExtraction(
+            img_idx=int(record["img_idx"]), box=box, expanded_box=enlarged,
+            raw_answer=str(record.get("raw_answer") or ans),
+            source_branch=str(record.get("source_branch") or "Unknown"),
+            final_answer=ans, crop_score=float(record.get("crop_score") or 0.0),
+        ))
+    return resolve_by_majority_voting(items, similarity_thresh=threshold, verbose=False)
+
+
 class MultiSourceSearchEngine:
     """
     Master coordinator for the Dual-Path Multi-Source Visual Search pipeline.
@@ -78,23 +97,9 @@ class MultiSourceSearchEngine:
         if is_summary:
             sub_config.verbose = False
 
-        # Determine whether candidate options should be added to the VLM reading prompt
-        # (Controlled by config.include_options_in_prompt or config.answer_type != "free_form")
-        is_mc = getattr(self.config, "answer_type", "free_form") in [
-            "option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"
-        ]
-        should_add_options = (
-            getattr(self.config, "include_options_in_prompt", False) or
-            is_mc
-        )
-        if should_add_options and options:
-            reading_question = format_question_with_options(question, options, cycle_idx=cycle_idx)
-            if is_verbose:
-                print(f"[MSSearch] Options Prompting ACTIVE ({getattr(self.config, 'answer_type', 'option_single')}): Candidate options appended to reading prompt.")
-        else:
-            reading_question = question
-            if is_verbose:
-                print(f"[MSSearch] Free-form mode ACTIVE: Prompt will NOT contain candidate options.")
+        # STASH-Bench uses only open-ended textual answers.
+        should_add_options = False
+        reading_question = question
 
         if is_verbose:
             print(f"\n[MSSearch] ====================================================================")
@@ -109,16 +114,13 @@ class MultiSourceSearchEngine:
             print(f"\n[MSSearch] Starting search across {len(candidate_images)} images | Q: '{question[:90]}{'...' if len(question)>90 else ''}'")
 
         # ---------------------------------------------------------------------
-        # Multi-Source Budget Scaling & Early Exit Configuration
+        # Multi-Source Budget Scaling (Stage 6 does not early halt)
         # ---------------------------------------------------------------------
         n_candidates = len(candidate_images)
-        if getattr(self.config, "enable_query_adaptive_halting", True) and n_candidates == 1:
+        # N=1 requires a single-source answer but Stage 6 still reads every crop.
+        if n_candidates == 1:
             self.config.multi_answer_mode = False
-            self.config.enable_early_consensus_exit = True
             sub_config.multi_answer_mode = False
-            sub_config.enable_early_consensus_exit = True
-            if is_verbose:
-                print(f"[MSSearch] Query-Adaptive Halting: Single candidate image (N=1) -> multi_answer_mode=False, early consensus exit enabled.")
 
         if getattr(self.config, "scale_budgets_by_num_images", True) and n_candidates > 1:
             base_sam3 = getattr(self.config, "max_sam3_eval_patches", 64)
@@ -129,10 +131,6 @@ class MultiSourceSearchEngine:
             sub_config.max_retained_patches = base_retained * n_candidates
             if is_verbose:
                 print(f"[MSSearch] Scaled budgets by N={n_candidates}: max_sam3={sub_config.max_sam3_eval_patches}, max_latent={sub_config.max_latent_evals}, max_retained={sub_config.max_retained_patches}")
-
-        if getattr(self.config, "multi_answer_mode", False):
-            self.config.enable_early_consensus_exit = False
-            sub_config.enable_early_consensus_exit = False
 
         # Structured Query Parsing (target_attribute_type, condition_val, target_object)
         from .stages.stage1_parser import parse_visual_query_structure
@@ -192,17 +190,21 @@ class MultiSourceSearchEngine:
                 for a in ans_list:
                     if a and a not in harvested_answers:
                         harvested_answers.append(a)
-                for idx in ev_imgs:
+                for record in (direct_result.source_records or [
+                    {"img_idx": idx, "answer": direct_result.answer, "raw_response": direct_result.raw_response,
+                     "confidence": direct_result.confidence} for idx in ev_imgs
+                ]):
+                    idx = int(record["img_idx"])
                     if idx not in harvested_evidence_images:
                         harvested_evidence_images.append(idx)
-                    harvested_patch_boxes.append([0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])])
+                    box = [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])]
+                    harvested_patch_boxes.append(box)
                     harvested_extractions.append({
-                        "img_idx": idx,
-                        "box": [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])],
-                        "expanded_box": [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])],
-                        "raw_answer": direct_result.raw_response,
-                        "final_answer": direct_result.answer,
-                        "source_branch": "Direct Global Answer"
+                        "img_idx": idx, "box": box, "expanded_box": box,
+                        "raw_answer": record.get("raw_response", ""),
+                        "final_answer": record.get("answer", ""),
+                        "source_branch": "Direct Global Answer",
+                        "crop_score": float(record.get("confidence", 0.0)),
                     })
 
                 unresolved_images = [i for i in unresolved_images if i not in ev_imgs]
@@ -238,7 +240,12 @@ class MultiSourceSearchEngine:
                     is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
                     primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else direct_result.answer
                     primary_evidence_img_idx = direct_result.evidence_img_idx if direct_result.evidence_img_idx is not None else (harvested_evidence_images[0] if harvested_evidence_images else None)
+                    voted_a, voted_i, _ = _vote_all_sources(harvested_extractions, self.config.answer_dedup_similarity)
+                    if voted_a is not None:
+                        primary_ans = voted_a
+                        primary_evidence_img_idx = voted_i
                     telemetry["primary_evidence_image"] = primary_evidence_img_idx
+                    telemetry["source_answer_records"] = harvested_extractions
                     if not is_quiet:
                         print(f"[MSSearch Final Decision] Primary Answer: '{primary_ans}' | Primary Image: {primary_evidence_img_idx} | Evidence Images: {harvested_evidence_images} | Route: direct_global_answer | Latency: {telemetry['total_latency_sec']}s")
                     return {
@@ -295,7 +302,7 @@ class MultiSourceSearchEngine:
             sam_model=self.sam_model,
             zoom_model=self.zoom_model,
             config=sub_config,
-            active_img_indices=unresolved_images if is_multi else None
+            active_img_indices=unresolved_images
         )
         lat_s2 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage2_fast_path"] = lat_s2
@@ -318,15 +325,21 @@ class MultiSourceSearchEngine:
                 for b in fast_path_result.detected_boxes:
                     harvested_patch_boxes.append(list(map(int, b)))
 
-            for idx in ev_imgs:
-                b = list(fast_path_result.detected_boxes[0]) if fast_path_result.detected_boxes else [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])]
+            for record in (fast_path_result.source_records or [
+                {"img_idx": idx, "answer": fast_path_result.answer,
+                 "raw_response": fast_path_result.raw_response,
+                 "confidence": fast_path_result.confidence,
+                 "boxes": fast_path_result.boxes_by_image.get(idx, [])} for idx in ev_imgs
+            ]):
+                idx = int(record["img_idx"])
+                boxes_i = record.get("boxes") or []
+                b = list(boxes_i[0]) if boxes_i else [0, 0, int(candidate_images[idx].size[0]), int(candidate_images[idx].size[1])]
                 harvested_extractions.append({
-                    "img_idx": idx,
-                    "box": b,
-                    "expanded_box": b,
-                    "raw_answer": fast_path_result.raw_response or fast_path_result.answer,
-                    "final_answer": fast_path_result.answer,
-                    "source_branch": "Fast Path"
+                    "img_idx": idx, "box": b, "expanded_box": b,
+                    "raw_answer": record.get("raw_response", ""),
+                    "final_answer": record.get("answer", ""),
+                    "source_branch": "Fast Path",
+                    "crop_score": float(record.get("confidence", 0.0)),
                 })
 
             unresolved_images = [i for i in unresolved_images if i not in ev_imgs]
@@ -368,7 +381,12 @@ class MultiSourceSearchEngine:
                 is_attr_mode = (getattr(self.config, "answer_type", "free_form") == "attribute_list")
                 primary_ans = ", ".join(pred_list) if (is_attr_mode and pred_list) else (harvested_answers[0] if harvested_answers else "No answer found")
                 primary_evidence_img_idx = fast_path_result.evidence_img_idx if fast_path_result.evidence_img_idx is not None else (harvested_evidence_images[0] if harvested_evidence_images else None)
+                voted_a, voted_i, _ = _vote_all_sources(harvested_extractions, self.config.answer_dedup_similarity)
+                if voted_a is not None:
+                    primary_ans = voted_a
+                    primary_evidence_img_idx = voted_i
                 telemetry["primary_evidence_image"] = primary_evidence_img_idx
+                telemetry["source_answer_records"] = harvested_extractions
                 if not is_quiet:
                     print(f"[MSSearch Final Decision] Primary Answer: '{primary_ans}' | Primary Image: {primary_evidence_img_idx} | Evidence Images: {harvested_evidence_images} | Route: {telemetry['route']} | Latency: {telemetry['total_latency_sec']}s")
                 return {
@@ -410,7 +428,7 @@ class MultiSourceSearchEngine:
             config=sub_config,
             active_objects=active_objects,
             siglip_model=self.siglip_model,
-            target_img_indices=unresolved_images if is_multi else None
+            target_img_indices=unresolved_images
         )
         lat_s3 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage3_partitioning"] = lat_s3
@@ -430,7 +448,7 @@ class MultiSourceSearchEngine:
             active_objects=active_objects,
             sam_model=self.sam_model,
             config=sub_config,
-            detected_boxes=fast_path_result.detected_boxes,
+            detected_boxes_by_image=fast_path_result.boxes_by_image,
             zoom_model=self.zoom_model,
             return_debug=True,
             question=question
@@ -481,10 +499,14 @@ class MultiSourceSearchEngine:
                             continue
 
                         parent_crop = candidate_images[img_idx].crop(parent_box)
+                        local_cfg = copy.copy(sub_config)
+                        local_cfg.max_partition_depth = min(
+                            local_cfg.max_partition_depth, local_cfg.max_latent_repartition_depth
+                        )
                         local_child_patches = partition_candidate_images(
                             candidate_images=[parent_crop],
-                            feature_cache={},
-                            config=sub_config,
+                            stage2_feature_cache={},
+                            config=local_cfg,
                             active_objects=active_objects,
                             siglip_model=self.siglip_model
                         )
@@ -669,8 +691,6 @@ class MultiSourceSearchEngine:
         from .stages.stage6_foveated_reader import (
             is_negative_or_unanswerable,
             split_attribute_answer,
-            is_singular_query,
-            resolve_by_majority_voting
         )
 
         # Harvest Stage 6 informative answers
@@ -715,12 +735,18 @@ class MultiSourceSearchEngine:
         primary_answer = None
         primary_evidence_img_idx = None
 
-        if final_result.extractions:
-            voted_ans, voted_img_idx, _ = resolve_by_majority_voting(
-                final_result.extractions,
-                similarity_thresh=getattr(self.config, "answer_dedup_similarity", 0.75),
-                verbose=self.config.verbose
+        if harvested_extractions:
+            voted_ans, voted_img_idx, ranked_all_source_answers = _vote_all_sources(
+                harvested_extractions,
+                threshold=getattr(self.config, "answer_dedup_similarity", 0.85),
             )
+            if ranked_all_source_answers:
+                final_answers_out = ranked_all_source_answers
+                pred_list = []
+                for a in final_answers_out:
+                    for t in split_attribute_answer(a):
+                        if t.lower() not in [x.lower() for x in pred_list]:
+                            pred_list.append(t)
             if voted_ans:
                 primary_answer = voted_ans
                 primary_evidence_img_idx = voted_img_idx
@@ -745,6 +771,7 @@ class MultiSourceSearchEngine:
             primary_evidence_img_idx = harvested_evidence_images[0]
 
         telemetry["primary_evidence_image"] = primary_evidence_img_idx
+        telemetry["source_answer_records"] = harvested_extractions
         telemetry["evidence_images"] = harvested_evidence_images
         telemetry["stage6_patch_boxes"] = harvested_patch_boxes
 
@@ -808,18 +835,10 @@ def get_mssearch_response(
     except Exception:
         cycle_idx = 0
 
-    # Respect annotation['answer_type'] if specified (aligned with CVSearch perform_CVSearch.py)
-    if 'answer_type' in annotation and engine.config is not None:
-        anno_type = annotation['answer_type']
-        if anno_type in ["option_single", "option_list", "multiple_choice", "mc", "Multiple Choice"]:
-            engine.config.include_options_in_prompt = True
-            engine.config.answer_type = anno_type
-        elif anno_type == "free_form":
-            engine.config.include_options_in_prompt = False
-            engine.config.answer_type = "free_form"
-    elif options and engine.config is not None and getattr(engine.config, "answer_type", "free_form") != "free_form":
-        engine.config.include_options_in_prompt = True
-        engine.config.answer_type = "option_list"
+    # A23: STASH-Search outputs free-form answers, ignoring legacy MC metadata.
+    if engine.config is not None:
+        engine.config.answer_type = "free_form"
+        engine.config.include_options_in_prompt = False
 
     if 'query' in annotation and engine.config is not None:
         engine.config.query_meta = annotation['query']

@@ -45,6 +45,7 @@ def run_feature_grouping_and_gating(
     zoom_model=None,
     return_debug: bool = False,
     question: Optional[str] = None,
+    detected_boxes_by_image: Optional[Dict[int, List[Tuple[int, int, int, int]]]] = None,
 ) -> Union[List[BoundedPatch], Tuple[List[BoundedPatch], List[Dict[str, Any]]]]:
     """
     Executes Feature Grouping and Active Object Gating.
@@ -67,7 +68,15 @@ def run_feature_grouping_and_gating(
             "[Stage 4 Error] zoom_model (Qwen2.5-VL) is None. Stage 4 Feature Grouping & Gating requires a loaded VLM model; fallback execution is strictly disabled."
         )
 
-    # If grouping is ablated by config, keep all bounded patches directly (ranked by confidence/entropy)
+    # Flattened Stage-2 anchors lack source provenance and cannot be used on galleries.
+    if detected_boxes_by_image is None:
+        detected_boxes_by_image = {}
+    if detected_boxes and not detected_boxes_by_image:
+        if len(candidate_images) != 1:
+            raise ValueError("Unindexed Stage-2 detection boxes are unsafe for multi-image gating")
+        detected_boxes_by_image = {0: list(detected_boxes)}
+
+    # If grouping is ablated by config, keep all bounded patches directly
     if not config.enable_feature_grouping:
         if config.verbose:
             print(f"[Stage 4] Feature grouping disabled by config; retaining all {len(bounded_patches)} bounded patches directly without semantic pruning.")
@@ -91,10 +100,10 @@ def run_feature_grouping_and_gating(
     patch_detections: Dict[int, List[Dict[str, Any]]] = {i: [] for i in range(len(bounded_patches))}
 
     # Step 2a: Zero-cost inheritance of Stage 2 canvas detections (0 ms)
-    if detected_boxes:
+    if detected_boxes_by_image:
         for p_idx, patch in enumerate(bounded_patches):
             p_box = patch.box
-            for d_idx, d_box in enumerate(detected_boxes):
+            for d_idx, d_box in enumerate(detected_boxes_by_image.get(patch.img_idx, [])):
                 d_box_clean = tuple(int(round(float(c))) for c in d_box)
                 center_in = target_center_in_patch(p_box, d_box_clean)
                 cov_ratio = compute_target_coverage_ratio(p_box, d_box_clean)
@@ -221,33 +230,36 @@ def run_feature_grouping_and_gating(
 
         max_det_score = max([d["score"] for d in group_detected_objects], default=0.0)
 
-        # Safeguard A: Zero-cost Stage 2 detection anchor check
-        if detected_boxes:
-            for d_idx, d_box in enumerate(detected_boxes):
-                d_box_clean = tuple(int(round(float(c))) for c in d_box)
-                for mem_i in member_indices:
-                    if bounded_patches[mem_i].img_idx == rep_patch.img_idx:
-                        mem_box = bounded_patches[mem_i].box
-                        center_in = target_center_in_patch(mem_box, d_box_clean)
-                        cov_ratio = compute_target_coverage_ratio(mem_box, d_box_clean)
-                        if center_in or cov_ratio >= 0.35:
-                            has_active_match = True
-                            match_reason = "stage2_detection_anchor"
-                            target_label = active_objects[d_idx] if d_idx < len(active_objects) else f"Target_{d_idx}"
-                            rel_bx1 = max(0, d_box_clean[0] - mem_box[0])
-                            rel_by1 = max(0, d_box_clean[1] - mem_box[1])
-                            rel_bx2 = min(mem_box[2] - mem_box[0], d_box_clean[2] - mem_box[0])
-                            rel_by2 = min(mem_box[3] - mem_box[1], d_box_clean[3] - mem_box[1])
-                            group_detected_objects.append({
-                                "label": target_label,
-                                "score": 1.0,
-                                "local_box": [rel_bx1, rel_by1, rel_bx2, rel_by2],
-                                "global_box": list(d_box_clean),
-                                "coverage_ratio": round(cov_ratio, 2),
-                            })
-                            vlm_tested_role = "Stage 2 Anchor"
-                            vlm_prompt = "N/A (Bypassed VLM Gating via Stage 2 Global Anchor)"
-                            break
+        # Safeguard A: inherit anchors only from exactly the same image index.
+        if detected_boxes_by_image:
+            for mem_i in member_indices:
+                mem_patch = bounded_patches[mem_i]
+                mem_box = mem_patch.box
+                for d_idx, d_box in enumerate(detected_boxes_by_image.get(mem_patch.img_idx, [])):
+                    d_box_clean = tuple(int(round(float(c))) for c in d_box)
+                    center_in = target_center_in_patch(mem_box, d_box_clean)
+                    cov_ratio = compute_target_coverage_ratio(mem_box, d_box_clean)
+                    if center_in or cov_ratio >= 0.35:
+                        has_active_match = True
+                        match_reason = "stage2_detection_anchor"
+                        target_label = active_objects[d_idx] if d_idx < len(active_objects) else f"Target_{d_idx}"
+                        rel_bx1 = max(0, d_box_clean[0] - mem_box[0])
+                        rel_by1 = max(0, d_box_clean[1] - mem_box[1])
+                        rel_bx2 = min(mem_box[2] - mem_box[0], d_box_clean[2] - mem_box[0])
+                        rel_by2 = min(mem_box[3] - mem_box[1], d_box_clean[3] - mem_box[1])
+                        group_detected_objects.append({
+                            "label": target_label,
+                            "score": 1.0,
+                            "local_box": [rel_bx1, rel_by1, rel_bx2, rel_by2],
+                            "global_box": list(d_box_clean),
+                            "coverage_ratio": round(cov_ratio, 2),
+                            "patch_idx": mem_i,
+                            "source_img_idx": mem_patch.img_idx,
+                            "source": "stage2_anchor",
+                        })
+                        vlm_tested_role = "Stage 2 Anchor"
+                        vlm_prompt = "N/A (Same-image Stage 2 Anchor)"
+                        break
                 if has_active_match:
                     break
 

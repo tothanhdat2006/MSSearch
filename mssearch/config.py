@@ -51,7 +51,7 @@ class MSSearchConfig:
     saliency_target_threshold: float = 0.35      # High confidence target threshold where marginal gain halts zoom
     max_partition_depth: int = 4                 # Maximum recursion depth before direct tiling
     max_patches_per_image: int = 64              # Maximum bounded patches budget per image
-    stage3_budget_mode: str = "siglip_similarity" # "siglip_similarity", "entropy_descending", "uniform_stride"
+    stage3_budget_mode: str = "siglip_similarity" # "siglip_similarity" or "uniform_stride"
     siglip_budget_batch_size: int = 32           # Batch size for SigLIP crop scoring
     reuse_stage2_features: bool = True           # Reuse SAM3 vision features extracted in Stage 2
 
@@ -121,9 +121,6 @@ class MSSearchConfig:
     vlm_batch_size: int = 4                      # Batched VLM forward passes (4 or 8) across patches and logit probes
     bbox_expansion_factor: float = 1.25          # Independent 25% padding per patch
     max_vlm_tokens: int = 128                    # Response token budget (allows complete answers without truncation)
-    enable_early_consensus_exit: bool = False    # Stop evaluating crops once 2 identical/near-identical answers are extracted
-    early_consensus_count: int = 2               # Minimum consensus extractions to trigger early exit
-    early_consensus_threshold: float = 0.75      # String similarity threshold on extracted core answers
     prompt_directed_final_answer: bool = False   # Deprecated: reading pipeline strictly follows standard <image>\n<question>
     answer_dedup_similarity: float = 0.85        # Semantic deduplication threshold
 
@@ -131,14 +128,13 @@ class MSSearchConfig:
     # Multiple-Choice & Options Prompting Flag (e.g. HRBench)
     # -------------------------------------------------------------------------
     include_options_in_prompt: bool = False      # If True, appends candidate options block to reading prompt (like CVSearch option_single); if False, operates in open-ended free_form mode
-    answer_type: str = "option_list"             # "free_form" (default) or "option_single" / "option_list" / "multiple_choice"
+    answer_type: str = "free_form"             # Standard open-ended textual answer format
 
     # -------------------------------------------------------------------------
     # Multi-Source / Multi-Answer Configuration (Annotation Charter Standard)
     # -------------------------------------------------------------------------
     multi_answer_mode: bool = False              # If True, enables multi-source open-set answering (K>=1, N>=1): disables Stage 6 early consensus exit and aggregates all unique answers into semicolon-separated text
     scale_budgets_by_num_images: bool = True     # If True, scales Stage 4 SAM3 patch scans, latent evaluations, and retention caps linearly by N candidate images
-    enable_query_adaptive_halting: bool = True   # Query-adaptive dynamic halting in multi-answer mode (e.g. N=1 disables multi-answer mode)
     query_meta: Optional[dict] = None            # Optional structured query metadata: {'target_attribute_type': ..., 'condition_attribute': ..., 'target_object': ...}
 
     # -------------------------------------------------------------------------
@@ -164,9 +160,6 @@ class MSSearchConfig:
         else:
             self.gate_threshold = round((self.latent_confidence_threshold / 2.0) + 0.5, 4)
 
-        # In multi-answer mode, disable early consensus exit to read all evidence crops across N images
-        if self.multi_answer_mode:
-            self.enable_early_consensus_exit = False
         # Normalize log_level and verbose flags
         if self.log_level == "summary":
             self.stage_summary_only = True

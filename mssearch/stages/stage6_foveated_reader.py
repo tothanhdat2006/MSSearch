@@ -6,7 +6,6 @@ and deduplicates extracted target answers via semantic similarity into Answer Me
 """
 
 from typing import List, Dict, Tuple, Optional, Any, Union
-from difflib import SequenceMatcher
 from PIL import Image
 
 from ..config import MSSearchConfig
@@ -19,7 +18,6 @@ from .utils_stage6 import (
     is_negative_or_unanswerable,
     split_attribute_answer,
     deduplicate_answers,
-    is_singular_query,
     resolve_by_majority_voting,
 )
 
@@ -31,7 +29,6 @@ __all__ = [
     "is_negative_or_unanswerable",
     "split_attribute_answer",
     "deduplicate_answers",
-    "is_singular_query",
     "resolve_by_majority_voting",
     "run_foveated_vlm_reading",
 ]
@@ -48,7 +45,7 @@ def run_foveated_vlm_reading(
 ) -> FinalSearchResult:
     """
     Executes Foveated VLM Reading with 1.25x padding and builds Answer Memory M.
-    Supports batched VLM execution (batch size 4 or 8) and query-adaptive dynamic halting.
+    Reads all prepared crops with batched VLM execution (batch size 4 or 8).
     """
     if zoom_model is None:
         raise RuntimeError(
@@ -64,7 +61,6 @@ def run_foveated_vlm_reading(
 
     # 1. Prepare and pre-filter all crop inputs
     prepared_crops: List[Dict[str, Any]] = []
-    answer_mode = getattr(config, "answer_type", "free_form")
 
     for c_idx, item in enumerate(unified_pool):
         img_idx = item.img_idx
@@ -121,8 +117,6 @@ def run_foveated_vlm_reading(
     vlm_batch_size = max(1, getattr(config, "vlm_batch_size", 4))
     use_batching = hasattr(zoom_model, "batch_generate_response") and vlm_batch_size > 1
     max_tokens = getattr(config, "max_vlm_tokens", 128)
-    is_singular = is_singular_query(question, question_type)
-    early_exit_halted = False
 
     for b_start in range(0, len(prepared_crops), vlm_batch_size):
         chunk = prepared_crops[b_start : b_start + vlm_batch_size]
@@ -212,33 +206,9 @@ def run_foveated_vlm_reading(
                 if config.verbose:
                     print(f"[Stage 6][Evidence Found] Crop {c_idx} (Image {img_idx}, {item.source_branch}): Answer: '{final_ans}' (Raw: '{raw_answer[:60]}...')")
 
-                # Consensus stopping & query-adaptive dynamic halting
-                enable_halting = getattr(config, "enable_early_consensus_exit", True) or (
-                    getattr(config, "enable_query_adaptive_halting", True) and is_singular
-                )
-                if enable_halting and len(extractions) >= 2:
-                    req_consensus = getattr(config, "early_consensus_count", 2)
-                    thresh = getattr(config, "early_consensus_threshold", 0.75)
-                    cur_core = (extractions[-1].final_answer or extract_final_answer(raw_answer)).strip().lower()
-
-                    matches = []
-                    for prev in extractions[:-1]:
-                        prev_core = (prev.final_answer or extract_final_answer(prev.raw_answer)).strip().lower()
-                        ratio = SequenceMatcher(None, cur_core, prev_core).ratio()
-                        has_sub = (len(cur_core) >= 3 and cur_core in prev_core) or (len(prev_core) >= 3 and prev_core in cur_core)
-                        if ratio >= thresh or has_sub:
-                            matches.append(prev)
-
-                    if len(matches) + 1 >= req_consensus:
-                        if config.verbose:
-                            print(f"[Stage 6][Early Exit] Consensus confirmed ({len(matches) + 1} matching crops) on '{final_ans}'. Halting remaining {len(prepared_crops) - c_idx - 1} crops to optimize throughput.")
-                        early_exit_halted = True
-                        break
             elif config.verbose:
                 print(f"[Stage 6][Negative Filtered] Crop {c_idx} (Image {img_idx}) returned unanswerable response: '{raw_answer}'")
 
-        if early_exit_halted:
-            break
 
     # 4. Semantic Deduplication of Answer Memory using clean final answers & Majority Voting
     if extractions:

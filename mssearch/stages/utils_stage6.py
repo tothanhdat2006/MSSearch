@@ -224,28 +224,9 @@ def deduplicate_answers(answers: List[str], similarity_threshold: float = 0.85, 
     return [c["rep"] for c in unique_clusters]
 
 
-def is_singular_query(question: str, question_type: Optional[str] = None) -> bool:
-    """
-    Determines whether a query seeks a single factual value rather than open-set enumeration.
-    """
-    if not question:
-        return True
-    q_lower = question.lower()
-    plural_cues = [
-        "all", "each", "every", "list", "how many", "count",
-        "which ones", "which images", "which cars", "which people",
-        "any other", "what are the"
-    ]
-    if any(re.search(rf"\b{re.escape(w)}\b", q_lower) for w in plural_cues):
-        return False
-    if question_type in ["counting"]:
-        return False
-    return True
-
-
 def resolve_by_majority_voting(
     extractions: List[EvidenceExtraction],
-    similarity_thresh: float = 0.75,
+    similarity_thresh: float = 0.85,
     verbose: bool = False
 ) -> Tuple[Optional[str], Optional[int], List[str]]:
     """

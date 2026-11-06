@@ -9,5 +9,7 @@
   "max_sub_canvases": 4,
   "seam_overlap_threshold": 0.1,
   "prompt_directed_final_answer": false,
-  "log_level": "summary"
+  "log_level": "summary",
+  "answer_type": "free_form",
+  "include_options_in_prompt": false
 }

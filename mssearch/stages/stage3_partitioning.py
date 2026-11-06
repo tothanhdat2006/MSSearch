@@ -72,7 +72,6 @@ def partition_candidate_images(
                 print(f"[Stage 3][Fallback] Image {img_idx}: No Stage 2 feature map in cache; falling back to zero-initialized feature map.")
 
         img_patches: List[BoundedPatch] = []
-        discarded_candidates: List[Tuple[Tuple[int, int, int, int], float]] = []
 
         while work_queue:
             box, depth, parent_box = work_queue.pop(0)
@@ -82,6 +81,7 @@ def partition_candidate_images(
 
             cached_siglip_score: Optional[float] = None
             sub_boxes: Optional[List[Tuple[int, int, int, int]]] = None
+            saliency_parent_score: Optional[float] = None
 
             stopping_mode = getattr(config, "partition_stopping_mode", "saliency_plateau")
 
@@ -92,12 +92,13 @@ def partition_candidate_images(
                 # Paradigm 2: Semantic Saliency-Plateau Stopping (Self-Terminating Zoom)
                 if depth == 0:
                     should_split = True
+                elif max(pw, ph) > getattr(config, "max_plateau_size", 1536):
+                    # Mandatory split above the physical ceiling, even if depth cap is reached.
+                    should_split = True
                 elif depth >= config.max_partition_depth:
                     should_split = False
                 elif max(pw, ph) <= getattr(config, "min_plateau_size", 256):
                     should_split = False
-                elif max(pw, ph) > getattr(config, "max_plateau_size", 1536):
-                    should_split = True
                 else:
                     # Dynamic scale range [min_plateau_size, max_plateau_size]: evaluate Saliency Plateau
                     candidate_sub_boxes = split_box_into_subpatches(
@@ -138,38 +139,20 @@ def partition_candidate_images(
                                 ]
                                 sub_boxes = promising_sub_boxes if promising_sub_boxes else candidate_sub_boxes
                             evaluated_with_siglip = True
+                            saliency_parent_score = s_parent
                         except Exception as e:
                             if config.verbose:
                                 print(f"[Stage 3][Plateau Notice] SigLIP scoring failed ({e}); falling back to entropy plateau.")
 
                     if not evaluated_with_siglip:
-                        ent_parent = compute_spatial_entropy(crop_parent, weights=config.entropy_weights)
-                        child_crops = [
-                            img_pil.crop(tuple(int(round(float(c))) for c in sb))
-                            for sb in candidate_sub_boxes
-                        ]
-                        ent_children = [
-                            compute_spatial_entropy(c, weights=config.entropy_weights)
-                            for c in child_crops
-                        ]
-                        max_child_ent = max(ent_children) if ent_children else 0.0
-                        delta_h = max_child_ent - ent_parent
-
-                        if delta_h <= 0.02 and ent_parent >= config.min_patch_entropy:
-                            if config.verbose:
-                                print(f"[Stage 3][Plateau Stop (Entropy)] Patch {box_ints} ({pw}x{ph}, depth={depth}) reached entropy plateau (H_p={ent_parent:.3f}, H_c={max_child_ent:.3f}, d_H={delta_h:+.3f}). Terminating zoom.")
-                            should_split = False
-                        else:
-                            should_split = True
-                            sub_boxes = candidate_sub_boxes
+                        raise RuntimeError("SigLIP saliency-plateau scoring unavailable; entropy fallback disabled")
 
             if should_split:
                 crop = img_pil.crop(box_ints)
                 entropy = compute_spatial_entropy(crop, weights=config.entropy_weights)
 
-                # Only run SAM3-SGAP clustering at root level (depth == 0)
+                # Apply entropy-based routing to every patch requiring subdivision.
                 should_run_sgap = (
-                    depth == 0 and
                     config.partition_mode in ("hybrid", "sgap_only") and
                     (config.partition_mode == "sgap_only" or entropy >= config.entropy_threshold)
                 )
@@ -188,6 +171,16 @@ def partition_candidate_images(
                         overlap_ratio=config.sgap_overlap_ratio,
                         verbose=config.verbose,
                     )
+                    if saliency_parent_score is not None and sub_boxes:
+                        # The SGAP operator replaces regular candidate children.
+                        # Reapply the original SigLIP relevance filter to SGAP crops.
+                        sgap_crops = [img_pil.crop(sb) for sb in sub_boxes]
+                        sgap_scores = list(siglip_model.score_crops(sgap_crops, active_objects))
+                        if len(sgap_scores) != len(sub_boxes):
+                            raise RuntimeError("SigLIP returned incomplete SGAP child scores")
+                        highest = max(sgap_scores)
+                        sub_boxes = [sb for sb, score in zip(sub_boxes, sgap_scores)
+                                     if score >= saliency_parent_score - 0.05 or score == highest]
                 elif sub_boxes is None:
                     sub_boxes = split_box_into_subpatches(
                         box_ints,
@@ -198,8 +191,24 @@ def partition_candidate_images(
                     if config.verbose and depth <= 1:
                         print(f"[Stage 3][Routing] Patch {box_ints} (size {pw}x{ph}, depth={depth}) -> Direction-aware Split ({len(sub_boxes)} patches).")
 
+                # A04: a semantic partition can return a parent-sized region. Such
+                # a candidate would prevent the mandatory >1536px rule from terminating.
+                # Revert to regular four-way partitioning for this node (not an
+                # entropy-scoring fallback) and enforce strict geometric progress.
+                parent_area = max(1, pw * ph)
+                if not sub_boxes or any(
+                    (int(round(float(sb[2]))) - int(round(float(sb[0])))) *
+                    (int(round(float(sb[3]))) - int(round(float(sb[1])))) >= parent_area
+                    for sb in sub_boxes
+                ):
+                    sub_boxes = split_box_into_subpatches(
+                        box_ints, img_w, img_h, overlap_ratio=config.quadrant_overlap_ratio
+                    )
                 for sb in sub_boxes:
                     sb_ints = tuple(int(round(float(c))) for c in sb)
+                    child_area = (sb_ints[2] - sb_ints[0]) * (sb_ints[3] - sb_ints[1])
+                    if child_area <= 0 or child_area >= parent_area:
+                        raise RuntimeError(f"Non-shrinking partition at {box_ints} -> {sb_ints}")
                     work_queue.append((sb_ints, depth + 1, box_ints))
             else:
                 crop = img_pil.crop(box_ints)
@@ -207,7 +216,6 @@ def partition_candidate_images(
 
                 if config.min_patch_entropy > 0.0 and entropy < config.min_patch_entropy:
                     if cached_siglip_score is None or cached_siglip_score < getattr(config, "saliency_target_threshold", 0.35):
-                        discarded_candidates.append((box_ints, entropy))
                         continue
 
                 _, pooled_vec = slice_feature_map(feat_map, box_ints, img_w, img_h)
@@ -224,23 +232,6 @@ def partition_candidate_images(
                     )
                 )
 
-        if not img_patches and discarded_candidates:
-            best_box, best_ent = max(discarded_candidates, key=lambda x: x[1])
-            _, pooled_vec = slice_feature_map(feat_map, best_box, img_w, img_h)
-            img_patches.append(
-                BoundedPatch(
-                    img_idx=img_idx,
-                    box=best_box,
-                    feature_vector=pooled_vec,
-                    entropy=best_ent,
-                    parent_id=None,
-                    level=0,
-                )
-            )
-            if config.verbose:
-                print(f"[Stage 3][Safety Fallback] Image {img_idx}: All patches had H < {config.min_patch_entropy:.2f}. Retained highest-entropy patch {best_box} (H={best_ent:.3f}).")
-        elif config.verbose and discarded_candidates:
-            print(f"[Stage 3][Entropy Pruning] Image {img_idx}: Pruned {len(discarded_candidates)} patches with H < {config.min_patch_entropy:.2f}. Retained {len(img_patches)} bounded patches.")
 
         # Safety Budget Cap
         if len(img_patches) > config.max_patches_per_image:
@@ -263,23 +254,19 @@ def partition_candidate_images(
 
                     img_patches = sorted(
                         img_patches,
-                        key=lambda p: (p.siglip_score if p.siglip_score is not None else 0.0, p.entropy),
+                        key=lambda p: (p.siglip_score if p.siglip_score is not None else 0.0, 1.0 / max(1, (p.box[2]-p.box[0])*(p.box[3]-p.box[1]))),
                         reverse=True,
                     )[:config.max_patches_per_image]
                 except Exception as e:
-                    if config.verbose:
-                        print(f"[Stage 3][Budget Guard Notice] SigLIP scoring failed ({e}); falling back to entropy descending.")
-                    img_patches = sorted(img_patches, key=lambda p: p.entropy, reverse=True)[:config.max_patches_per_image]
-            elif budget_mode in ("entropy_descending", "siglip_similarity"):
-                if config.verbose:
-                    print(f"[Stage 3][Budget Guard] Entropy-ranking {len(img_patches)} patches -> retaining top {config.max_patches_per_image} highest-entropy patches.")
-                img_patches = sorted(img_patches, key=lambda p: p.entropy, reverse=True)[:config.max_patches_per_image]
-            else:
+                    raise RuntimeError("SigLIP budget scoring failed; entropy fallback disabled") from e
+            elif budget_mode == "uniform_stride":
                 if config.verbose:
                     print(f"[Stage 3][Budget Guard] Uniformly downsampling {len(img_patches)} bounded patches to {config.max_patches_per_image} across canvas.")
                 step = len(img_patches) / config.max_patches_per_image
                 indices = [int(i * step) for i in range(config.max_patches_per_image)]
                 img_patches = [img_patches[i] for i in indices]
+            else:
+                raise RuntimeError("SigLIP budget ranking requires a loaded scorer; no entropy fallback")
 
         # Ensure all surviving bounded patches have siglip_score populated when siglip_model is available
         if siglip_model is not None and active_objects:
@@ -295,8 +282,7 @@ def partition_candidate_images(
                     for p, s in zip(unscored, scores):
                         p.siglip_score = float(s)
                 except Exception as e:
-                    if config.verbose:
-                        print(f"[Stage 3][SigLIP Leaf Scoring Notice] SigLIP scoring failed ({e}).")
+                    raise RuntimeError("SigLIP leaf scoring failed; entropy fallback disabled") from e
 
         bounded_patches.extend(img_patches)
 

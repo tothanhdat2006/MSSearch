@@ -116,7 +116,7 @@ def run_ablation_pipeline(
     annotation = {
         "question": question,
         "sample_id": sample_id,
-        "answer_type": sample_data.get("answer_type", "attribute_list"),
+        "answer_type": "free_form",
         "query": query_info,
         "target_bbox": sample_data.get("target_bbox"),
     }

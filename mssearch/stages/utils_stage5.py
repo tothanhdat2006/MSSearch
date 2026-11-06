@@ -627,7 +627,7 @@ def apply_spatial_nms(
             key=lambda p: (
                 p.confidence_score if p.confidence_score is not None else 0.0,
                 p.siglip_score if p.siglip_score is not None else 0.0,
-                p.entropy
+                1.0 / float(max(1, (p.box[2]-p.box[0])*(p.box[3]-p.box[1])))
             ),
             reverse=True
         )

@@ -22,6 +22,7 @@ class DirectAnswerResult:
     evidence_img_idx: Optional[int] = None
     answers: List[str] = field(default_factory=list)
     evidence_images: List[int] = field(default_factory=list)
+    source_records: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -39,6 +40,7 @@ class FastPathResult:
     answers: List[str] = field(default_factory=list)
     evidence_images: List[int] = field(default_factory=list)
     boxes_by_image: Dict[int, List[Tuple[int, int, int, int]]] = field(default_factory=dict)
+    source_records: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def clamp_image_to_safe_resolution(img: Image.Image, max_dim: int = 1024) -> Image.Image:
