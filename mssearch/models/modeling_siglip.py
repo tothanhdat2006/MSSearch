@@ -6,7 +6,9 @@ using native HuggingFace pipeline as specified in official model documentation.
 import warnings
 import logging
 from typing import List, Union, Any
-from PIL import Image
+from PIL import Image, ImageOps
+
+Image.MAX_IMAGE_PIXELS = None
 import torch
 from transformers import AutoModel, AutoProcessor, AutoConfig
 

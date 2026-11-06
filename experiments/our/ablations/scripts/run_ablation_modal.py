@@ -45,6 +45,7 @@ def evaluate_ablation_modal(
     scorer: str = "siglip",
     scorer_path: str = None,
     gate_threshold: float = None,
+    component: str = None,
     model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct",
     pool_mode: str = "N_5",
     dataset_path: str = "/data/STASHBench/annotations_part1234_merged.json",
@@ -75,8 +76,11 @@ def evaluate_ablation_modal(
     os.makedirs(output_dir, exist_ok=True)
 
     m_clean = os.path.basename(os.path.normpath(model_name))
-    gate_tag = f"_gate{gate_threshold}" if gate_threshold is not None else ""
-    prefix = f"results_ablation_{detector}_{scorer}{gate_tag}_{m_clean}_{pool_mode}"
+    if component:
+        prefix = f"results_ablation_component_{component}_{m_clean}_{pool_mode}"
+    else:
+        gate_tag = f"_gate{gate_threshold}" if gate_threshold is not None else ""
+        prefix = f"results_ablation_{detector}_{scorer}{gate_tag}_{m_clean}_{pool_mode}"
     cands = sorted(glob.glob(os.path.join(output_dir, f"{prefix}_*.jsonl")))
     results_file = cands[-1] if resume and cands else os.path.join(output_dir, f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl")
     config_file = os.path.join(os.path.dirname(os.path.abspath(results_file)), os.path.basename(results_file).replace("results_ablation_", "config_ablation_").replace(".jsonl", ".json"))
@@ -130,7 +134,7 @@ def evaluate_ablation_modal(
     engines = load_ablation_engines(
         model_path=resolved_model, detector_type=detector, detector_path=resolved_det,
         scorer_type=scorer, scorer_name=resolved_sc, nlp_model="en_core_web_sm",
-        gate_threshold=gate_threshold, device="cuda:0"
+        gate_threshold=gate_threshold, component=component, device="cuda:0"
     )
     engines["config"].save_json(config_file)
     results_volume.commit()
@@ -167,7 +171,7 @@ def evaluate_ablation_modal(
 
             record = {
                 "sample_id": sample_id, "sample_index": s_idx, "pool_name": pool_name, "pool_N": len(candidate_meta),
-                "model_name": m_clean, "detector_type": detector, "scorer_type": scorer,
+                "model_name": m_clean, "component": component, "detector_type": detector, "scorer_type": scorer,
                 "gate_threshold": getattr(engines["config"], "gate_threshold", gate_threshold or 0.5),
                 "question": question, "ground_truth_list": gt_list, "gt_image_id": gt_img_id, "gt_image_idx": gt_img_idx,
                 "primary_pred_image_id": prim_id, "primary_pred_image_idx": prim_idx, "is_primary_image_correct": is_prim_ok,
@@ -210,6 +214,7 @@ def main(
     scorer: str = "siglip",
     scorer_path: str = None,
     gate_threshold: float = None,
+    component: str = None,
     model: str = "Qwen/Qwen2.5-VL-7B-Instruct",
     pool_mode: str = "N_5",
     dataset_path: str = "/data/STASHBench/annotations_part1234_merged.json",
@@ -221,11 +226,11 @@ def main(
     resume: bool = False,
     gpu: str = "L40S",
 ):
-    print(f"Launching Modal Ablation (Detector: {detector} | Scorer: {scorer} | Gate: {gate_threshold or 0.5} | Model: {model} | Pool: {pool_mode} on {gpu})", flush=True)
+    print(f"Launching Modal Ablation (Component: {component or 'N/A'} | Detector: {detector} | Scorer: {scorer} | Model: {model} | Pool: {pool_mode} on {gpu})", flush=True)
     fn = evaluate_ablation_modal.with_options(gpu=gpu)
     fn.remote(
         detector=detector, detector_path=detector_path, scorer=scorer, scorer_path=scorer_path,
-        gate_threshold=gate_threshold, model_name=model, pool_mode=pool_mode,
+        gate_threshold=gate_threshold, component=component, model_name=model, pool_mode=pool_mode,
         dataset_path=dataset_path, image_dir=image_dir, sample_idx=sample_idx,
         start_idx=start_idx, end_idx=end_idx, max_samples=max_samples, resume=resume,
     )

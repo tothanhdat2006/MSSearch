@@ -8,8 +8,10 @@ warnings.filterwarnings("ignore", category=UserWarning, message=r".*the number o
 import torch
 import matplotlib.pyplot as plt
 import math
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 import time
+
+Image.MAX_IMAGE_PIXELS = None
 import matplotlib.patches as patches
 from sam3.model_builder import build_sam3_image_model
 from sam3.model.sam3_image_processor import Sam3Processor
@@ -1223,7 +1225,7 @@ def plot_mask(visualizer, image, text_target, target_id, processed_results, left
 if __name__ == "__main__":
     model_path = "models/facebook/sam3/sam3.pt"
     image_path = "datasets/vstar/direct_attributes/sa_19272.jpg"
-    image = Image.open(image_path).convert("RGB")
+    image = ImageOps.exif_transpose(Image.open(image_path)).convert("RGB")
     text = "cyclist's bag"
     text_target = ["woman"]  # extract_visual_objects(text)#["blue backpack", "airplane"]
     print(text_target)

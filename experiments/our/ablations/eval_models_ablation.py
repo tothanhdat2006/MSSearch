@@ -1,19 +1,23 @@
 """
 Engine loader and pipeline executor for MSSearch ablation studies.
-Seamlessly injects alternative detection backbones (Grounding DINO, Florence-2, DINOv3)
-and screening scorers (SigLIP2, CLIP-ViT-B/32, CLIP-ViT-L/14, EVA-02-L/14).
+Seamlessly injects alternative detection backbones (Grounding DINO, Florence-2, DINOv3),
+screening scorers (SigLIP2, CLIP-ViT-B/32, CLIP-ViT-L/14, EVA-02-L/14), and
+component-increment ablation pipelines (Qwen baseline, Fast Path, Rigid quadtree, SGAP, ASP, Aggregation).
 """
 
 import os
 import json
-import torch
+import time
 from typing import Dict, Any, List, Optional
+import torch
 from PIL import Image
 
 try:
     from .models import load_detector, load_visual_scorer
+    from .eval_runner_utils import run_qwen_direct_multi_image
 except (ImportError, ValueError):
     from experiments.our.ablations.models import load_detector, load_visual_scorer
+    from experiments.our.ablations.eval_runner_utils import run_qwen_direct_multi_image
 
 
 def load_ablation_engines(
@@ -25,16 +29,19 @@ def load_ablation_engines(
     nlp_model: str = "en_core_web_sm",
     config_path: Optional[str] = None,
     gate_threshold: Optional[float] = None,
+    component: Optional[str] = None,
     device: str = "cuda:0",
 ) -> Dict[str, Any]:
     """
-    Initializes VLM, perception detector (SAM3 / Grounding DINO / Florence-2 / DINOv3),
-    visual screening scorer (SigLIP / SigLIP2 / CLIP-B/32 / CLIP-L/14 / EVA-02-L/14),
-    and NLP pipeline for ablation experiments.
+    Initializes VLM, perception detector, visual screening scorer,
+    and NLP pipeline for ablation experiments, configuring component increments.
     """
     from mssearch.config import MSSearchConfig
     from mssearch.models import ModelQwenVL, ModelInternvl
-    import spacy
+    try:
+        import spacy
+    except ImportError:
+        spacy = None
 
     # 1. Load VLM
     m_str = str(model_path).lower()
@@ -47,31 +54,37 @@ def load_ablation_engines(
     else:
         zoom_model = ModelQwenVL(model_path=model_path, device=device)
 
-    # 2. Load Ablation Detector (Injected into sam_model slot)
-    print(f"[Ablation Setup] Loading detector: '{detector_type}'...")
-    detector = load_detector(
-        detector_type=detector_type,
-        model_path_or_name=detector_path,
-        device=device,
-    )
+    # 2. Load Detector (injected into sam_model slot)
+    detector = None
+    if component != "qwen":
+        print(f"[Ablation Setup] Loading detector: '{detector_type}'...")
+        detector = load_detector(
+            detector_type=detector_type,
+            model_path_or_name=detector_path,
+            device=device,
+        )
 
-    # 3. Load Ablation Visual Scorer (Injected into siglip_model slot)
-    print(f"[Ablation Setup] Loading visual scorer: '{scorer_type}'...")
-    scorer = load_visual_scorer(
-        scorer_type=scorer_type,
-        model_name_or_path=scorer_name,
-        device=device,
-    )
+    # 3. Load Scorer (injected into siglip_model slot)
+    scorer = None
+    if component not in ("qwen", "qwen_fast_path"):
+        print(f"[Ablation Setup] Loading visual scorer: '{scorer_type}'...")
+        scorer = load_visual_scorer(
+            scorer_type=scorer_type,
+            model_name_or_path=scorer_name,
+            device=device,
+        )
 
     # 4. Load spaCy NLP Pipeline
-    print(f"[Ablation Setup] Loading spaCy NLP pipeline...")
-    try:
-        nlp_parser = spacy.load(nlp_model)
-    except Exception:
+    nlp_parser = None
+    if component not in ("qwen",):
+        print(f"[Ablation Setup] Loading spaCy NLP pipeline...")
         try:
-            nlp_parser = spacy.load("en_core_web_sm")
+            nlp_parser = spacy.load(nlp_model)
         except Exception:
-            nlp_parser = None
+            try:
+                nlp_parser = spacy.load("en_core_web_sm")
+            except Exception:
+                nlp_parser = None
 
     # 5. Build Configuration
     cfg_file = config_path or os.path.join(os.path.dirname(__file__), "..", "config_default.json")
@@ -81,16 +94,39 @@ def load_ablation_engines(
             cfg_dict = json.load(f)
     if gate_threshold is not None:
         cfg_dict["gate_threshold"] = float(gate_threshold)
+
+    # Apply Component Increments
+    if component == "qwen_fp_rigid_cg_single":
+        cfg_dict["partition_mode"] = "quadrant_only"
+        cfg_dict["enable_continuous_enclosure_subcanvas"] = False
+        cfg_dict["enable_spatial_compressed_canvas"] = False
+        cfg_dict["spatial_canvas_relational_only"] = False
+    elif component == "qwen_fp_sgap_cg_single":
+        cfg_dict["partition_mode"] = "sgap_only"
+        cfg_dict["enable_continuous_enclosure_subcanvas"] = False
+        cfg_dict["enable_spatial_compressed_canvas"] = False
+        cfg_dict["spatial_canvas_relational_only"] = False
+    elif component == "qwen_fp_asp_cg_single":
+        cfg_dict["partition_mode"] = "hybrid"
+        cfg_dict["enable_continuous_enclosure_subcanvas"] = False
+        cfg_dict["enable_spatial_compressed_canvas"] = False
+        cfg_dict["spatial_canvas_relational_only"] = False
+    elif component == "qwen_fp_asp_cg_agg":
+        cfg_dict["partition_mode"] = "hybrid"
+        cfg_dict["enable_continuous_enclosure_subcanvas"] = True
+        cfg_dict["enable_spatial_compressed_canvas"] = True
+
     config = MSSearchConfig.from_dict(cfg_dict)
 
     return {
         "zoom_model": zoom_model,
-        "sam_model": detector,      # Core pipeline consumes this under sam_model
-        "siglip_model": scorer,     # Core pipeline consumes this under siglip_model
+        "sam_model": detector,
+        "siglip_model": scorer,
         "nlp_model": nlp_parser,
         "config": config,
         "detector_type": detector_type,
         "scorer_type": scorer_type,
+        "component": component,
     }
 
 
@@ -100,34 +136,83 @@ def run_ablation_pipeline(
     sample_data: Dict[str, Any],
     sample_idx: int,
 ) -> Dict[str, Any]:
-    """
-    Executes MSSearch pipeline with injected ablation backbones.
-    """
-    from mssearch.MSSearch import get_mssearch_response
-
+    """Executes MSSearch pipeline or component ablation route with injected backbones."""
+    component = engines.get("component")
     sample_id = sample_data.get("sample_id", f"sample_{sample_idx}")
     question = sample_data.get("question") or sample_data.get("query", {}).get("question", "")
+    t_start = time.perf_counter()
+
+    # Component Route 1: Direct Qwen Baseline
+    if component == "qwen":
+        pred_ans, pred_0based, _ = run_qwen_direct_multi_image(engines["zoom_model"], candidate_images, question)
+        prim_img = pred_0based[0] if pred_0based else 0
+        boxes = [{"img_idx": i, "box": [0, 0, candidate_images[i].width, candidate_images[i].height]} for i in pred_0based]
+        return {
+            "primary_answer": pred_ans, "primary_evidence_image": prim_img, "evidence_images": pred_0based,
+            "raw_vlm_response": pred_ans, "extractions": [],
+            "telemetry": {
+                "route": "direct_baseline", "routes_executed": ["direct_baseline"], "stages_executed": ["direct_baseline"],
+                "stage5_mode": "direct_baseline", "evidence_images": pred_0based, "primary_evidence_image": prim_img,
+                "stage5_boxes": boxes, "stage6_patch_boxes": [b["box"] for b in boxes],
+                "num_unified_crops": len(boxes), "timings_sec": {"direct_baseline": round(time.perf_counter() - t_start, 3)},
+            }
+        }
+
+    # Component Route 2: Qwen w/ Fast Path (Falls back to Direct Baseline if not triggered)
+    if component == "qwen_fast_path":
+        from mssearch.stages.stage1_parser import parse_question_to_active_objects
+        from mssearch.stages.stage2_fast_path import run_tool_based_fast_path
+        cfg = engines["config"]
+        first_img = candidate_images[0] if candidate_images else None
+        active_objects = parse_question_to_active_objects(
+            question=question, zoom_model=engines["zoom_model"], nlp_model=engines["nlp_model"],
+            verbose=False, image_pil=first_img, config=cfg
+        )
+        fp_result = run_tool_based_fast_path(
+            candidate_images=candidate_images, active_objects=active_objects, sam_model=engines["sam_model"],
+            zoom_model=engines["zoom_model"], config=cfg, question=question, active_img_indices=list(range(len(candidate_images)))
+        )
+        if fp_result.triggered:
+            ev_imgs = fp_result.evidence_images if fp_result.evidence_images else ([fp_result.evidence_img_idx] if fp_result.evidence_img_idx is not None else [0])
+            prim_img = fp_result.evidence_img_idx if fp_result.evidence_img_idx is not None else ev_imgs[0]
+            boxes = [{"img_idx": i, "box": list(fp_result.detected_boxes[0]) if fp_result.detected_boxes else [0, 0, candidate_images[i].width, candidate_images[i].height]} for i in ev_imgs]
+            return {
+                "primary_answer": fp_result.answer, "primary_evidence_image": prim_img, "evidence_images": ev_imgs,
+                "raw_vlm_response": fp_result.raw_response or fp_result.answer, "extractions": [],
+                "telemetry": {
+                    "route": "tool_based_fast_path", "routes_executed": ["tool_based_fast_path"], "stages_executed": ["stage1_parser", "stage2_fast_path"],
+                    "stage5_mode": "fast_path", "evidence_images": ev_imgs, "primary_evidence_image": prim_img,
+                    "stage5_boxes": boxes, "stage6_patch_boxes": [b["box"] for b in boxes],
+                    "num_unified_crops": len(boxes), "timings_sec": {"stage2_fast_path": round(time.perf_counter() - t_start, 3)},
+                }
+            }
+        # Fallback to Direct Baseline on candidate images
+        pred_ans, pred_0based, _ = run_qwen_direct_multi_image(engines["zoom_model"], candidate_images, question)
+        prim_img = pred_0based[0] if pred_0based else 0
+        boxes = [{"img_idx": i, "box": [0, 0, candidate_images[i].width, candidate_images[i].height]} for i in pred_0based]
+        return {
+            "primary_answer": pred_ans, "primary_evidence_image": prim_img, "evidence_images": pred_0based,
+            "raw_vlm_response": pred_ans, "extractions": [],
+            "telemetry": {
+                "route": "fast_path_direct_fallback", "routes_executed": ["fast_path_fallback"], "stages_executed": ["stage1_parser", "stage2_fast_path", "direct_fallback"],
+                "stage5_mode": "direct_baseline", "evidence_images": pred_0based, "primary_evidence_image": prim_img,
+                "stage5_boxes": boxes, "stage6_patch_boxes": [b["box"] for b in boxes],
+                "num_unified_crops": len(boxes), "timings_sec": {"fast_path_fallback": round(time.perf_counter() - t_start, 3)},
+            }
+        }
+
+    # Standard MSSearch pipeline (including steps 3, 4, 5, 6 with config overrides)
+    from mssearch.MSSearch import get_mssearch_response
     query_info = sample_data.get("query") or {
-        "question": question,
-        "question_type": sample_data.get("question_type", "Attribute"),
+        "question": question, "question_type": sample_data.get("question_type", "Attribute"),
         "target_object": sample_data.get("target_object", ""),
     }
-
     annotation = {
-        "question": question,
-        "sample_id": sample_id,
-        "answer_type": "free_form",
-        "query": query_info,
-        "target_bbox": sample_data.get("target_bbox"),
+        "question": question, "sample_id": sample_id, "answer_type": "free_form",
+        "query": query_info, "target_bbox": sample_data.get("target_bbox"),
     }
-
-    resp = get_mssearch_response(
-        sam_model=engines["sam_model"],
-        zoom_model=engines["zoom_model"],
-        siglip_model=engines["siglip_model"],
-        nlp_model=engines["nlp_model"],
-        annotation=annotation,
-        candidate_images=candidate_images,
-        config=engines["config"],
+    return get_mssearch_response(
+        sam_model=engines["sam_model"], zoom_model=engines["zoom_model"],
+        siglip_model=engines["siglip_model"], nlp_model=engines["nlp_model"],
+        annotation=annotation, candidate_images=candidate_images, config=engines["config"],
     )
-    return resp

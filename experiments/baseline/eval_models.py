@@ -3,6 +3,8 @@ import torch
 from typing import List, Dict, Any, Tuple
 from PIL import Image, ImageDraw, ImageFont
 from difflib import SequenceMatcher
+
+Image.MAX_IMAGE_PIXELS = None
 try:
     from eval_metrics import is_negative_or_unanswerable
 except ModuleNotFoundError:

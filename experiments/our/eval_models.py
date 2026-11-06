@@ -2,7 +2,9 @@ import os
 import json
 import torch
 from typing import Dict, Any, List
-from PIL import Image
+from PIL import Image, ImageOps
+
+Image.MAX_IMAGE_PIXELS = None
 
 def load_our_engines(
     model_path: str = "Qwen/Qwen2.5-VL-7B-Instruct",

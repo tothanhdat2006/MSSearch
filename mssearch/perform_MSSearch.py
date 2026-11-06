@@ -12,8 +12,10 @@ import gc
 import torch
 import spacy
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 from tqdm import tqdm
+
+Image.MAX_IMAGE_PIXELS = None
 
 root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, root_dir)
@@ -169,7 +171,7 @@ def main():
             for rel_p in candidate_paths:
                 full_p = resolve_candidate_image_path(base_data_dir, rel_p)
                 if os.path.exists(full_p):
-                    candidate_images.append(Image.open(full_p).convert("RGB"))
+                    candidate_images.append(ImageOps.exif_transpose(Image.open(full_p)).convert("RGB"))
                 elif is_verbose:
                     print(f"[MSSearch][Path Warning] Image does not exist on disk: '{full_p}'")
 

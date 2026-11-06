@@ -4,10 +4,11 @@
 # Dispatches ablation experiments on Modal serverless GPU (L40S / A100).
 #
 # Usage:
-#   bash run_modal_ablation.sh detector [model] [pool] [--detach]
-#   bash run_modal_ablation.sh scorer   [model] [pool] [--detach]
-#   bash run_modal_ablation.sh gate     [model] [pool] [--detach]
-#   bash run_modal_ablation.sh all      [model] [pool] [--detach]
+#   bash run_modal_ablation.sh detector  [model] [pool] [--detach]
+#   bash run_modal_ablation.sh scorer    [model] [pool] [--detach]
+#   bash run_modal_ablation.sh gate      [model] [pool] [--detach]
+#   bash run_modal_ablation.sh component [model] [pool] [--detach]
+#   bash run_modal_ablation.sh all       [model] [pool] [--detach]
 #   bash run_modal_ablation.sh single   --detector <det> --scorer <sc> [--gate-threshold <p>] [--detach]
 # ==============================================================================
 set -euo pipefail
@@ -65,6 +66,22 @@ case "${MODE}" in
         THRESHOLDS=("0.3" "0.7" "0.5")
         for th in "${THRESHOLDS[@]}"; do
             run_job --detector "sam3" --scorer "siglip" --gate-threshold "${th}" --model "${MODEL}" --pool-mode "${POOL}"
+        done
+        ;;
+
+    component|components)
+        MODEL="${ARGS[0]:-Qwen/Qwen2.5-VL-7B-Instruct}"
+        POOL="${ARGS[1]:-N_5}"
+        COMPONENTS=(
+            "qwen"
+            "qwen_fast_path"
+            "qwen_fp_rigid_cg_single"
+            "qwen_fp_sgap_cg_single"
+            "qwen_fp_asp_cg_single"
+            "qwen_fp_asp_cg_agg"
+        )
+        for comp in "${COMPONENTS[@]}"; do
+            run_job --component "${comp}" --model "${MODEL}" --pool-mode "${POOL}"
         done
         ;;
 

@@ -1,6 +1,8 @@
-from PIL import Image
+from PIL import Image, ImageOps
 from typing import NamedTuple, List, Optional, Dict
 import itertools
+
+Image.MAX_IMAGE_PIXELS = None
 
 
 class NodeState(NamedTuple):
@@ -66,7 +68,7 @@ def is_terminal(node: Node, smallest_size: int) -> bool:
 
 class ImageTree:
     def __init__(self, image_path, patch_size, split_num):
-        image_pil = Image.open(image_path).convert('RGB')
+        image_pil = ImageOps.exif_transpose(Image.open(image_path)).convert('RGB')
         self.image_pil = image_pil
         self.patch_size = patch_size
         self.root = Node(NodeState(image_pil, [0, 0, image_pil.width, image_pil.height]))

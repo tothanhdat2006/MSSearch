@@ -1,7 +1,8 @@
 """
 Evaluation runner for MSSearch ablation studies.
-Ablates Detection Backbone (SAM3 vs Grounding DINO vs Florence-2 vs DINOv3)
-and Screening Scorer (SigLIP vs SigLIP2 vs CLIP-B/32 vs CLIP-L/14 vs EVA-02-L/14).
+Ablates Detection Backbone (SAM3 vs Grounding DINO vs Florence-2 vs DINOv3),
+Screening Scorer (SigLIP vs SigLIP2 vs CLIP-B/32 vs CLIP-L/14 vs EVA-02-L/14),
+Gating Threshold (0.3 vs 0.5 vs 0.7), and Component Increments (Qwen -> Fast Path -> Rigid -> SGAP -> ASP -> Aggregation).
 """
 
 import os
@@ -14,7 +15,6 @@ import argparse
 from datetime import datetime
 import torch
 
-# Ensure parent and repo root are in sys.path
 _CUR_DIR = os.path.dirname(os.path.abspath(__file__))
 _OUR_DIR = os.path.abspath(os.path.join(_CUR_DIR, ".."))
 _MSSEARCH_ROOT = os.path.abspath(os.path.join(_CUR_DIR, "../../.."))
@@ -25,6 +25,7 @@ for p in [_MSSEARCH_ROOT, _OUR_DIR, _CUR_DIR]:
 from eval_dataset import resolve_image, load_and_slice_dataset
 from eval_metrics import compute_stage_ret_rej_tokens
 from eval_models_ablation import load_ablation_engines, run_ablation_pipeline
+from eval_runner_utils import load_completed_keys, resolve_ground_truth
 
 
 def load_env_paths():
@@ -57,41 +58,31 @@ def parse_args():
     load_env_paths()
     parser = argparse.ArgumentParser(description="MSSearch Ablation Study Runner.")
 
-    # Ablation Dimension 1: Detector Backbone
+    # Component Increment Ablation
+    parser.add_argument("--component", type=str, default=None,
+                        choices=["qwen", "qwen_fast_path", "qwen_fp_rigid_cg_single",
+                                 "qwen_fp_sgap_cg_single", "qwen_fp_asp_cg_single", "qwen_fp_asp_cg_agg"],
+                        help="Component increment ablation variant.")
+
+    # Detector & Scorer Backbones
     parser.add_argument("--detector", type=str, default=os.environ.get("DETECTOR_TYPE", "sam3"),
-                        choices=["sam3", "grounding_dino", "florence2", "dinov3"],
-                        help="Detection backbone: 'sam3', 'grounding_dino', 'florence2', or 'dinov3'.")
-    parser.add_argument("--detector_path", type=str, default=os.environ.get("DETECTOR_PATH", None),
-                        help="Path or HF ID for detection checkpoint.")
-
-    # Ablation Dimension 2: Visual Screening Scorer
+                        choices=["sam3", "grounding_dino", "florence2", "dinov3"])
+    parser.add_argument("--detector_path", type=str, default=os.environ.get("DETECTOR_PATH", None))
     parser.add_argument("--scorer", type=str, default=os.environ.get("SCORER_TYPE", "siglip"),
-                        choices=["siglip", "siglip2_384", "siglip2_512", "clip_b32", "clip_l14", "eva02_l14"],
-                        help="Visual screening scorer: 'siglip', 'siglip2_384', 'siglip2_512', 'clip_b32', 'clip_l14', or 'eva02_l14'.")
-    parser.add_argument("--scorer_path", type=str, default=os.environ.get("SCORER_PATH", None),
-                        help="Path or HF ID for screening checkpoint.")
-
-    # Ablation Dimension 3: Gating Confidence Threshold
-    parser.add_argument("--gate_threshold", type=float, default=None,
-                        help="VLM gating probability threshold in [0.0, 1.0] (e.g. 0.3, 0.5, 0.7).")
+                        choices=["siglip", "siglip2_384", "siglip2_512", "clip_b32", "clip_l14", "eva02_l14"])
+    parser.add_argument("--scorer_path", type=str, default=os.environ.get("SCORER_PATH", None))
+    parser.add_argument("--gate_threshold", type=float, default=None)
 
     # Base Pipeline Settings
-    parser.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-VL-7B-Instruct"),
-                        help="Primary VLM path.")
-    parser.add_argument("--nlp_model", type=str, default=os.environ.get("NLP_MODEL", "en_core_web_sm"),
-                        help="spaCy model path or name.")
-    parser.add_argument("--dataset_path", type=str, default=os.environ.get("DATASET_PATH", "/data/STASHBench/annotations_part1234_merged.json"),
-                        help="Dataset JSON path.")
-    parser.add_argument("--image_dir", type=str, default=os.environ.get("IMAGE_DIR", "/data/STASHBench/pool"),
-                        help="Pool image directory.")
-    parser.add_argument("--output_dir", type=str, default=os.environ.get("OUTPUT_DIR", "./results_ablation"),
-                        help="Output results directory.")
-    parser.add_argument("--config", type=str, default=None,
-                        help="Optional JSON config override.")
-    parser.add_argument("--pool_mode", type=str, choices=["N_1", "N_5", "N_10", "N_20", "crop", "N_crop", "ALL"], default="N_20",
-                        help="Candidate pool size.")
+    parser.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-VL-7B-Instruct"))
+    parser.add_argument("--nlp_model", type=str, default=os.environ.get("NLP_MODEL", "en_core_web_sm"))
+    parser.add_argument("--dataset_path", type=str, default=os.environ.get("DATASET_PATH", "/data/STASHBench/annotations_part1234_merged.json"))
+    parser.add_argument("--image_dir", type=str, default=os.environ.get("IMAGE_DIR", "/data/STASHBench/pool"))
+    parser.add_argument("--output_dir", type=str, default=os.environ.get("OUTPUT_DIR", "./results_ablation"))
+    parser.add_argument("--config", type=str, default=None)
+    parser.add_argument("--pool_mode", type=str, choices=["N_1", "N_5", "N_10", "N_20", "crop", "N_crop", "ALL"], default="N_20")
 
-    # Subsetting & Execution Controls
+    # Execution Controls
     parser.add_argument("--sample_idx", type=int, default=None)
     parser.add_argument("--start_idx", type=int, default=None)
     parser.add_argument("--end_idx", type=int, default=None)
@@ -107,74 +98,40 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     m_name = os.path.basename(os.path.normpath(args.model_path))
 
-    gate_tag = f"_gate{args.gate_threshold}" if args.gate_threshold is not None else ""
-    prefix = f"results_ablation_{args.detector}_{args.scorer}{gate_tag}_{m_name}_{args.pool_mode}"
-    cands = sorted(glob.glob(os.path.join(args.output_dir, f"{prefix}_*.jsonl")))
-
-    if args.resume_from:
-        results_file = args.resume_from
-    elif args.resume and cands:
-        results_file = cands[-1]
+    if args.component:
+        prefix = f"results_ablation_component_{args.component}_{m_name}_{args.pool_mode}"
     else:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results_file = os.path.join(args.output_dir, f"{prefix}_{stamp}.jsonl")
+        gate_tag = f"_gate{args.gate_threshold}" if args.gate_threshold is not None else ""
+        prefix = f"results_ablation_{args.detector}_{args.scorer}{gate_tag}_{m_name}_{args.pool_mode}"
 
-    res_dir = os.path.dirname(os.path.abspath(results_file))
-    cfg_base = os.path.basename(results_file).replace("results_ablation_", "config_ablation_").replace(".jsonl", ".json")
-    config_file = os.path.join(res_dir, cfg_base)
+    cands = sorted(glob.glob(os.path.join(args.output_dir, f"{prefix}_*.jsonl")))
+    results_file = args.resume_from or (cands[-1] if (args.resume and cands) else os.path.join(args.output_dir, f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"))
+    config_file = os.path.join(os.path.dirname(os.path.abspath(results_file)), os.path.basename(results_file).replace("results_ablation_", "config_ablation_").replace(".jsonl", ".json"))
 
-    # Load dataset
     all_samples, eval_tasks = load_and_slice_dataset(
         args.dataset_path, args.pool_mode, args.sample_idx, args.start_idx, args.end_idx, args.max_samples
     )
 
-    # Resume handling
-    completed_keys = set()
-    if args.resume or args.resume_from:
-        if os.path.exists(results_file):
-            with open(results_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        try:
-                            rec = json.loads(line)
-                            completed_keys.add(f"{rec.get('sample_id')}_{rec.get('pool_name')}")
-                        except Exception:
-                            pass
-            print(f"[Auto-Resume] Found {len(completed_keys)} completed tasks in '{results_file}'.")
+    completed_keys = load_completed_keys(results_file) if (args.resume or args.resume_from) else set()
+    if completed_keys:
+        print(f"[Auto-Resume] Found {len(completed_keys)} completed tasks in '{results_file}'.")
 
     remaining_tasks = [t for t in eval_tasks if f"{t[1].get('sample_id')}_{t[2]}" not in completed_keys]
-    print(f"[Ablation Queue] Detector: {args.detector} | Scorer: {args.scorer} | Gate: {args.gate_threshold or 0.5} | Tasks: {len(remaining_tasks)}/{len(eval_tasks)}")
+    print(f"[Ablation Queue] Component: {args.component or 'N/A'} | Detector: {args.detector} | Scorer: {args.scorer} | Gate: {args.gate_threshold or 0.5} | Tasks: {len(remaining_tasks)}/{len(eval_tasks)}")
 
-    # Initialize engines
     engines = load_ablation_engines(
-        model_path=args.model_path,
-        detector_type=args.detector,
-        detector_path=args.detector_path,
-        scorer_type=args.scorer,
-        scorer_name=args.scorer_path,
-        nlp_model=args.nlp_model,
-        config_path=args.config,
-        gate_threshold=args.gate_threshold,
-        device=args.device,
+        model_path=args.model_path, detector_type=args.detector, detector_path=args.detector_path,
+        scorer_type=args.scorer, scorer_name=args.scorer_path, nlp_model=args.nlp_model,
+        config_path=args.config, gate_threshold=args.gate_threshold, component=args.component, device=args.device,
     )
     engines["config"].save_json(config_file)
     print(f"[Config Saved] Ablation config snapshot saved to '{config_file}'.")
 
-    # Evaluation loop
     with open(results_file, "a", encoding="utf-8") as out_f:
         for idx, (s_idx, sample, pool_name, pool_info) in enumerate(remaining_tasks):
             sample_id = sample.get("sample_id", f"sample_{s_idx}")
             question = sample.get("question") or sample.get("query", {}).get("question", "")
-
-            ans_field = sample.get("answer")
-            if isinstance(ans_field, dict):
-                gt_list = ans_field.get("list", [])
-            elif isinstance(ans_field, list):
-                gt_list = ans_field
-            elif isinstance(ans_field, str):
-                gt_list = [ans_field]
-            else:
-                gt_list = []
+            gt_list = resolve_ground_truth(sample)
 
             candidate_meta = pool_info.get("images", [])
             images = [resolve_image(m, args.image_dir) for m in candidate_meta]
@@ -210,7 +167,7 @@ def main():
 
             record = {
                 "sample_id": sample_id, "sample_index": s_idx, "pool_name": pool_name, "pool_N": len(candidate_meta),
-                "model_name": m_name, "detector_type": args.detector, "scorer_type": args.scorer,
+                "model_name": m_name, "component": args.component, "detector_type": args.detector, "scorer_type": args.scorer,
                 "gate_threshold": getattr(engines["config"], "gate_threshold", args.gate_threshold or 0.5),
                 "question": question, "ground_truth_list": gt_list, "gt_image_id": gt_img_id, "gt_image_idx": gt_img_idx,
                 "primary_pred_image_id": prim_img_id, "primary_pred_image_idx": prim_img_idx, "is_primary_image_correct": is_prim_img_correct,

@@ -22,7 +22,7 @@ def compute_stage_ret_rej_tokens(
     """Computes target retention, noise rejection, and visual tokens across pipeline stages."""
     import math
 
-    is_direct = telemetry.get("stage5_mode") in ["direct_answer", "fast_path"]
+    is_direct = telemetry.get("stage5_mode") in ["direct_answer", "fast_path", "direct_baseline"]
     ev_imgs = telemetry.get("evidence_images", [])
 
     tb = None

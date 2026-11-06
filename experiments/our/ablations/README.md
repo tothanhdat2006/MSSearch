@@ -40,6 +40,18 @@ Controls candidate patch gating in Stage 4 (existence probe and speculative late
 | `0.5` | $0.50$ (default) | $0.00$ | Balanced Baseline: standard majority softmax decision boundary |
 | `0.7` | $0.70$ | $+0.40$ | High Precision: prunes aggressively, only passing high-certainty evidence |
 
+### Axis 4: Search Component Increment (`--component`)
+Controls the cumulative progression of search components (Table 1 & Table 2):
+
+| Key | Configuration | Behavior / Route |
+| :--- | :--- | :--- |
+| `qwen` | Direct Baseline | Multi-image VLM forward pass on full gallery with dynamic pixel budget |
+| `qwen_fast_path` | Qwen w/ Fast Path | Tool-based fast path proposal; falls back to Direct Baseline on unresolved queries |
+| `qwen_fp_rigid_cg_single` | Qwen w/ FP + Rigid Quadtree + CG + Single-crop | Fast Path + `quadrant_only` (regular quadrants) + Confidence Gating + isolated 1.25x crops |
+| `qwen_fp_sgap_cg_single` | Qwen w/ FP + SGAP + CG + Single-crop | Fast Path + `sgap_only` (SLIC superpixels) + Confidence Gating + isolated 1.25x crops |
+| `qwen_fp_asp_cg_single` | Qwen w/ FP + ASP + CG + Single-crop | Fast Path + `hybrid` (entropy-steered ASP) + Confidence Gating + isolated 1.25x crops |
+| `qwen_fp_asp_cg_agg` | Qwen w/ FP + ASP + CG + Aggregation (Ours) | Full STASH-Search: Continuous Enclosure Sub-Canvas Engine + atomic sibling re-fusion |
+
 ---
 
 ## 2. Directory Structure
@@ -48,6 +60,7 @@ Controls candidate patch gating in Stage 4 (existence probe and speculative late
 MSSearch/experiments/our/ablations/
 ├── README.md                      # Ablation framework documentation (this file)
 ├── env_paths_ablation.sh          # Central environment paths & model checkpoints
+├── eval_runner_utils.py           # Shared dataset resumption, telemetry & OOM-safe direct baseline
 ├── eval_models_ablation.py        # Adapter factory & pipeline dependency injector
 ├── eval_runner_ablation.py        # CLI evaluation runner with atomic per-sample flushing
 ├── models/
@@ -60,6 +73,7 @@ MSSearch/experiments/our/ablations/
 │   ├── clip_scorer_adapter.py     # CLIP-ViT-B/32 and CLIP-ViT-L/14 scorer
 │   └── eva02_scorer_adapter.py    # EVA-02-L/14 scorer (open_clip / timm / HF)
 ├── scripts/
+│   ├── run_ablation_component.sh  # Sweeps 6-step component increments (Qwen -> Fast Path -> Rigid -> SGAP -> ASP -> Aggregation)
 │   ├── run_ablation_detector.sh   # Sweeps SAM3 vs Grounding DINO vs Florence-2 vs DINOv3 (fixed SigLIP)
 │   ├── run_ablation_scorer.sh     # Sweeps SigLIP vs SigLIP2 vs CLIP vs EVA-02 (fixed SAM3)
 │   ├── run_ablation_gate_threshold.sh # Sweeps Gating Threshold: 0.3 vs 0.7 vs 0.5
@@ -95,7 +109,17 @@ cd MSSearch
 bash experiments/our/ablations/scripts/run_ablation_gate_threshold.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
 ```
 
-### D. Run Specific Pair via CLI Runner
+### D. Run Search Component Increment Sweep
+Sweeps the cumulative component hierarchy (`qwen` -> `qwen_fast_path` -> `qwen_fp_rigid_cg_single` -> `qwen_fp_sgap_cg_single` -> `qwen_fp_asp_cg_single` -> `qwen_fp_asp_cg_agg`) on pool $N=5$:
+```bash
+cd MSSearch
+bash experiments/our/ablations/scripts/run_ablation_component.sh all Qwen/Qwen2.5-VL-7B-Instruct N_5
+
+# Or run an individual increment:
+bash experiments/our/ablations/scripts/run_ablation_component.sh qwen_fp_rigid_cg_single Qwen/Qwen2.5-VL-7B-Instruct N_5
+```
+
+### E. Run Specific Pair or Component via CLI Runner
 ```bash
 python experiments/our/ablations/eval_runner_ablation.py \
     --model_path Qwen/Qwen2.5-VL-7B-Instruct \
@@ -133,6 +157,9 @@ bash experiments/our/ablations/scripts/run_modal_ablation.sh scorer Qwen/Qwen2.5
 
 # Gating threshold sweep (0.3, 0.7, 0.5)
 bash experiments/our/ablations/scripts/run_modal_ablation.sh gate Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+
+# Component increment sweep (all 6 components)
+bash experiments/our/ablations/scripts/run_modal_ablation.sh component Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
 
 # Full matrix sweep across all 3 axes
 bash experiments/our/ablations/scripts/run_modal_ablation.sh all Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
