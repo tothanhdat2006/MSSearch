@@ -92,37 +92,37 @@ MSSearch/experiments/our/ablations/
 Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** vs. **DINOv3** on pool $N=5$:
 ```bash
 cd MSSearch
-bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
+bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 
 ### B. Run Visual Scorer Ablation (Fixed SAM3)
 Compares **SigLIP** vs. **SigLIP2** vs. **CLIP-ViT-B/32** vs. **CLIP-ViT-L/14** vs. **EVA-02-L/14** on pool $N=5$:
 ```bash
 cd MSSearch
-bash experiments/our/ablations/scripts/run_ablation_scorer.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
+bash experiments/our/ablations/scripts/run_ablation_scorer.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 
 ### C. Run Gate Threshold Ablation (0.3 vs 0.7 vs 0.5)
 Evaluates gating probability thresholds **0.3**, **0.7**, and **0.5** (default) on pool $N=5$:
 ```bash
 cd MSSearch
-bash experiments/our/ablations/scripts/run_ablation_gate_threshold.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
+bash experiments/our/ablations/scripts/run_ablation_gate_threshold.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 
 ### D. Run Search Component Increment Sweep
 Sweeps the cumulative component hierarchy (`qwen` -> `qwen_fast_path` -> `qwen_fp_rigid_cg_single` -> `qwen_fp_sgap_cg_single` -> `qwen_fp_asp_cg_single` -> `qwen_fp_asp_cg_agg`) on pool $N=5$:
 ```bash
 cd MSSearch
-bash experiments/our/ablations/scripts/run_ablation_component.sh all Qwen/Qwen2.5-VL-7B-Instruct N_5
+bash experiments/our/ablations/scripts/run_ablation_component.sh all Qwen/Qwen3-VL-8B-Instruct N_5
 
 # Or run an individual increment:
-bash experiments/our/ablations/scripts/run_ablation_component.sh qwen_fp_rigid_cg_single Qwen/Qwen2.5-VL-7B-Instruct N_5
+bash experiments/our/ablations/scripts/run_ablation_component.sh qwen_fp_rigid_cg_single Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 
 ### E. Run Specific Pair or Component via CLI Runner
 ```bash
 python experiments/our/ablations/eval_runner_ablation.py \
-    --model_path Qwen/Qwen2.5-VL-7B-Instruct \
+    --model_path Qwen/Qwen3-VL-8B-Instruct \
     --detector grounding_dino \
     --detector_path IDEA-Research/grounding-dino-base \
     --scorer clip_l14 \
@@ -131,14 +131,14 @@ python experiments/our/ablations/eval_runner_ablation.py \
     --output_dir experiments/our/ablations/results_ablation
 ```
 
-### D. Subsetting and Resuming Runs
+### F. Subsetting and Resuming Runs
 Pass standard runner flags through any bash script:
 ```bash
 # Evaluate first 20 samples:
-bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen2.5-VL-7B-Instruct N_5 --max_samples 20
+bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen3-VL-8B-Instruct N_5 --max_samples 20
 
 # Resume an interrupted ablation run:
-bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen2.5-VL-7B-Instruct N_5 --resume
+bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen3-VL-8B-Instruct N_5 --resume
 ```
 
 ---
@@ -150,19 +150,19 @@ Ablation experiments can be run directly on Modal cloud infrastructure (`L40S` 4
 ### A. Run via Modal Launcher Script (`run_modal_ablation.sh`)
 ```bash
 # Detector sweep (SAM3, Grounding DINO, Florence-2, DINOv3)
-bash experiments/our/ablations/scripts/run_modal_ablation.sh detector Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+bash experiments/our/ablations/scripts/run_modal_ablation.sh detector Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 
 # Visual scorer sweep (SigLIP, SigLIP2-384, SigLIP2-512, CLIP-B/32, CLIP-L/14, EVA-02-L/14)
-bash experiments/our/ablations/scripts/run_modal_ablation.sh scorer Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+bash experiments/our/ablations/scripts/run_modal_ablation.sh scorer Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 
 # Gating threshold sweep (0.3, 0.7, 0.5)
-bash experiments/our/ablations/scripts/run_modal_ablation.sh gate Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+bash experiments/our/ablations/scripts/run_modal_ablation.sh gate Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 
 # Component increment sweep (all 6 components)
-bash experiments/our/ablations/scripts/run_modal_ablation.sh component Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+bash experiments/our/ablations/scripts/run_modal_ablation.sh component Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 
 # Full matrix sweep across all 3 axes
-bash experiments/our/ablations/scripts/run_modal_ablation.sh all Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+bash experiments/our/ablations/scripts/run_modal_ablation.sh all Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 ```
 
 ### B. Direct Modal CLI Run (`run_ablation_modal.py`)
@@ -171,7 +171,7 @@ bash experiments/our/ablations/scripts/run_modal_ablation.sh all Qwen/Qwen2.5-VL
 modal run experiments/our/ablations/scripts/run_ablation_modal.py \
     --detector grounding_dino \
     --scorer clip_l14 \
-    --model Qwen/Qwen2.5-VL-7B-Instruct \
+    --model Qwen/Qwen3-VL-8B-Instruct \
     --pool-mode N_5
 
 # Run asynchronously in background
@@ -179,7 +179,7 @@ modal run --detach experiments/our/ablations/scripts/run_ablation_modal.py \
     --detector florence2 \
     --scorer siglip2_384 \
     --gate-threshold 0.3 \
-    --model Qwen/Qwen2.5-VL-7B-Instruct \
+    --model Qwen/Qwen3-VL-8B-Instruct \
     --pool-mode N_5
 ```
 
@@ -188,7 +188,7 @@ modal run --detach experiments/our/ablations/scripts/run_ablation_modal.py \
 ## 5. HPC Cluster Submission (Slurm)
 
 ```bash
-sbatch experiments/our/ablations/scripts/run_ablation_slurm.slurm Qwen/Qwen2.5-VL-7B-Instruct
+sbatch experiments/our/ablations/scripts/run_ablation_slurm.slurm Qwen/Qwen3-VL-8B-Instruct
 ```
 
 ---

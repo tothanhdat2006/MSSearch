@@ -89,7 +89,7 @@ export OUTPUT_BASE_DIR=""
 
 | Short Key | Model Identifier | Architecture | VRAM Required |
 | :--- | :--- | :--- | :--- |
-| `qwen2.5_vl_7b` | `Qwen/Qwen2.5-VL-7B-Instruct` | Native Dynamic Resolution Vision Transformer | ~22 GB (40GB/80GB GPU) |
+| `qwen3_vl_8b` | `Qwen/Qwen3-VL-8B-Instruct` | Native Dynamic Resolution Vision Transformer | ~24 GB (40GB/80GB GPU) |
 | `llava_ov_7b` | `lmms-lab/llava-onevision-qwen2-7b-ov` | AnyRes Multi-Patch Vision Transformer | ~24 GB (40GB/80GB GPU) |
 | `internvl3_8b` | `OpenGVLab/InternVL3-8B` | Dynamic High-Resolution ViT | ~24 GB (40GB/80GB GPU) |
 
@@ -161,17 +161,17 @@ Each notebook in `notebook/` is self-contained with pinned model and pool parame
 Run serverless jobs on Modal cloud infrastructure with persistent network volumes (`mssearch-data`, `mssearch-models`, `mssearch-results`):
 ```bash
 # Direct modal run command
-modal run scripts/modal/run_our_modal.py --model Qwen/Qwen2.5-VL-7B-Instruct --pool-mode N_5
+modal run scripts/modal/run_our_modal.py --model Qwen/Qwen3-VL-8B-Instruct --pool-mode N_5
 modal run scripts/modal/run_our_modal.py --model lmms-lab/llava-onevision-qwen2-7b-ov --pool-mode N_5
 modal run scripts/modal/run_our_modal.py --model OpenGVLab/InternVL3-8B --pool-mode N_5
 
 # Convenient launcher wrapper
-bash scripts/modal/run_modal.sh qwen2.5_vl_7b N_5
+bash scripts/modal/run_modal.sh qwen3_vl_8b N_5
 bash scripts/modal/run_modal.sh llava_ov_7b N_10
 bash scripts/modal/run_modal.sh internvl3_8b N_20
 
 # Run asynchronously in background (safe to close terminal)
-modal run --detach scripts/modal/run_our_modal.py --model Qwen/Qwen2.5-VL-7B-Instruct --pool-mode N_5
+modal run --detach scripts/modal/run_our_modal.py --model Qwen/Qwen3-VL-8B-Instruct --pool-mode N_5
 # or via wrapper
-bash scripts/modal/run_modal.sh qwen2.5_vl_7b N_5 --detach
+bash scripts/modal/run_modal.sh qwen3_vl_8b N_5 --detach
 ```

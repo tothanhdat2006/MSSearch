@@ -43,7 +43,7 @@ run_job() {
 
 case "${MODE}" in
     detector|detectors)
-        MODEL="${ARGS[0]:-Qwen/Qwen2.5-VL-7B-Instruct}"
+        MODEL="${ARGS[0]:-Qwen/Qwen3-VL-8B-Instruct}"
         POOL="${ARGS[1]:-N_5}"
         DETECTORS=("sam3" "grounding_dino" "florence2" "dinov3")
         for det in "${DETECTORS[@]}"; do
@@ -52,7 +52,7 @@ case "${MODE}" in
         ;;
 
     scorer|scorers)
-        MODEL="${ARGS[0]:-Qwen/Qwen2.5-VL-7B-Instruct}"
+        MODEL="${ARGS[0]:-Qwen/Qwen3-VL-8B-Instruct}"
         POOL="${ARGS[1]:-N_5}"
         SCORERS=("siglip" "siglip2_384" "siglip2_512" "clip_b32" "clip_l14" "eva02_l14")
         for sc in "${SCORERS[@]}"; do
@@ -61,7 +61,7 @@ case "${MODE}" in
         ;;
 
     gate|gate_threshold|threshold)
-        MODEL="${ARGS[0]:-Qwen/Qwen2.5-VL-7B-Instruct}"
+        MODEL="${ARGS[0]:-Qwen/Qwen3-VL-8B-Instruct}"
         POOL="${ARGS[1]:-N_5}"
         THRESHOLDS=("0.3" "0.7" "0.5")
         for th in "${THRESHOLDS[@]}"; do
@@ -70,7 +70,7 @@ case "${MODE}" in
         ;;
 
     component|components)
-        MODEL="${ARGS[0]:-Qwen/Qwen2.5-VL-7B-Instruct}"
+        MODEL="${ARGS[0]:-Qwen/Qwen3-VL-8B-Instruct}"
         POOL="${ARGS[1]:-N_5}"
         COMPONENTS=(
             "qwen"
@@ -86,7 +86,7 @@ case "${MODE}" in
         ;;
 
     all|matrix)
-        MODEL="${ARGS[0]:-Qwen/Qwen2.5-VL-7B-Instruct}"
+        MODEL="${ARGS[0]:-Qwen/Qwen3-VL-8B-Instruct}"
         POOL="${ARGS[1]:-N_5}"
         echo "[Modal Ablation] Launching full ablation matrix on Modal..."
         bash "${BASH_SOURCE[0]}" detector "${MODEL}" "${POOL}" ${DETACH_FLAG}

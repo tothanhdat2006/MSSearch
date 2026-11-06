@@ -16,7 +16,7 @@ source "${ABLATION_DIR}/env_paths_ablation.sh"
 PYTHON_BIN="$(command -v python || echo "python")"
 export PYTHONPATH="${MSSEARCH_ROOT}:${OUR_DIR}:${ABLATION_DIR}:${PYTHONPATH:-}"
 
-TARGET_MODEL="${1:-Qwen/Qwen2.5-VL-7B-Instruct}"
+TARGET_MODEL="${1:-Qwen/Qwen3-VL-8B-Instruct}"
 POOL_MODE="${2:-N_5}"
 if [ "$#" -ge 2 ]; then
     shift 2

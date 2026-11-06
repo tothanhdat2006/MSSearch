@@ -53,7 +53,7 @@ def select_gpu(model_name: str) -> str:
     secrets=[modal.Secret.from_name("huggingface-secret")]
 )
 def evaluate_our_modal(
-    model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct",
+    model_name: str = "Qwen/Qwen3-VL-8B-Instruct",
     pool_mode: str = "N_20",
     dataset_path: str = "/data/STASHBench/annotations_part1234_merged.json",
     image_dir: str = "/data/STASHBench/pool",
@@ -222,7 +222,7 @@ def evaluate_our_modal(
 
 @app.local_entrypoint()
 def main(
-    model: str = "Qwen/Qwen2.5-VL-7B-Instruct",
+    model: str = "Qwen/Qwen3-VL-8B-Instruct",
     pool_mode: str = "N_20",
     dataset_path: str = "/data/STASHBench/annotations_part1234_merged.json",
     image_dir: str = "/data/STASHBench/pool",

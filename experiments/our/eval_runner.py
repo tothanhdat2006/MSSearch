@@ -38,7 +38,7 @@ def load_env_paths():
 def parse_args():
     load_env_paths()
     parser = argparse.ArgumentParser(description="MSSearch V2 Evaluation Runner.")
-    parser.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-VL-7B-Instruct"),
+    parser.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen3-VL-8B-Instruct"),
                         help="Path or HuggingFace ID of VLM checkpoint.")
     parser.add_argument("--sam3_path", type=str, default=os.environ.get("SAM3_PATH", "/data/shared/cvpr/dat/models/sam3/sam3.pt"),
                         help="Path to sam3.pt.")

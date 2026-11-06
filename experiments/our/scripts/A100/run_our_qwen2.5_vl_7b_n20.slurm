@@ -31,7 +31,7 @@ fi
 PYTHON_BIN="$(command -v python || echo "python")"
 export PYTHONPATH="${MSSEARCH_ROOT}:${OUR_DIR}:${PYTHONPATH:-}"
 
-TARGET_MODEL="Qwen/Qwen2.5-VL-7B-Instruct"
+TARGET_MODEL="Qwen/Qwen3-VL-8B-Instruct"
 M_BASE="$(basename "${TARGET_MODEL}")"
 MODEL_PATH="${MODEL_DIR}/${M_BASE}"
 [ ! -d "${MODEL_PATH}" ] && MODEL_PATH="${TARGET_MODEL}"

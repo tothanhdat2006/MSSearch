@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ABLATION_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-TARGET_MODEL="${1:-Qwen/Qwen2.5-VL-7B-Instruct}"
+TARGET_MODEL="${1:-Qwen/Qwen3-VL-8B-Instruct}"
 shift || true
 
 # 1. Run Detector Ablations (SAM3 vs Grounding DINO vs Florence-2 vs DINOv3)

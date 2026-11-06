@@ -67,7 +67,7 @@ def compute_stage_ret_rej_tokens(
     s6_ret = direct_retained if is_direct else (any(_box_containment(c.get("expanded_box") or c.get("box", [0, 0, 0, 0]), c.get("img_idx")) >= 0.5 for c in s6_crops) if tb else None)
     s6_noise = sum(1 for c in s6_crops if gt_img_idx is not None and c.get("img_idx") != gt_img_idx)
 
-    # Visual tokens (28x28 pixel block = 1 visual token in Qwen2.5-VL)
+    # Visual tokens (28x28 pixel block = 1 visual token in Qwen2.5-VL / Qwen3-VL)
     s6_crop_sizes = []
     s6_tokens = 0
     for c in s6_crops:

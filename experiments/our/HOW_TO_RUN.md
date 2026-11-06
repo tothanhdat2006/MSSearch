@@ -18,7 +18,7 @@ This guide outlines the standard 3-step workflow to run MSSearch V2 on **STASHBe
 
 | Model Key | Full Model Identifier | Architecture | VRAM Requirement |
 | :--- | :--- | :--- | :--- |
-| `qwen2.5_vl_7b` | `Qwen/Qwen2.5-VL-7B-Instruct` | Native Dynamic ViT | ~22 GB (40GB/80GB GPU) |
+| `qwen3_vl_8b` | `Qwen/Qwen3-VL-8B-Instruct` | Native Dynamic ViT | ~24 GB (40GB/80GB GPU) |
 | `llava_ov_7b` | `lmms-lab/llava-onevision-qwen2-7b-ov` | AnyRes Multi-Patch | ~24 GB (40GB/80GB GPU) |
 | `internvl3_8b` | `OpenGVLab/InternVL3-8B` | Dynamic High-Res ViT | ~24 GB (40GB/80GB GPU) |
 
@@ -82,7 +82,7 @@ Downloads dataset annotations, pool images, auxiliary weights (SAM3, SigLIP, spa
 python experiments/download/download_all.py \
     --base_model_dir "${MODEL_DIR}" \
     --data_dir "$(dirname "${DATASET_PATH}")" \
-    --models Qwen2.5-VL-7B LLaVA-OV-7B InternVL3-8B
+    --models Qwen3-VL-8B LLaVA-OV-7B InternVL3-8B
 ```
 
 ### Option B: Download Step-by-Step
@@ -110,9 +110,9 @@ python -m spacy download en_core_web_sm
 
 #### 3. Download Target Vision-Language Models (VLMs)
 ```bash
-# Qwen2.5-VL-7B-Instruct
+# Qwen3-VL-8B-Instruct
 python experiments/download/download_model.py \
-    --model_name Qwen2.5-VL-7B \
+    --model_name Qwen3-VL-8B \
     --base_model_dir "${MODEL_DIR}"
 
 # LLaVA-OneVision-7B
@@ -249,7 +249,7 @@ Ensure Modal is authenticated (`modal setup`). Target GPU is automatically assig
 
 #### A. Foreground Execution (Live Terminal Logs)
 ```bash
-bash experiments/our/scripts/modal/run_modal.sh qwen2.5_vl_7b N_5
+bash experiments/our/scripts/modal/run_modal.sh qwen3_vl_8b N_5
 bash experiments/our/scripts/modal/run_modal.sh llava_ov_7b N_5
 bash experiments/our/scripts/modal/run_modal.sh internvl3_8b N_5
 ```
@@ -258,11 +258,11 @@ bash experiments/our/scripts/modal/run_modal.sh internvl3_8b N_5
 Add `--detach` to run jobs remotely in the cloud without keeping your local terminal open:
 ```bash
 # Launch detached job via wrapper
-bash experiments/our/scripts/modal/run_modal.sh qwen2.5_vl_7b N_5 --detach
+bash experiments/our/scripts/modal/run_modal.sh qwen3_vl_8b N_5 --detach
 
 # Or direct Modal command (flag precedes script path):
 modal run --detach experiments/our/scripts/modal/run_our_modal.py \
-    --model Qwen/Qwen2.5-VL-7B-Instruct \
+    --model Qwen/Qwen3-VL-8B-Instruct \
     --pool-mode N_5
 ```
 
@@ -274,7 +274,7 @@ modal app logs <app-id>
 
 #### C. Launch All 12 Modal Jobs in Background
 ```bash
-for model in qwen2.5_vl_7b llava_ov_7b internvl3_8b; do
+for model in qwen3_vl_8b llava_ov_7b internvl3_8b; do
     for pool in N_1 N_5 N_10 N_20; do
         echo "Launching Modal job: ${model} (${pool})"
         bash experiments/our/scripts/modal/run_modal.sh "${model}" "${pool}" --detach
@@ -291,25 +291,25 @@ The ablation suite dissects components along three independent axes on candidate
 ### 4.1 Detector Backbone Ablation (`run_ablation_detector.sh`)
 Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** vs. **DINOv3** (with fixed SigLIP scorer):
 ```bash
-bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
+bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 
 ### 4.2 Visual Screening Scorer Ablation (`run_ablation_scorer.sh`)
 Compares **SigLIP** vs. **SigLIP2** (384px, 512px) vs. **CLIP-ViT-B/32** vs. **CLIP-ViT-L/14** vs. **EVA-02-L/14** (with fixed SAM3 detector):
 ```bash
-bash experiments/our/ablations/scripts/run_ablation_scorer.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
+bash experiments/our/ablations/scripts/run_ablation_scorer.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 
 ### 4.3 VLM Gating Threshold Ablation (`run_ablation_gate_threshold.sh`)
 Sweeps probability thresholds **0.3** (high recall), **0.7** (high precision), and **0.5** (balanced baseline):
 ```bash
-bash experiments/our/ablations/scripts/run_ablation_gate_threshold.sh Qwen/Qwen2.5-VL-7B-Instruct N_5
+bash experiments/our/ablations/scripts/run_ablation_gate_threshold.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 
 ### 4.4 Full Matrix Sweep (`run_ablation_matrix.sh` or Slurm)
 ```bash
 # Local execution
-bash experiments/our/ablations/scripts/run_ablation_matrix.sh Qwen/Qwen2.5-VL-7B-Instruct
+bash experiments/our/ablations/scripts/run_ablation_matrix.sh Qwen/Qwen3-VL-8B-Instruct
 
 # HPC Slurm batch submission
 sbatch experiments/our/ablations/scripts/run_ablation_slurm.slurm
@@ -319,32 +319,14 @@ sbatch experiments/our/ablations/scripts/run_ablation_slurm.slurm
 Execute any ablation sweep in the cloud using persistent volumes (`mssearch-data`, `mssearch-models`, `mssearch-results` at `/results/ablation`):
 ```bash
 # Detector sweep (SAM3, Grounding DINO, Florence-2, DINOv3)
-bash experiments/our/ablations/scripts/run_modal_ablation.sh detector Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+bash experiments/our/ablations/scripts/run_modal_ablation.sh detector Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 
 # Visual screening scorer sweep (SigLIP, SigLIP2-384, SigLIP2-512, CLIP-B/32, CLIP-L/14, EVA-02-L/14)
-bash experiments/our/ablations/scripts/run_modal_ablation.sh scorer Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+bash experiments/our/ablations/scripts/run_modal_ablation.sh scorer Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 
 # Gating threshold sweep (0.3, 0.7, 0.5)
-bash experiments/our/ablations/scripts/run_modal_ablation.sh gate Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+bash experiments/our/ablations/scripts/run_modal_ablation.sh gate Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 
 # Full cross-ablation sweep
-bash experiments/our/ablations/scripts/run_modal_ablation.sh all Qwen/Qwen2.5-VL-7B-Instruct N_5 --detach
+bash experiments/our/ablations/scripts/run_modal_ablation.sh all Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 ```
-
-
----
-
-## Step 5: Evaluate Results (`eval_stashbench.py`)
-
-Run the standardized evaluator on any output `.jsonl` file to compute Set-based vs. Strict Primary Image Accuracy, Answer Hit, Joint Accuracy, token usage, and stage-wise latencies:
-
-```bash
-# Evaluate a single results file
-python mssearch/eval/eval_stashbench.py --input results_our/results_our_Qwen2.5-VL-7B-Instruct_N_5_*.jsonl
-
-# Save structured summary JSON
-python mssearch/eval/eval_stashbench.py \
-    --input results_our/results_our_Qwen2.5-VL-7B-Instruct_N_5_*.jsonl \
-    --save_summary results_our/summary_qwen_n5.json
-```
-

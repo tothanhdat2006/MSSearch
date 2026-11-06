@@ -21,7 +21,7 @@ except (ImportError, ValueError):
 
 
 def load_ablation_engines(
-    model_path: str = "Qwen/Qwen2.5-VL-7B-Instruct",
+    model_path: str = "Qwen/Qwen3-VL-8B-Instruct",
     detector_type: str = "sam3",
     detector_path: Optional[str] = None,
     scorer_type: str = "siglip",

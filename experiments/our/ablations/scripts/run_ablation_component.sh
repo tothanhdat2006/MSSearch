@@ -20,7 +20,7 @@ OUR_DIR="$(cd "${ABLATION_DIR}/.." && pwd)"
 MSSEARCH_ROOT="$(cd "${OUR_DIR}/../.." && pwd)"
 
 TARGET_COMPONENT="${1:-all}"
-TARGET_MODEL="${2:-Qwen/Qwen2.5-VL-7B-Instruct}"
+TARGET_MODEL="${2:-Qwen/Qwen3-VL-8B-Instruct}"
 POOL_MODE="${3:-N_5}"
 
 if [ "$#" -ge 1 ]; then shift 1; fi

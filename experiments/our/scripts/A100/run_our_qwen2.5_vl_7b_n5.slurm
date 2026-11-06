@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=our_qwen2.5_vl_7b_n5
+#SBATCH --job-name=our_qwen3_vl_8b_n5
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:a100:1
 #SBATCH --cpus-per-task=8
@@ -8,7 +8,7 @@
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
 # ==============================================================================
-# MSSEARCH V2 EVALUATION (SLURM A100): Qwen2.5-VL-7B-Instruct (N_5)
+# MSSEARCH V2 EVALUATION (SLURM A100): Qwen3-VL-8B-Instruct (N_5)
 # All paths and environment configurations are loaded from:
 #   experiments/our/env_paths.sh
 # ==============================================================================
@@ -31,7 +31,7 @@ fi
 PYTHON_BIN="$(command -v python || echo "python")"
 export PYTHONPATH="${MSSEARCH_ROOT}:${OUR_DIR}:${PYTHONPATH:-}"
 
-TARGET_MODEL="Qwen/Qwen2.5-VL-7B-Instruct"
+TARGET_MODEL="Qwen/Qwen3-VL-8B-Instruct"
 M_BASE="$(basename "${TARGET_MODEL}")"
 MODEL_PATH="${MODEL_DIR}/${M_BASE}"
 [ ! -d "${MODEL_PATH}" ] && MODEL_PATH="${TARGET_MODEL}"

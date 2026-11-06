@@ -74,7 +74,7 @@ def parse_args():
     parser.add_argument("--gate_threshold", type=float, default=None)
 
     # Base Pipeline Settings
-    parser.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-VL-7B-Instruct"))
+    parser.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen3-VL-8B-Instruct"))
     parser.add_argument("--nlp_model", type=str, default=os.environ.get("NLP_MODEL", "en_core_web_sm"))
     parser.add_argument("--dataset_path", type=str, default=os.environ.get("DATASET_PATH", "/data/STASHBench/annotations_part1234_merged.json"))
     parser.add_argument("--image_dir", type=str, default=os.environ.get("IMAGE_DIR", "/data/STASHBench/pool"))
