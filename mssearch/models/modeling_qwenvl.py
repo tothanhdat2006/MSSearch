@@ -13,10 +13,10 @@ warnings.filterwarnings("ignore", message=r".*`torch_dtype` is deprecated.*")
 
 
 class ModelQwenVL:
-    def __init__(self, model_path: str = "Qwen/Qwen2.5-VL-7B-Instruct", device: str = "cuda:0", torch_dtype=torch.float16, **kwargs) -> None:
+    def __init__(self, model_path: str = "Qwen/Qwen2.5-VL-7B-Instruct", device: str = "cuda:0", torch_dtype=torch.bfloat16, **kwargs) -> None:
         if "model_name" in kwargs and (model_path is None or model_path == "Qwen/Qwen2.5-VL-7B-Instruct"):
             model_path = kwargs.pop("model_name")
-        self.dtype = torch_dtype if torch_dtype is not None else torch.float16
+        self.dtype = torch_dtype if torch_dtype is not None else torch.bfloat16
         num_gpus = torch.cuda.device_count()
 
         # Multi-GPU Sharded Allocation Budget for 2x T4 in pure float16 (NO 4-bit quantization):
@@ -42,23 +42,31 @@ class ModelQwenVL:
             trust_remote_code=True,
             local_files_only=local_files_only,
         )
-        self.tokenizer = self.processor.tokenizer
-        try:
-            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                model_path,
-                dtype=self.dtype,
-                attn_implementation=actual_attn_implementation,
-                device_map=device_map,
-                max_memory=max_memory,
-                low_cpu_mem_usage=True,
-                trust_remote_code=True,
-                local_files_only=local_files_only,
-            )
-        except (TypeError, ValueError, AttributeError, Exception):
+        if hasattr(self.processor, "tokenizer"):
+            self.tokenizer = self.processor.tokenizer
+        else:
+            self.tokenizer = self.processor
+            if not hasattr(self.processor, "image_processor"):
+                try:
+                    from transformers import Qwen2_5_VLProcessor
+                    fallback_id = "/models/Qwen2.5-VL-7B-Instruct" if os.path.isdir("/models/Qwen2.5-VL-7B-Instruct") else "Qwen/Qwen2.5-VL-7B-Instruct"
+                    print(f"[ModelQwenVL] AutoProcessor returned tokenizer without vision processor; loading Qwen2_5_VLProcessor from '{fallback_id}'")
+                    self.processor = Qwen2_5_VLProcessor.from_pretrained(
+                        fallback_id,
+                        trust_remote_code=True,
+                        local_files_only=os.path.isdir(fallback_id),
+                    )
+                    self.tokenizer = self.processor.tokenizer
+                except Exception as e:
+                    print(f"[ModelQwenVL] Warning: failed to load fallback Qwen2_5_VLProcessor: {e}")
+        from transformers import AutoModelForImageTextToText, AutoModelForVision2Seq
+        model_loaded = False
+        loaders = [AutoModelForImageTextToText, Qwen2_5_VLForConditionalGeneration, AutoModelForVision2Seq]
+        for loader_cls in loaders:
             try:
-                self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                self.model = loader_cls.from_pretrained(
                     model_path,
-                    torch_dtype=self.dtype,
+                    dtype=self.dtype,
                     attn_implementation=actual_attn_implementation,
                     device_map=device_map,
                     max_memory=max_memory,
@@ -66,10 +74,12 @@ class ModelQwenVL:
                     trust_remote_code=True,
                     local_files_only=local_files_only,
                 )
-            except Exception:
+                print(f'[ModelQwenVL] Loaded {model_path} with {loader_cls.__name__} ({self.dtype})')
+                model_loaded = True
+                break
+            except (TypeError, ValueError, AttributeError):
                 try:
-                    from transformers import AutoModelForImageTextToText
-                    self.model = AutoModelForImageTextToText.from_pretrained(
+                    self.model = loader_cls.from_pretrained(
                         model_path,
                         torch_dtype=self.dtype,
                         attn_implementation=actual_attn_implementation,
@@ -79,18 +89,16 @@ class ModelQwenVL:
                         trust_remote_code=True,
                         local_files_only=local_files_only,
                     )
+                    print(f'[ModelQwenVL] Loaded {model_path} with {loader_cls.__name__} (torch_dtype={self.dtype})')
+                    model_loaded = True
+                    break
                 except Exception:
-                    from transformers import AutoModelForVision2Seq
-                    self.model = AutoModelForVision2Seq.from_pretrained(
-                        model_path,
-                        torch_dtype=self.dtype,
-                        attn_implementation=actual_attn_implementation,
-                        device_map=device_map,
-                        max_memory=max_memory,
-                        low_cpu_mem_usage=True,
-                        trust_remote_code=True,
-                        local_files_only=local_files_only,
-                    )
+                    continue
+            except Exception:
+                continue
+
+        if not model_loaded:
+            raise RuntimeError(f'[ModelQwenVL] Failed to load model weights from {model_path} across all model loaders.')
 
         self.model.eval()
         self.device = self.model.device

@@ -49,7 +49,7 @@ from .utils import *
 from sentence_transformers import SentenceTransformer, util
 
 class Model(ABC):
-    def __init__(self, model_path: str, conv_type: str = "qwen_1_5", device: str = "cuda:0", torch_dtype=torch.float16,
+    def __init__(self, model_path: str, conv_type: str = "qwen_1_5", device: str = "cuda:0", torch_dtype=torch.bfloat16,
                  attn_implementation="flash_attention_2", padding_side="left", **kwargs) -> None:
         if LlavaQwenForCausalLM is _LlavaUnavailable:
             _LlavaUnavailable.raise_err()
@@ -109,7 +109,7 @@ class Model(ABC):
         vision_tower = self.model.get_vision_tower()
         if not vision_tower.is_loaded:
             vision_tower.load_model(device_map=self.device)
-            vision_tower.to(device=self.device, dtype=torch.float16)
+            vision_tower.to(device=self.device, dtype=self.dtype)
         self.image_processor = vision_tower.image_processor
 
         if conv_type == "qwen_1_5" and "vicuna" in model_path.lower():

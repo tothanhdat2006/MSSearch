@@ -42,11 +42,11 @@ submitit
 tensordict
 tidecv==1.0.1
 timm
-tokenizers==0.21.4
+tokenizers>=0.21.0
 torchcodec
 torchmetrics
 tqdm>=4.66.0
-transformers==4.53.0
+transformers>=5.0.0
 typing_extensions>=4.10.0
 uvicorn
 #flash_attn==2.8.3

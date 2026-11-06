@@ -330,3 +330,21 @@ bash experiments/our/ablations/scripts/run_modal_ablation.sh gate Qwen/Qwen3-VL-
 # Full cross-ablation sweep
 bash experiments/our/ablations/scripts/run_modal_ablation.sh all Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 ```
+
+
+---
+
+## Step 5: Evaluate Results (`eval_stashbench.py`)
+
+Run the standardized evaluator on any output `.jsonl` file to compute Set-based vs. Strict Primary Image Accuracy, Answer Hit, Joint Accuracy, token usage, and stage-wise latencies:
+
+```bash
+# Evaluate a single results file
+python mssearch/eval/eval_stashbench.py --input results_our/results_our_Qwen2.5-VL-7B-Instruct_N_5_*.jsonl
+
+# Save structured summary JSON
+python mssearch/eval/eval_stashbench.py \
+    --input results_our/results_our_Qwen2.5-VL-7B-Instruct_N_5_*.jsonl \
+    --save_summary results_our/summary_qwen_n5.json
+```
+

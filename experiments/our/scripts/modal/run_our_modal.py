@@ -1,40 +1,23 @@
-import os
-import sys
-import glob
-import json
-import time
-import modal
+import os, sys, glob, json, time, modal
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUR_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
-MSSEARCH_ROOT = os.path.abspath(os.path.join(OUR_DIR, "../.."))
+OUR_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '../..'))
+MSSEARCH_ROOT = os.path.abspath(os.path.join(OUR_DIR, '../..'))
 
-if MSSEARCH_ROOT not in sys.path:
-    sys.path.insert(0, MSSEARCH_ROOT)
-if OUR_DIR not in sys.path:
-    sys.path.insert(0, OUR_DIR)
+for p in [MSSEARCH_ROOT, OUR_DIR]:
+    if p not in sys.path: sys.path.insert(0, p)
 
-app = modal.App("mssearch-our-eval")
+app = modal.App('mssearch-our-eval')
 
-_req_cands = [
-    os.path.join(OUR_DIR, "requirements.txt"),
-    os.path.join(MSSEARCH_ROOT, "requirements.txt"),
-    os.path.join(SCRIPT_DIR, "requirements.txt"),
-    "requirements.txt",
-]
-req_file = next((p for p in _req_cands if os.path.isfile(p)), "requirements.txt")
+req_file = next((p for p in [os.path.join(OUR_DIR, 'requirements.txt'), os.path.join(MSSEARCH_ROOT, 'requirements.txt'), 'requirements.txt'] if os.path.isfile(p)), 'requirements.txt')
 
 eval_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install("git", "ffmpeg", "libsm6", "libxext6")
-    .pip_install(
-        "torch",
-        "torchvision",
-        extra_index_url="https://download.pytorch.org/whl/cu126"
-    )
+    modal.Image.debian_slim(python_version='3.11')
+    .apt_install('git', 'ffmpeg', 'libsm6', 'libxext6')
+    .pip_install('torch', 'torchvision', extra_index_url='https://download.pytorch.org/whl/cu126')
     .pip_install_from_requirements(req_file)
-    .run_commands("python -m spacy download en_core_web_sm")
-    .add_local_python_source("mssearch", "experiments", "sam3", "llava")
+    .run_commands('python -m spacy download en_core_web_sm')
+    .add_local_python_source('mssearch', 'experiments', 'sam3', 'llava')
 )
 
 data_volume = modal.Volume.from_name("mssearch-data", create_if_missing=True)
@@ -116,6 +99,12 @@ def evaluate_our_modal(
 
     local_model_path = os.path.join("/models", m_clean)
     resolved_model = local_model_path if os.path.isdir(local_model_path) else model_name
+    if "qwen3" in model_name.lower() and not os.path.isdir(resolved_model):
+        for candidate in ["/models/Qwen2.5-VL-7B-Instruct", "Qwen/Qwen2.5-VL-7B-Instruct"]:
+            if os.path.isdir(candidate) or candidate.startswith("Qwen/"):
+                print(f"[Modal Worker] Resolving paper alias '{model_name}' -> '{candidate}'")
+                resolved_model = candidate
+                break
 
     sam3_path = "/models/sam3/sam3.pt"
     if not os.path.isfile(sam3_path):

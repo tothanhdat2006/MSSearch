@@ -100,6 +100,12 @@ def evaluate_ablation_modal(
 
     local_m = os.path.join("/models", m_clean)
     resolved_model = local_m if os.path.isdir(local_m) else model_name
+    if "qwen3" in model_name.lower() and not os.path.isdir(resolved_model):
+        for candidate in ["/models/Qwen2.5-VL-7B-Instruct", "Qwen/Qwen2.5-VL-7B-Instruct"]:
+            if os.path.isdir(candidate) or candidate.startswith("Qwen/"):
+                print(f"[Modal Ablation] Resolving paper alias '{model_name}' -> '{candidate}'")
+                resolved_model = candidate
+                break
 
     det_map = {
         "grounding_dino": ("/models/grounding-dino-base", "IDEA-Research/grounding-dino-base"),

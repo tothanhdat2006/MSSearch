@@ -15,11 +15,11 @@ class ModelLlavaHR:
         self,
         model_path: str = "favor123/llava-hr-7b-sft-1024",
         device: str = "cuda:0",
-        torch_dtype: torch.dtype = torch.float16,
+        torch_dtype: torch.dtype = torch.bfloat16,
         **kwargs
     ) -> None:
         self.device = device
-        self.dtype = torch_dtype if torch_dtype is not None else torch.float16
+        self.dtype = torch_dtype if torch_dtype is not None else torch.bfloat16
         local_files_only = kwargs.get("local_files_only", os.path.isdir(str(model_path)))
 
         print(f"[ModelLlavaHR] Loading LLaVA-HR model from '{model_path}' on {self.device}...")

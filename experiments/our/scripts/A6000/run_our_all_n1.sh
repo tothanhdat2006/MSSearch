@@ -10,7 +10,7 @@ POOL_SLUG="n1"
 
 echo "Starting evaluation run for pool N_1 across all 3 models..."
 
-echo "[1/3] Running Qwen2.5-VL-7B-Instruct..."
+echo "[1/3] Running Qwen3-VL-8B-Instruct..."
 bash "${SCRIPT_DIR}/run_our_qwen2.5_vl_7b_${POOL_SLUG}.sh" "$@"
 
 echo "[2/3] Running llava-onevision-qwen2-7b-ov..."

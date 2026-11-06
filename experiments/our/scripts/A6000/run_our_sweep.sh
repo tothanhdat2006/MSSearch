@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ==============================================================================
 # MSSEARCH V2 EVALUATION RUNNER ON LOCAL A6000: FULL MATRIX SWEEP
-# Executes N=1, N=5, N=10, N=20 across Qwen2.5, LLaVA-OV, InternVL3
+# Executes N=1, N=5, N=10, N=20 across Qwen3, LLaVA-OV, InternVL3
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

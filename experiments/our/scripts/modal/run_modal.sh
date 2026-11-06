@@ -2,7 +2,7 @@
 # ==============================================================================
 # MODAL CONVENIENCE RUNNER FOR MSSEARCH V2
 # Usage:
-#   bash run_modal.sh qwen3_vl_8b N_5
+#   bash run_modal.sh qwen2.5_vl_7b N_5
 #   bash run_modal.sh llava_ov_7b N_10
 #   bash run_modal.sh internvl3_8b N_20
 # ==============================================================================
