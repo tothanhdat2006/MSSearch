@@ -33,7 +33,8 @@ class ModelQwenVL:
 
         # SDPA backend for NVIDIA T4 (Turing sm_75 cannot run FlashAttention-2)
         actual_attn_implementation = "sdpa"
-        local_files_only = kwargs.get("local_files_only", os.path.isdir(str(model_path)))
+        hf_offline = os.environ.get("HF_HUB_OFFLINE", "0") in ("1", "true", "True") or os.environ.get("TRANSFORMERS_OFFLINE", "0") in ("1", "true", "True")
+        local_files_only = kwargs.get("local_files_only", hf_offline or os.path.isdir(str(model_path)))
         print(f"[ModelQwenVL] Multi-GPU device_map: {device_map} | max_memory: {max_memory}")
         print(f"[ModelQwenVL] Attention Backend: {actual_attn_implementation} | Precision: {self.dtype} | Local files only: {local_files_only}")
 
@@ -92,9 +93,11 @@ class ModelQwenVL:
                     print(f'[ModelQwenVL] Loaded {model_path} with {loader_cls.__name__} (torch_dtype={self.dtype})')
                     model_loaded = True
                     break
-                except Exception:
+                except Exception as err:
+                    print(f"[ModelQwenVL] {loader_cls.__name__} fallback failed: {err}")
                     continue
-            except Exception:
+            except Exception as err:
+                print(f"[ModelQwenVL] {loader_cls.__name__} failed: {err}")
                 continue
 
         if not model_loaded:

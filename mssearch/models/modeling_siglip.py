@@ -78,8 +78,10 @@ class SigLIPScorer:
     def _ensure_loaded(self):
         """Lazy loader to prevent unneeded GPU allocation until Stage 5 is invoked."""
         if self.model is None:
-            print(f"[SigLIPScorer] Loading '{self.model_name}' on {self.device} ({self.dtype})...")
-            cfg = AutoConfig.from_pretrained(self.model_name)
+            hf_offline = os.environ.get("HF_HUB_OFFLINE", "0") in ("1", "true", "True") or os.environ.get("TRANSFORMERS_OFFLINE", "0") in ("1", "true", "True")
+            local_files_only = hf_offline or os.path.isdir(str(self.model_name))
+            print(f"[SigLIPScorer] Loading '{self.model_name}' on {self.device} ({self.dtype}) (local_files_only={local_files_only})...")
+            cfg = AutoConfig.from_pretrained(self.model_name, local_files_only=local_files_only)
             if hasattr(cfg, "text_config"):
                 cfg.text_config.bos_token_id = None
                 cfg.text_config.eos_token_id = None
@@ -91,8 +93,9 @@ class SigLIPScorer:
                 config=cfg,
                 torch_dtype=self.dtype,
                 low_cpu_mem_usage=True,
+                local_files_only=local_files_only,
             ).to(self.device).eval()
-            self.processor = AutoProcessor.from_pretrained(self.model_name)
+            self.processor = AutoProcessor.from_pretrained(self.model_name, local_files_only=local_files_only)
 
     def clear_text_cache(self):
         """Clears cached text query embeddings."""
