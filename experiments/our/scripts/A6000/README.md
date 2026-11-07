@@ -279,3 +279,4 @@ PID3=$!
 nohup bash experiments/our/scripts/A6000/wait_pid.sh "${PID3}" \
     bash experiments/our/scripts/A6000/run_our_qwen3_vl_8b_n20.sh > run_n20.log 2>&1 &
 ```
+
