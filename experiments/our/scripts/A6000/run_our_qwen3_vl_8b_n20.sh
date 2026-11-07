@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# MSSEARCH V2 EVALUATION (A6000 SERVER): Qwen2.5-VL-7B-Instruct (N_20)
+# MSSEARCH V2 EVALUATION (A6000 SERVER): Qwen3-VL-8B-Instruct (N_20)
 # All paths and environment configurations are loaded from:
 #   experiments/our/env_paths.sh
 # ==============================================================================
@@ -25,10 +25,16 @@ fi
 PYTHON_BIN="$(command -v python || echo "python")"
 export PYTHONPATH="${MSSEARCH_ROOT}:${OUR_DIR}:${PYTHONPATH:-}"
 
-TARGET_MODEL="Qwen/Qwen3-VL-8B-Instruct"
+TARGET_MODEL="Qwen3-VL-8B"
 M_BASE="$(basename "${TARGET_MODEL}")"
 MODEL_PATH="${MODEL_DIR}/${M_BASE}"
-[ ! -d "${MODEL_PATH}" ] && MODEL_PATH="${TARGET_MODEL}"
+if [ ! -d "${MODEL_PATH}" ]; then
+    if [ -d "${MODEL_DIR}/Qwen3-VL-8B-Instruct" ]; then
+        MODEL_PATH="${MODEL_DIR}/Qwen3-VL-8B-Instruct"
+    else
+        MODEL_PATH="Qwen/Qwen3-VL-8B-Instruct"
+    fi
+fi
 
 POOL_MODE="N_20"
 OUTPUT_DIR="${OUTPUT_BASE_DIR:-${OUR_DIR}/results_our_a6000_${M_BASE}_${POOL_MODE}}"
