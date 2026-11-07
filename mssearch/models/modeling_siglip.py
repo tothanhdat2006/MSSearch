@@ -3,6 +3,7 @@ Lightweight SigLIP / CLIP Scorer for Branch B (Low-Resolution Screening)
 using native HuggingFace pipeline as specified in official model documentation.
 """
 
+import os
 import warnings
 import logging
 from typing import List, Union, Any
