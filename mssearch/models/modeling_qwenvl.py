@@ -59,9 +59,9 @@ class ModelQwenVL:
                     self.tokenizer = self.processor.tokenizer
                 except Exception as e:
                     print(f"[ModelQwenVL] Warning: failed to load fallback Qwen2_5_VLProcessor: {e}")
-        from transformers import AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForImageTextToText
         model_loaded = False
-        loaders = [AutoModelForImageTextToText, Qwen2_5_VLForConditionalGeneration, AutoModelForVision2Seq]
+        loaders = [AutoModelForImageTextToText, Qwen2_5_VLForConditionalGeneration]
         for loader_cls in loaders:
             try:
                 self.model = loader_cls.from_pretrained(
