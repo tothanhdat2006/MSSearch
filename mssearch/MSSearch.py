@@ -16,6 +16,7 @@ import time
 from typing import List, Dict, Any, Optional
 from PIL import Image
 import numpy as np
+import torch
 
 from .config import MSSearchConfig
 from .stages import (
@@ -543,7 +544,6 @@ class MultiSourceSearchEngine:
                                     child_outputs = []
                                     for c_img in child_crops:
                                         try:
-                                            import torch
                                             if hasattr(torch, "inference_mode"):
                                                 with torch.inference_mode():
                                                     child_outputs.append(self.sam_model.batch_inference(c_img, list(active_objects)))

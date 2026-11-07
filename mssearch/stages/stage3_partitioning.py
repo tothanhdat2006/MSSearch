@@ -141,11 +141,10 @@ def partition_candidate_images(
                             evaluated_with_siglip = True
                             saliency_parent_score = s_parent
                         except Exception as e:
-                            if config.verbose:
-                                print(f"[Stage 3][Plateau Notice] SigLIP scoring failed ({e}); falling back to entropy plateau.")
+                            print(f"[Stage 3][Plateau Notice] SigLIP scoring failed: {e}")
 
                     if not evaluated_with_siglip:
-                        raise RuntimeError("SigLIP saliency-plateau scoring unavailable; entropy fallback disabled")
+                        raise RuntimeError(f"SigLIP saliency-plateau scoring unavailable; entropy fallback disabled (active_objects={active_objects}, siglip_model={siglip_model})")
 
             if should_split:
                 crop = img_pil.crop(box_ints)

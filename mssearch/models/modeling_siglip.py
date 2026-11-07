@@ -3,6 +3,7 @@ Lightweight SigLIP / CLIP Scorer for Branch B (Low-Resolution Screening)
 using native HuggingFace pipeline as specified in official model documentation.
 """
 
+import os
 import warnings
 import logging
 from typing import List, Union, Any
@@ -67,7 +68,15 @@ class SigLIPScorer:
         torch_dtype: torch.dtype = torch.float16,
         **kwargs,
     ):
-        self.model_name = kwargs.get("model_path", model_name)
+        model_candidate = kwargs.get("model_path", model_name)
+        if not os.path.isdir(str(model_candidate)):
+            model_dir = os.environ.get("MODEL_DIR", "")
+            base = os.path.basename(str(model_candidate))
+            if model_dir and os.path.isdir(os.path.join(model_dir, base)):
+                model_candidate = os.path.join(model_dir, base)
+            elif os.path.isdir(base):
+                model_candidate = os.path.abspath(base)
+        self.model_name = model_candidate
         self.device = device if torch.cuda.is_available() else "cpu"
         self.dtype = torch_dtype if torch.cuda.is_available() else torch.float32
         self.model = None
@@ -78,8 +87,10 @@ class SigLIPScorer:
     def _ensure_loaded(self):
         """Lazy loader to prevent unneeded GPU allocation until Stage 5 is invoked."""
         if self.model is None:
-            print(f"[SigLIPScorer] Loading '{self.model_name}' on {self.device} ({self.dtype})...")
-            cfg = AutoConfig.from_pretrained(self.model_name)
+            hf_offline = os.environ.get("HF_HUB_OFFLINE", "0") in ("1", "true", "True") or os.environ.get("TRANSFORMERS_OFFLINE", "0") in ("1", "true", "True")
+            local_files_only = hf_offline or os.path.isdir(str(self.model_name))
+            print(f"[SigLIPScorer] Loading '{self.model_name}' on {self.device} ({self.dtype}) (local_files_only={local_files_only})...")
+            cfg = AutoConfig.from_pretrained(self.model_name, local_files_only=local_files_only)
             if hasattr(cfg, "text_config"):
                 cfg.text_config.bos_token_id = None
                 cfg.text_config.eos_token_id = None
@@ -91,8 +102,9 @@ class SigLIPScorer:
                 config=cfg,
                 torch_dtype=self.dtype,
                 low_cpu_mem_usage=True,
+                local_files_only=local_files_only,
             ).to(self.device).eval()
-            self.processor = AutoProcessor.from_pretrained(self.model_name)
+            self.processor = AutoProcessor.from_pretrained(self.model_name, local_files_only=local_files_only)
 
     def clear_text_cache(self):
         """Clears cached text query embeddings."""
