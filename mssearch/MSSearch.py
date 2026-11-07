@@ -16,6 +16,7 @@ import time
 from typing import List, Dict, Any, Optional
 from PIL import Image
 import numpy as np
+import torch
 
 from .config import MSSearchConfig
 from .stages import (
@@ -405,6 +406,26 @@ class MultiSourceSearchEngine:
                 telemetry["source_answer_records"] = harvested_extractions
                 if not is_quiet:
                     print(f"[MSSearch Final Decision] Primary Answer: '{primary_ans}' | Primary Image: {primary_evidence_img_idx} | Evidence Images: {harvested_evidence_images} | Route: {telemetry['route']} | Latency: {telemetry['total_latency_sec']}s")
+
+                if enable_vram and torch.cuda.is_available():
+                    try:
+                        torch.cuda.synchronize(prof_device)
+                        ov_alloc = round(torch.cuda.max_memory_allocated(prof_device) / (1024 ** 2), 1)
+                        ov_res = round(torch.cuda.max_memory_reserved(prof_device) / (1024 ** 2), 1)
+                        telemetry["vram_profiling"]["overall_peak_allocated_mb"] = ov_alloc
+                        telemetry["vram_profiling"]["overall_peak_reserved_mb"] = ov_res
+                        if not is_quiet:
+                            stage_peaks = [
+                                f"{st}: {d.get('peak_allocated_mb', 0):,.0f}MB (Δ{d.get('delta_allocated_mb', 0):+,.0f}MB)"
+                                for st, d in telemetry["vram_profiling"].items()
+                                if isinstance(d, dict) and "peak_allocated_mb" in d
+                            ]
+                            print(f"[MSSearch VRAM Summary] Overall Peak Allocated: {ov_alloc:,.1f} MB | Peak Reserved: {ov_res:,.1f} MB | Stages: [{', '.join(stage_peaks)}]\n")
+                    except Exception:
+                        pass
+                elif not is_quiet:
+                    print("")
+
                 return {
                     "answers": harvested_answers,
                     "prediction_list": pred_list if pred_list else harvested_answers,
@@ -566,7 +587,6 @@ class MultiSourceSearchEngine:
                                         child_outputs = []
                                         for c_img in child_crops:
                                             try:
-                                                import torch
                                                 if hasattr(torch, "inference_mode"):
                                                     with torch.inference_mode():
                                                         child_outputs.append(self.sam_model.batch_inference(c_img, list(active_objects)))
