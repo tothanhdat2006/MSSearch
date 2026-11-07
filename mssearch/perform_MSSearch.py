@@ -114,11 +114,13 @@ def main():
         verbose=is_verbose
     )
 
-    # 1. Load Qwen2.5-VL in float16 (Asymmetric Sharding across 2x T4)
-    print("[MSSearch] Loading Qwen2.5-VL on dual-T4 with SDPA backend...")
+    # 1. Prefer bfloat16 for the primary VLM on supported GPUs.
+    # Legacy T4 GPUs do not support bfloat16, so preserve float16 on that hardware.
+    vlm_dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+    print(f"[MSSearch] Loading Qwen2.5-VL with SDPA backend (dtype={vlm_dtype})...")
     search_model = ModelQwenVL(
         model_path=args.model_path,
-        torch_dtype=torch.float16,
+        torch_dtype=vlm_dtype,
         patch_scale=1.2
     )
 
