@@ -149,6 +149,7 @@ class MSSearchConfig:
     verbose: bool = True                         # Master verbose toggle (set False to silence all sub-stage debug prints)
     stage_summary_only: bool = True              # If True, only prints the final decision of each stage (clean 1-line summary)
     log_level: str = "summary"                   # "summary" (clean 1-line per stage), "verbose" (full internal loops), "quiet" (silent)
+    enable_vram_profiling: bool = True           # Track per-stage entry, exit, delta, and peak VRAM into telemetry
 
     def __post_init__(self):
         # Synchronize gate_threshold probability [0, 1] with latent/existence [-1, 1] thresholds

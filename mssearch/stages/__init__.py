@@ -26,6 +26,7 @@ from .stage3_partitioning import (
 from .stage4_grouping_gating import run_feature_grouping_and_gating, group_patches_by_cosine_similarity
 from .stage5_screening import run_resolution_screening, CandidateCrop, CandidatePool
 from .stage6_foveated_reader import run_foveated_vlm_reading, FinalSearchResult, is_negative_or_unanswerable, deduplicate_answers
+from .utils_profiler import StageVRAMTracker
 
 __all__ = [
     "run_direct_global_assessment",
@@ -52,4 +53,5 @@ __all__ = [
     "FinalSearchResult",
     "is_negative_or_unanswerable",
     "deduplicate_answers",
+    "StageVRAMTracker",
 ]

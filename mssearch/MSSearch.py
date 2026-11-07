@@ -29,7 +29,8 @@ from .stages import (
     run_resolution_screening,
     run_foveated_vlm_reading,
     FastPathResult,
-    FinalSearchResult
+    FinalSearchResult,
+    StageVRAMTracker,
 )
 from .stages.stage3_partitioning import BoundedPatch
 
@@ -153,7 +154,13 @@ class MultiSourceSearchEngine:
             "stage4_boxes": [],
             "stage4_image_scores": {},
             "stage5_boxes": [],
+            "vram_profiling": {},
         }
+
+        enable_vram = getattr(self.config, "enable_vram_profiling", True)
+        prof_device = getattr(self.zoom_model, "device", "cuda:0") if hasattr(self.zoom_model, "device") else "cuda:0"
+        if not isinstance(prof_device, str):
+            prof_device = str(prof_device)
 
         # Tracking containers for the waterfall cascade
         harvested_answers: List[str] = []
@@ -171,12 +178,15 @@ class MultiSourceSearchEngine:
         # ---------------------------------------------------------------------
         if getattr(self.config, "enable_direct_answer", True):
             t0 = time.perf_counter()
-            direct_result: DirectAnswerResult = run_direct_global_assessment(
-                candidate_images=candidate_images,
-                question=reading_question,
-                zoom_model=self.zoom_model,
-                config=sub_config
-            )
+            with StageVRAMTracker("phase1_direct_answer", enabled=enable_vram, device=prof_device, verbose=(is_verbose and not is_summary)) as mem_p1:
+                direct_result: DirectAnswerResult = run_direct_global_assessment(
+                    candidate_images=candidate_images,
+                    question=reading_question,
+                    zoom_model=self.zoom_model,
+                    config=sub_config
+                )
+            if mem_p1.stats:
+                telemetry["vram_profiling"]["phase1_direct_answer"] = mem_p1.stats
             lat_p1 = round(time.perf_counter() - t0, 3)
             telemetry["timings_sec"]["phase1_direct_answer"] = lat_p1
             telemetry["stages_executed"].append("phase1_direct_answer")
@@ -274,15 +284,18 @@ class MultiSourceSearchEngine:
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
         first_img = candidate_images[unresolved_images[0]] if (candidate_images and unresolved_images) else (candidate_images[0] if candidate_images else None)
-        active_objects = parse_question_to_active_objects(
-            question=question,
-            zoom_model=self.zoom_model,
-            nlp_model=self.nlp_model,
-            ic_examples=ic_examples,
-            verbose=sub_config.verbose,
-            image_pil=first_img,
-            config=sub_config
-        )
+        with StageVRAMTracker("stage1_parser", enabled=enable_vram, device=prof_device, verbose=(is_verbose and not is_summary)) as mem_s1:
+            active_objects = parse_question_to_active_objects(
+                question=question,
+                zoom_model=self.zoom_model,
+                nlp_model=self.nlp_model,
+                ic_examples=ic_examples,
+                verbose=sub_config.verbose,
+                image_pil=first_img,
+                config=sub_config
+            )
+        if mem_s1.stats:
+            telemetry["vram_profiling"]["stage1_parser"] = mem_s1.stats
         lat_s1 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage1_parser"] = lat_s1
         telemetry["active_objects"] = list(active_objects)
@@ -295,15 +308,18 @@ class MultiSourceSearchEngine:
         # Stage 2: Tool-Based Fast Path Canvas Check
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
-        fast_path_result: FastPathResult = run_tool_based_fast_path(
-            candidate_images=candidate_images,
-            active_objects=active_objects,
-            question=reading_question,
-            sam_model=self.sam_model,
-            zoom_model=self.zoom_model,
-            config=sub_config,
-            active_img_indices=unresolved_images
-        )
+        with StageVRAMTracker("stage2_fast_path", enabled=enable_vram, device=prof_device, verbose=(is_verbose and not is_summary)) as mem_s2:
+            fast_path_result: FastPathResult = run_tool_based_fast_path(
+                candidate_images=candidate_images,
+                active_objects=active_objects,
+                question=reading_question,
+                sam_model=self.sam_model,
+                zoom_model=self.zoom_model,
+                config=sub_config,
+                active_img_indices=unresolved_images
+            )
+        if mem_s2.stats:
+            telemetry["vram_profiling"]["stage2_fast_path"] = mem_s2.stats
         lat_s2 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage2_fast_path"] = lat_s2
         telemetry["stages_executed"].append("stage2_fast_path")
@@ -422,14 +438,17 @@ class MultiSourceSearchEngine:
         t0 = time.perf_counter()
         # Reuses feature map extracted during Stage 2 canvas check
         feature_cache = fast_path_result.feature_cache if self.config.reuse_stage2_features else {}
-        bounded_patches = partition_candidate_images(
-            candidate_images=candidate_images,
-            stage2_feature_cache=feature_cache,
-            config=sub_config,
-            active_objects=active_objects,
-            siglip_model=self.siglip_model,
-            target_img_indices=unresolved_images
-        )
+        with StageVRAMTracker("stage3_partitioning", enabled=enable_vram, device=prof_device, verbose=(is_verbose and not is_summary)) as mem_s3:
+            bounded_patches = partition_candidate_images(
+                candidate_images=candidate_images,
+                stage2_feature_cache=feature_cache,
+                config=sub_config,
+                active_objects=active_objects,
+                siglip_model=self.siglip_model,
+                target_img_indices=unresolved_images
+            )
+        if mem_s3.stats:
+            telemetry["vram_profiling"]["stage3_partitioning"] = mem_s3.stats
         lat_s3 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage3_partitioning"] = lat_s3
         telemetry["num_bounded_patches"] = len(bounded_patches)
@@ -442,17 +461,20 @@ class MultiSourceSearchEngine:
         # Stage 4: SAM3 Feature Grouping & Active Object Gating
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
-        remaining_patches, stage4_groups = run_feature_grouping_and_gating(
-            bounded_patches=bounded_patches,
-            candidate_images=candidate_images,
-            active_objects=active_objects,
-            sam_model=self.sam_model,
-            config=sub_config,
-            detected_boxes_by_image=fast_path_result.boxes_by_image,
-            zoom_model=self.zoom_model,
-            return_debug=True,
-            question=question
-        )
+        with StageVRAMTracker("stage4_grouping_gating", enabled=enable_vram, device=prof_device, verbose=(is_verbose and not is_summary)) as mem_s4:
+            remaining_patches, stage4_groups = run_feature_grouping_and_gating(
+                bounded_patches=bounded_patches,
+                candidate_images=candidate_images,
+                active_objects=active_objects,
+                sam_model=self.sam_model,
+                config=sub_config,
+                detected_boxes_by_image=fast_path_result.boxes_by_image,
+                zoom_model=self.zoom_model,
+                return_debug=True,
+                question=question
+            )
+        if mem_s4.stats:
+            telemetry["vram_profiling"]["stage4_grouping_gating"] = mem_s4.stats
         lat_s4 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage4_grouping_gating"] = lat_s4
         telemetry["num_remaining_patches"] = len(remaining_patches)
@@ -473,156 +495,159 @@ class MultiSourceSearchEngine:
         # Recursive Latent Re-Partitioning Feedback Loop (Stage 4 -> Stage 3)
         # ---------------------------------------------------------------------
         if getattr(sub_config, "enable_latent_repartition", True):
-            repart_thresh = getattr(sub_config, "latent_repartition_threshold", 0.70)
-            max_repart_per_img = getattr(sub_config, "max_latent_repartition_patches_per_image", 2)
+            with StageVRAMTracker("stage4_latent_repartition", enabled=enable_vram, device=prof_device, verbose=(is_verbose and not is_summary)) as mem_repart:
+                repart_thresh = getattr(sub_config, "latent_repartition_threshold", 0.70)
+                max_repart_per_img = getattr(sub_config, "max_latent_repartition_patches_per_image", 2)
 
-            high_latent_groups = [
-                g for g in stage4_groups
-                if g.get("status") == "KEPT" and (g.get("vlm_latent_score") or -1.0) >= repart_thresh
-            ]
+                high_latent_groups = [
+                    g for g in stage4_groups
+                    if g.get("status") == "KEPT" and (g.get("vlm_latent_score") or -1.0) >= repart_thresh
+                ]
 
-            if high_latent_groups:
-                by_img_hl: Dict[int, List[Dict[str, Any]]] = {}
-                for g in high_latent_groups:
-                    by_img_hl.setdefault(g["img_idx"], []).append(g)
+                if high_latent_groups:
+                    by_img_hl: Dict[int, List[Dict[str, Any]]] = {}
+                    for g in high_latent_groups:
+                        by_img_hl.setdefault(g["img_idx"], []).append(g)
 
-                repartitioned_patches: List[BoundedPatch] = []
-                replaced_parent_boxes = set()
+                    repartitioned_patches: List[BoundedPatch] = []
+                    replaced_parent_boxes = set()
 
-                for img_idx, g_list in by_img_hl.items():
-                    sorted_g = sorted(g_list, key=lambda g: g.get("vlm_latent_score", 0.0), reverse=True)[:max_repart_per_img]
-                    for g in sorted_g:
-                        parent_box = tuple(int(round(float(c))) for c in g["rep_box"])
-                        pw = parent_box[2] - parent_box[0]
-                        ph = parent_box[3] - parent_box[1]
-                        if pw < 128 or ph < 128:
-                            continue
+                    for img_idx, g_list in by_img_hl.items():
+                        sorted_g = sorted(g_list, key=lambda g: g.get("vlm_latent_score", 0.0), reverse=True)[:max_repart_per_img]
+                        for g in sorted_g:
+                            parent_box = tuple(int(round(float(c))) for c in g["rep_box"])
+                            pw = parent_box[2] - parent_box[0]
+                            ph = parent_box[3] - parent_box[1]
+                            if pw < 128 or ph < 128:
+                                continue
 
-                        parent_crop = candidate_images[img_idx].crop(parent_box)
-                        local_cfg = copy.copy(sub_config)
-                        local_cfg.max_partition_depth = min(
-                            local_cfg.max_partition_depth, local_cfg.max_latent_repartition_depth
-                        )
-                        local_child_patches = partition_candidate_images(
-                            candidate_images=[parent_crop],
-                            stage2_feature_cache={},
-                            config=local_cfg,
-                            active_objects=active_objects,
-                            siglip_model=self.siglip_model
-                        )
+                            parent_crop = candidate_images[img_idx].crop(parent_box)
+                            local_cfg = copy.copy(sub_config)
+                            local_cfg.max_partition_depth = min(
+                                local_cfg.max_partition_depth, local_cfg.max_latent_repartition_depth
+                            )
+                            local_child_patches = partition_candidate_images(
+                                candidate_images=[parent_crop],
+                                stage2_feature_cache={},
+                                config=local_cfg,
+                                active_objects=active_objects,
+                                siglip_model=self.siglip_model
+                            )
 
-                        if local_child_patches:
-                            replaced_parent_boxes.add((img_idx, parent_box))
-                            child_crops = []
-                            child_patch_objs = []
-                            tau_det = getattr(sub_config, "detection_score_threshold", 0.30)
+                            if local_child_patches:
+                                replaced_parent_boxes.add((img_idx, parent_box))
+                                child_crops = []
+                                child_patch_objs = []
+                                tau_det = getattr(sub_config, "detection_score_threshold", 0.30)
 
-                            for cp in local_child_patches:
-                                lx1, ly1, lx2, ly2 = cp.box
-                                child_global_box = (
-                                    parent_box[0] + lx1,
-                                    parent_box[1] + ly1,
-                                    parent_box[0] + lx2,
-                                    parent_box[1] + ly2
-                                )
-                                c_crop = candidate_images[img_idx].crop(child_global_box)
-                                cw, ch = c_crop.size
-                                if cw >= 8 and ch >= 8:
-                                    child_crops.append(c_crop)
-                                    child_patch_objs.append((cp, child_global_box))
-
-                            # Evaluate child crops with SAM3 open-vocabulary detection
-                            surviving_children: List[BoundedPatch] = []
-                            if self.sam_model is not None and active_objects and child_crops:
-                                sam3_bs = getattr(sub_config, "sam3_batch_size", 4)
-                                if hasattr(self.sam_model, "batch_inference_multi_images") and sam3_bs > 1:
-                                    child_outputs = self.sam_model.batch_inference_multi_images(
-                                        child_crops, list(active_objects), batch_size=sam3_bs
+                                for cp in local_child_patches:
+                                    lx1, ly1, lx2, ly2 = cp.box
+                                    child_global_box = (
+                                        parent_box[0] + lx1,
+                                        parent_box[1] + ly1,
+                                        parent_box[0] + lx2,
+                                        parent_box[1] + ly2
                                     )
-                                else:
-                                    child_outputs = []
-                                    for c_img in child_crops:
-                                        try:
-                                            import torch
-                                            if hasattr(torch, "inference_mode"):
-                                                with torch.inference_mode():
-                                                    child_outputs.append(self.sam_model.batch_inference(c_img, list(active_objects)))
-                                            else:
-                                                child_outputs.append(self.sam_model.batch_inference(c_img, list(active_objects)))
-                                        except Exception:
-                                            child_outputs.append((None, {}, []))
+                                    c_crop = candidate_images[img_idx].crop(child_global_box)
+                                    cw, ch = c_crop.size
+                                    if cw >= 8 and ch >= 8:
+                                        child_crops.append(c_crop)
+                                        child_patch_objs.append((cp, child_global_box))
 
-                                for (cp, child_global_box), (_, processed_results, text_id) in zip(child_patch_objs, child_outputs):
-                                    child_dets = []
-                                    for tid in text_id:
-                                        obj_idx = (int(tid) - 1) if str(tid).isdigit() else 0
-                                        label_str = active_objects[obj_idx] if 0 <= obj_idx < len(active_objects) else str(tid)
-                                        res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
-                                        boxes = res.get('boxes', [])
-                                        scores = res.get('scores', [])
-                                        for b, s in zip(boxes, scores):
-                                            s_float = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
-                                            b_clean = [int(round(float(c))) for c in (b.tolist() if hasattr(b, 'tolist') else b)]
-                                            if s_float >= tau_det:
-                                                child_dets.append({
-                                                    "label": label_str,
-                                                    "score": round(s_float, 3),
-                                                    "local_box": b_clean,
-                                                    "global_box": [b_clean[0] + child_global_box[0], b_clean[1] + child_global_box[1],
-                                                                   b_clean[2] + child_global_box[0], b_clean[3] + child_global_box[1]]
-                                                })
-                                    if child_dets:
-                                        best_det_score = max(d["score"] for d in child_dets)
+                                # Evaluate child crops with SAM3 open-vocabulary detection
+                                surviving_children: List[BoundedPatch] = []
+                                if self.sam_model is not None and active_objects and child_crops:
+                                    sam3_bs = getattr(sub_config, "sam3_batch_size", 4)
+                                    if hasattr(self.sam_model, "batch_inference_multi_images") and sam3_bs > 1:
+                                        child_outputs = self.sam_model.batch_inference_multi_images(
+                                            child_crops, list(active_objects), batch_size=sam3_bs
+                                        )
+                                    else:
+                                        child_outputs = []
+                                        for c_img in child_crops:
+                                            try:
+                                                import torch
+                                                if hasattr(torch, "inference_mode"):
+                                                    with torch.inference_mode():
+                                                        child_outputs.append(self.sam_model.batch_inference(c_img, list(active_objects)))
+                                                else:
+                                                    child_outputs.append(self.sam_model.batch_inference(c_img, list(active_objects)))
+                                            except Exception:
+                                                child_outputs.append((None, {}, []))
+
+                                    for (cp, child_global_box), (_, processed_results, text_id) in zip(child_patch_objs, child_outputs):
+                                        child_dets = []
+                                        for tid in text_id:
+                                            obj_idx = (int(tid) - 1) if str(tid).isdigit() else 0
+                                            label_str = active_objects[obj_idx] if 0 <= obj_idx < len(active_objects) else str(tid)
+                                            res = processed_results.get(tid, {}) if isinstance(processed_results, dict) else {}
+                                            boxes = res.get('boxes', [])
+                                            scores = res.get('scores', [])
+                                            for b, s in zip(boxes, scores):
+                                                s_float = float(s) if not isinstance(s, (list, tuple)) else float(s[0])
+                                                b_clean = [int(round(float(c))) for c in (b.tolist() if hasattr(b, 'tolist') else b)]
+                                                if s_float >= tau_det:
+                                                    child_dets.append({
+                                                        "label": label_str,
+                                                        "score": round(s_float, 3),
+                                                        "local_box": b_clean,
+                                                        "global_box": [b_clean[0] + child_global_box[0], b_clean[1] + child_global_box[1],
+                                                                       b_clean[2] + child_global_box[0], b_clean[3] + child_global_box[1]]
+                                                    })
+                                        if child_dets:
+                                            best_det_score = max(d["score"] for d in child_dets)
+                                            child_bp = BoundedPatch(
+                                                img_idx=img_idx,
+                                                box=child_global_box,
+                                                feature_vector=cp.feature_vector,
+                                                entropy=cp.entropy,
+                                                confidence_score=float(best_det_score), # Unboosted continuous score in [0.0, 1.0]
+                                                siglip_score=cp.siglip_score,
+                                                parent_id=parent_box,
+                                                level=getattr(cp, "level", 1) + 1
+                                            )
+                                            setattr(child_bp, "is_fine_grain", True)
+                                            setattr(child_bp, "is_recursive_child", True)
+                                            setattr(child_bp, "child_detections", child_dets)
+                                            surviving_children.append(child_bp)
+                                elif child_patch_objs:
+                                    # Fallback when SAM3 is not loaded (e.g. testing)
+                                    for cp, child_global_box in child_patch_objs:
                                         child_bp = BoundedPatch(
                                             img_idx=img_idx,
                                             box=child_global_box,
                                             feature_vector=cp.feature_vector,
                                             entropy=cp.entropy,
-                                            confidence_score=float(best_det_score), # Unboosted continuous score in [0.0, 1.0]
+                                            confidence_score=float(min(1.0, g.get("vlm_latent_score") or 0.5)),
                                             siglip_score=cp.siglip_score,
                                             parent_id=parent_box,
                                             level=getattr(cp, "level", 1) + 1
                                         )
                                         setattr(child_bp, "is_fine_grain", True)
                                         setattr(child_bp, "is_recursive_child", True)
-                                        setattr(child_bp, "child_detections", child_dets)
                                         surviving_children.append(child_bp)
-                            elif child_patch_objs:
-                                # Fallback when SAM3 is not loaded (e.g. testing)
-                                for cp, child_global_box in child_patch_objs:
-                                    child_bp = BoundedPatch(
-                                        img_idx=img_idx,
-                                        box=child_global_box,
-                                        feature_vector=cp.feature_vector,
-                                        entropy=cp.entropy,
-                                        confidence_score=float(min(1.0, g.get("vlm_latent_score") or 0.5)),
-                                        siglip_score=cp.siglip_score,
-                                        parent_id=parent_box,
-                                        level=getattr(cp, "level", 1) + 1
-                                    )
-                                    setattr(child_bp, "is_fine_grain", True)
-                                    setattr(child_bp, "is_recursive_child", True)
-                                    surviving_children.append(child_bp)
 
-                            if surviving_children:
-                                repartitioned_patches.extend(surviving_children)
-                            elif is_verbose:
-                                print(f"[Stage 4 -> Stage 3 Feedback] Re-partitioned parent {parent_box}: 0 detections above tau_det={tau_det}. Parent and children permanently pruned.")
+                                if surviving_children:
+                                    repartitioned_patches.extend(surviving_children)
+                                elif is_verbose:
+                                    print(f"[Stage 4 -> Stage 3 Feedback] Re-partitioned parent {parent_box}: 0 detections above tau_det={tau_det}. Parent and children permanently pruned.")
 
-                if repartitioned_patches:
-                    remaining_patches = [
-                        p for p in remaining_patches
-                        if (p.img_idx, tuple(int(round(float(c))) for c in p.box)) not in replaced_parent_boxes
-                    ] + repartitioned_patches
-                    if not is_quiet:
-                        print(f"[Stage 4 -> Stage 3 Feedback] Re-partitioned {len(replaced_parent_boxes)} high-latent patches into {len(repartitioned_patches)} verified fine sub-patches at 100% native resolution.")
-                elif replaced_parent_boxes:
-                    remaining_patches = [
-                        p for p in remaining_patches
-                        if (p.img_idx, tuple(int(round(float(c))) for c in p.box)) not in replaced_parent_boxes
-                    ]
-                    if not is_quiet:
-                        print(f"[Stage 4 -> Stage 3 Feedback] Pruned {len(replaced_parent_boxes)} high-latent parents with 0 confirmed child detections.")
+                    if repartitioned_patches:
+                        remaining_patches = [
+                            p for p in remaining_patches
+                            if (p.img_idx, tuple(int(round(float(c))) for c in p.box)) not in replaced_parent_boxes
+                        ] + repartitioned_patches
+                        if not is_quiet:
+                            print(f"[Stage 4 -> Stage 3 Feedback] Re-partitioned {len(replaced_parent_boxes)} high-latent patches into {len(repartitioned_patches)} verified fine sub-patches at 100% native resolution.")
+                    elif replaced_parent_boxes:
+                        remaining_patches = [
+                            p for p in remaining_patches
+                            if (p.img_idx, tuple(int(round(float(c))) for c in p.box)) not in replaced_parent_boxes
+                        ]
+                        if not is_quiet:
+                            print(f"[Stage 4 -> Stage 3 Feedback] Pruned {len(replaced_parent_boxes)} high-latent parents with 0 confirmed child detections.")
+            if mem_repart.stats:
+                telemetry["vram_profiling"]["stage4_latent_repartition"] = mem_repart.stats
 
         # ---------------------------------------------------------------------
         # Stage 5: Resolution-Aware Screening & Spatial Optimization
@@ -630,16 +655,19 @@ class MultiSourceSearchEngine:
         t0 = time.perf_counter()
         question_type = getattr(active_objects, "question_type", None)
         is_relational = getattr(active_objects, "is_relational", None)
-        unified_pool = run_resolution_screening(
-            remaining_patches=remaining_patches,
-            candidate_images=candidate_images,
-            active_objects=active_objects,
-            siglip_model=self.siglip_model,
-            config=sub_config,
-            question=question,
-            is_relational=is_relational,
-            zoom_model=self.zoom_model
-        )
+        with StageVRAMTracker("stage5_screening", enabled=enable_vram, device=prof_device, verbose=(is_verbose and not is_summary)) as mem_s5:
+            unified_pool = run_resolution_screening(
+                remaining_patches=remaining_patches,
+                candidate_images=candidate_images,
+                active_objects=active_objects,
+                siglip_model=self.siglip_model,
+                config=sub_config,
+                question=question,
+                is_relational=is_relational,
+                zoom_model=self.zoom_model
+            )
+        if mem_s5.stats:
+            telemetry["vram_profiling"]["stage5_screening"] = mem_s5.stats
         lat_s5 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage5_screening"] = lat_s5
         telemetry["num_unified_crops"] = len(unified_pool)
@@ -674,14 +702,17 @@ class MultiSourceSearchEngine:
         # Stage 6: Foveated VLM Reading with 1.25x Padding & Deduplication
         # ---------------------------------------------------------------------
         t0 = time.perf_counter()
-        final_result: FinalSearchResult = run_foveated_vlm_reading(
-            unified_pool=unified_pool,
-            candidate_images=candidate_images,
-            question=reading_question,
-            zoom_model=self.zoom_model,
-            config=sub_config,
-            question_type=question_type
-        )
+        with StageVRAMTracker("stage6_foveated_reading", enabled=enable_vram, device=prof_device, verbose=(is_verbose and not is_summary)) as mem_s6:
+            final_result: FinalSearchResult = run_foveated_vlm_reading(
+                unified_pool=unified_pool,
+                candidate_images=candidate_images,
+                question=reading_question,
+                zoom_model=self.zoom_model,
+                config=sub_config,
+                question_type=question_type
+            )
+        if mem_s6.stats:
+            telemetry["vram_profiling"]["stage6_foveated_reading"] = mem_s6.stats
         lat_s6 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage6_reading"] = lat_s6
         telemetry["stage6_crops"] = getattr(final_result, "crop_records", [])
@@ -786,7 +817,26 @@ class MultiSourceSearchEngine:
 
         if not is_quiet:
             print(f"[Stage 6: Foveated Reading] Decision: Read {len(unified_pool)} candidate crops -> Harvested {len(final_answers_out)} answer(s): {final_answers_out} (Latency: {lat_s6}s)")
-            print(f"[MSSearch Final Decision] Primary Answer: '{primary_answer}' | Primary Image: {primary_evidence_img_idx} | Evidence Images: {harvested_evidence_images} | Route: {telemetry.get('route')} | Latency: {telemetry.get('total_latency_sec')}s\n")
+            print(f"[MSSearch Final Decision] Primary Answer: '{primary_answer}' | Primary Image: {primary_evidence_img_idx} | Evidence Images: {harvested_evidence_images} | Route: {telemetry.get('route')} | Latency: {telemetry.get('total_latency_sec')}s")
+
+        if enable_vram and torch.cuda.is_available():
+            try:
+                torch.cuda.synchronize(prof_device)
+                ov_alloc = round(torch.cuda.max_memory_allocated(prof_device) / (1024 ** 2), 1)
+                ov_res = round(torch.cuda.max_memory_reserved(prof_device) / (1024 ** 2), 1)
+                telemetry["vram_profiling"]["overall_peak_allocated_mb"] = ov_alloc
+                telemetry["vram_profiling"]["overall_peak_reserved_mb"] = ov_res
+                if not is_quiet:
+                    stage_peaks = [
+                        f"{st}: {d.get('peak_allocated_mb', 0):,.0f}MB (Δ{d.get('delta_allocated_mb', 0):+,.0f}MB)"
+                        for st, d in telemetry["vram_profiling"].items()
+                        if isinstance(d, dict) and "peak_allocated_mb" in d
+                    ]
+                    print(f"[MSSearch VRAM Summary] Overall Peak Allocated: {ov_alloc:,.1f} MB | Peak Reserved: {ov_res:,.1f} MB | Stages: [{', '.join(stage_peaks)}]\n")
+            except Exception:
+                pass
+        elif not is_quiet:
+            print("")
 
         return {
             "answers": final_answers_out,
