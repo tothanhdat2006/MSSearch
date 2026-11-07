@@ -67,7 +67,15 @@ class SigLIPScorer:
         torch_dtype: torch.dtype = torch.float16,
         **kwargs,
     ):
-        self.model_name = kwargs.get("model_path", model_name)
+        model_candidate = kwargs.get("model_path", model_name)
+        if not os.path.isdir(str(model_candidate)):
+            model_dir = os.environ.get("MODEL_DIR", "")
+            base = os.path.basename(str(model_candidate))
+            if model_dir and os.path.isdir(os.path.join(model_dir, base)):
+                model_candidate = os.path.join(model_dir, base)
+            elif os.path.isdir(base):
+                model_candidate = os.path.abspath(base)
+        self.model_name = model_candidate
         self.device = device if torch.cuda.is_available() else "cpu"
         self.dtype = torch_dtype if torch.cuda.is_available() else torch.float32
         self.model = None
