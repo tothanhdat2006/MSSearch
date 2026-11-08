@@ -8,6 +8,12 @@ import argparse
 from datetime import datetime
 import torch
 
+_CUR_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_CUR_DIR, "../.."))
+for _p in [_REPO_ROOT, _CUR_DIR]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 try:
     from eval_dataset import resolve_image, load_and_slice_dataset
     from eval_metrics import compute_stage_ret_rej_tokens
@@ -29,6 +35,8 @@ def load_env_paths():
                     if line and not line.startswith("#") and "=" in line:
                         k, v = line.split("=", 1)
                         k, v = k.strip(), v.strip().strip("'\"")
+                        if "${SAM3_PATH}" in v and "SAM3_PATH" in os.environ:
+                            v = v.replace("${SAM3_PATH}", os.environ["SAM3_PATH"])
                         if "${MODEL_DIR}" in v and "MODEL_DIR" in os.environ:
                             v = v.replace("${MODEL_DIR}", os.environ["MODEL_DIR"])
                         if k not in os.environ and v:

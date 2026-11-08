@@ -55,6 +55,11 @@ def parse_question_to_active_objects(
             "[Stage 1 Error] zoom_model (Qwen2.5-VL) is None. Question Parsing requires a loaded VLM model for Strategy 1/2 semantic question parsing; fallback execution is strictly disabled."
         )
 
+    if nlp_model is None:
+        raise RuntimeError(
+            "[Stage 1 Error] nlp_model (spaCy) is None. Question Parsing requires a valid loaded spaCy pipeline; continuing without spaCy is strictly disabled."
+        )
+
     parsed_question_type = "general"
     parsed_is_relational = False
     parsed_target_entity = None

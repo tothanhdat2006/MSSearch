@@ -77,14 +77,16 @@ def load_ablation_engines(
     # 4. Load spaCy NLP Pipeline
     nlp_parser = None
     if component not in ("qwen",):
-        print(f"[Ablation Setup] Loading spaCy NLP pipeline...")
+        print(f"[Ablation Setup] Loading spaCy NLP pipeline from '{nlp_model}'...")
+        if spacy is None:
+            raise RuntimeError("[Ablation Setup Error] spaCy package is not installed.")
         try:
             nlp_parser = spacy.load(nlp_model)
-        except Exception:
-            try:
-                nlp_parser = spacy.load("en_core_web_sm")
-            except Exception:
-                nlp_parser = None
+        except Exception as e:
+            raise RuntimeError(
+                f"[Ablation Setup Error] Failed to load spaCy model from NLP_MODEL='{nlp_model}': {e}. "
+                "NLP_MODEL must point to a valid spaCy model folder. Continuing without spaCy is strictly disabled."
+            )
 
     # 5. Build Configuration
     cfg_file = config_path or os.path.join(os.path.dirname(__file__), "..", "config_default.json")

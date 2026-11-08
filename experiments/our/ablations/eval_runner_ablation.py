@@ -67,7 +67,7 @@ def parse_args():
     # Detector & Scorer Backbones
     parser.add_argument("--detector", type=str, default=os.environ.get("DETECTOR_TYPE", "sam3"),
                         choices=["sam3", "grounding_dino", "florence2", "dinov3"])
-    parser.add_argument("--detector_path", type=str, default=os.environ.get("DETECTOR_PATH", None))
+    parser.add_argument("--detector_path", type=str, default=os.environ.get("DETECTOR_PATH", os.environ.get("SAM3_PATH", None)))
     parser.add_argument("--scorer", type=str, default=os.environ.get("SCORER_TYPE", "siglip"),
                         choices=["siglip", "siglip2_384", "siglip2_512", "clip_b32", "clip_l14", "eva02_l14"])
     parser.add_argument("--scorer_path", type=str, default=os.environ.get("SCORER_PATH", None))
@@ -75,7 +75,7 @@ def parse_args():
 
     # Base Pipeline Settings
     parser.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen3-VL-8B-Instruct"))
-    parser.add_argument("--nlp_model", type=str, default=os.environ.get("NLP_MODEL", "en_core_web_sm"))
+    parser.add_argument("--nlp_model", type=str, default=os.environ.get("NLP_MODEL", "/data/shared/cvpr/dat/models/spacy/en_core_web_sm-3.8.0"))
     parser.add_argument("--dataset_path", type=str, default=os.environ.get("DATASET_PATH", "/data/STASHBench/annotations_part1234_merged.json"))
     parser.add_argument("--image_dir", type=str, default=os.environ.get("IMAGE_DIR", "/data/STASHBench/pool"))
     parser.add_argument("--output_dir", type=str, default=os.environ.get("OUTPUT_DIR", "./results_ablation"))

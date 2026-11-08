@@ -71,24 +71,14 @@ def load_and_slice_dataset(
     with open(dataset_path, "r", encoding="utf-8") as f:
         raw_data = json.load(f)
 
-    gallery_data = {}
-    gallery_cands = [
-        gallery_order_path,
-        os.path.join(os.path.dirname(dataset_path), "gallery_order_seed42.json"),
-        os.path.join(os.path.dirname(__file__), "../gallery_order_seed42.json"),
-        os.path.join(os.path.dirname(__file__), "gallery_order_seed42.json"),
-        "/data/STASHBench/gallery_order_seed42.json",
-        "/data/gallery_order_seed42.json",
-        "/root/experiments/gallery_order_seed42.json",
-    ]
-    for gp in gallery_cands:
-        if gp and os.path.isfile(gp):
-            try:
-                with open(gp, "r", encoding="utf-8") as gf:
-                    gallery_data = json.load(gf).get("samples", {})
-                break
-            except Exception:
-                pass
+    expected_gallery = gallery_order_path or os.path.join(os.path.dirname(os.path.abspath(dataset_path)), "gallery_order_seed42.json")
+    if not os.path.isfile(expected_gallery):
+        raise FileNotFoundError(
+            f"[FATAL ERROR] 'gallery_order_seed42.json' must be in the same folder as the annotations file: '{expected_gallery}'. "
+            "Without it, the candidates are silently ordered by image id."
+        )
+    with open(expected_gallery, "r", encoding="utf-8") as gf:
+        gallery_data = json.load(gf).get("samples", {})
 
     all_samples = raw_data.get("samples", []) if isinstance(raw_data, dict) else raw_data
 
@@ -139,7 +129,10 @@ def load_and_slice_dataset(
                         cand_imgs = [meta_map.get(str(iid), {"image_id": str(iid)}) for iid in g_entry[k]["image_ids"]]
                         gt_idx = g_entry[k].get("gt_index")
                     else:
-                        cand_imgs = sorted(cand_pool, key=lambda x: str(x.get("image_id", "")))
+                        raise RuntimeError(
+                            f"[FATAL ERROR] Sample '{s.get('sample_id', s_idx)}' pool '{k}' is missing from "
+                            f"{expected_gallery}. Without it, candidates are silently ordered by image id."
+                        )
                     pool_info = {"images": cand_imgs, "N": len(cand_imgs), "gt_image": gt_img, "gt_index": gt_idx}
                     eval_tasks.append((s_idx, s, p_name, pool_info))
             elif "pools" in s:

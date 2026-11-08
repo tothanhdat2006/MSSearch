@@ -15,7 +15,8 @@ experiments/our/
 ├── eval_metrics.py           # Dual metrics (Set-based vs Strict Primary attribution)
 ├── eval_models.py            # Engine loader (VLM, SAM3, SigLIP, spaCy) & pipeline caller
 ├── eval_runner.py            # CLI evaluation runner with per-sample atomic flush
-├── requirements.txt          # Python dependencies
+├── mssearch_requirements_tf4.57.6.txt # Dependencies for LLaVA-OV-7B and InternVL3-8B (transformers==4.57.6)
+├── mssearch_requirements_tf5.6.2.txt  # Dependencies for Qwen3-VL-8B (transformers==5.6.2)
 ├── README.md                 # Evaluation suite documentation (this file)
 ├── notebook/                 # Google Colab notebooks (12 model x pool configurations)
 │   ├── run_our_colab_qwen2.5_vl_7b_n1.ipynb
@@ -62,6 +63,7 @@ export VENV_PATH=".../.venv/bin/activate"
 # Model & Perceptual Checkpoints
 export MODEL_DIR=".../models"
 export SAM3_PATH=".../models/sam3/sam3.pt"
+export DETECTOR_PATH="${SAM3_PATH}"
 export SIGLIP_NAME="google/siglip2-so400m-patch16-512"
 export NLP_MODEL=".../models/spacy/en_core_web_sm-3.8.0"
 
@@ -77,10 +79,10 @@ export OUTPUT_BASE_DIR=""
 
 ## 3. Core Python Components
 
-- **`eval_dataset.py`** (<250 lines): Loads STASHBench annotations, slices dataset ranges (`--start_idx`, `--end_idx`, `--max_samples`), and resolves pool images deterministically using `gallery_order_seed42.json`. Enforces `ImageOps.exif_transpose` and `MAX_IMAGE_PIXELS = None`.
+- **`eval_dataset.py`** (<250 lines): Loads STASHBench annotations, slices dataset ranges (`--start_idx`, `--end_idx`, `--max_samples`), and resolves pool images deterministically using `gallery_order_seed42.json`. Requires `gallery_order_seed42.json` to be located in the same folder as the annotations file; without it, an explicit error is raised so candidates are not silently ordered by image id. Enforces `ImageOps.exif_transpose` and `MAX_IMAGE_PIXELS = None`.
 - **`eval_metrics.py`** (<250 lines): Computes text answer metrics (accuracy, token precision, recall, F1) and tracks Stage 1-6 telemetry: target retention, background rejection, visual token budget, and crop sizes.
-- **`eval_models.py`** (<250 lines): Loads perception engines (`ModelQwenVL`, `ModelGlobalLocal`, `ModelInternvl`, `sam3_inference`, `SigLIPScorer`, spaCy). Fails loudly without fallback masking if dependencies or weights are missing.
-- **`eval_runner.py`** (<250 lines): Orchestrates benchmark evaluation over candidate images, auto-saves timestamped config snapshots, and atomically flushes results line-by-line (`flush()` + `os.fsync()`) to prevent data loss.
+- **`eval_models.py`** (<250 lines): Loads perception engines (`ModelQwenVL`, `ModelGlobalLocal`, `ModelInternvl`, `sam3_inference`, `SigLIPScorer`, spaCy). Fails loudly if dependencies or weights are missing (including `NLP_MODEL`, which must point to the spaCy folder; runners do not continue without spaCy).
+- **`eval_runner.py`** (<250 lines): Orchestrates benchmark evaluation over candidate images, auto-saves timestamped config snapshots, and atomically flushes results line-by-line (`flush()` + `os.fsync()`) to prevent data loss. Requires `PYTHONPATH` set to the repository root.
 - **`config_default.json`**: Master configuration setting `entropy_threshold: 0.35`, `max_patches_per_image: 64`, `max_partition_depth: 4`, and clean foveated prompt reading (`<image>\n<question>`).
 
 ---

@@ -44,14 +44,14 @@ def load_our_engines(
     )
 
     # 4. Load spaCy
-    print(f"[Engine Setup] Loading spaCy NLP pipeline...")
+    print(f"[Engine Setup] Loading spaCy NLP pipeline from '{nlp_model}'...")
     try:
         nlp_parser = spacy.load(nlp_model)
-    except Exception:
-        try:
-            nlp_parser = spacy.load("en_core_web_sm")
-        except Exception:
-            nlp_parser = None
+    except Exception as e:
+        raise RuntimeError(
+            f"[Engine Setup Error] Failed to load spaCy model from NLP_MODEL='{nlp_model}': {e}. "
+            "NLP_MODEL must point to a valid spaCy model folder. Continuing without spaCy is strictly disabled."
+        )
 
     # 5. Build MSSearchConfig
     cfg_file = config_path or os.path.join(os.path.dirname(__file__), "config_default.json")

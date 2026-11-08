@@ -45,10 +45,12 @@ Edit this file once with your cluster/workstation storage paths:
 # 1. Python Environment Activation
 export CONDA_ENV_NAME="hrsearch"
 export VENV_PATH=".../.venv/bin/activate"
+export PYTHONPATH="/path/to/MSSearch:${PYTHONPATH}"
 
 # 2. Checkpoints Root & Auxiliary Models
 export MODEL_DIR=".../models"
 export SAM3_PATH=".../models/sam3/sam3.pt"
+export DETECTOR_PATH="${SAM3_PATH}"
 export SIGLIP_NAME="google/siglip2-so400m-patch16-512"
 export NLP_MODEL=".../models/spacy/en_core_web_sm-3.8.0"
 
@@ -61,6 +63,15 @@ export OUTPUT_BASE_DIR=""
 ```
 
 *(If `/data/shared/...` paths do not exist, scripts automatically fall back to repo-relative paths: `<repo>/models/` and `<repo>/data/STASHBench/`)*.
+
+> **Dependencies by VLM Architecture**:
+> - **LLaVA-OV-7B & InternVL3-8B**: Install dependencies from `mssearch_requirements_tf4.57.6.txt` (`transformers==4.57.6`).
+> - **Qwen3-VL-8B**: Install dependencies from `mssearch_requirements_tf5.6.2.txt` (`transformers==5.6.2`).
+>
+> **Prerequisites & Strict Invariants**:
+> - **Gallery Order File**: `gallery_order_seed42.json` **must** reside in the same folder as the annotations JSON (`DATASET_PATH`). Without it, `eval_dataset.py` raises an error to prevent silent sorting by image id.
+> - **spaCy NLP Model**: `NLP_MODEL` must point to a valid spaCy directory (e.g. `en_core_web_sm-3.8.0`). If missing or invalid, evaluation raises an error and terminates immediately.
+> - **Repo Root in PYTHONPATH**: Ensure `PYTHONPATH` points to the repository root before invoking `eval_runner.py`.
 
 ---
 
