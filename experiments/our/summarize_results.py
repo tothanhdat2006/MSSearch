@@ -96,13 +96,56 @@ def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     primary_correct = sum(1 for r in records if r.get("is_primary_image_correct") is True)
     image_correct = sum(1 for r in records if r.get("is_image_correct") is True)
 
-    # Relaxed QA matching (prediction contains any ground truth string)
-    qa_matches = 0
+    # Answer Evaluation (Exact Match, Normalized Substring Match, Bold Match, Token Overlap)
+    raw_em_cnt = 0
+    norm_hit_cnt = 0
+    bold_em_cnt = 0
+    joint_prim_cnt = 0
+    joint_pool_cnt = 0
+    token_rec_sum = 0.0
+    token_f1_sum = 0.0
+
     for r in records:
-        pred_norm = normalize_answer(r.get("prediction", ""))
+        pred_raw = str(r.get("prediction", ""))
+        pred_norm = normalize_answer(pred_raw)
         gts = [normalize_answer(gt) for gt in r.get("ground_truth_list", []) if gt]
-        if any(gt in pred_norm for gt in gts if gt):
-            qa_matches += 1
+
+        is_prim = bool(r.get("is_primary_image_correct") is True)
+        is_pool = bool(r.get("is_image_correct") is True)
+
+        # 1. Raw exact match
+        em = any(gt == pred_norm for gt in gts)
+        if em:
+            raw_em_cnt += 1
+
+        # 2. Normalized match (canonical STASHBench hit)
+        hit = any(gt in pred_norm or (len(gt) > 4 and pred_norm in gt) for gt in gts)
+        if hit:
+            norm_hit_cnt += 1
+            if is_prim:
+                joint_prim_cnt += 1
+            if is_pool:
+                joint_pool_cnt += 1
+
+        # 3. Bold markdown tokens
+        bolds = [normalize_answer(b) for b in re.findall(r"\*\*([^\*]+)\*\*", pred_raw)]
+        if any(any(gt == b for b in bolds) for gt in gts):
+            bold_em_cnt += 1
+
+        # 4. Token overlap
+        p_tokens = set(pred_norm.split())
+        best_r, best_f = 0.0, 0.0
+        for gt in gts:
+            g_tokens = set(gt.split())
+            if p_tokens and g_tokens:
+                inter = len(p_tokens.intersection(g_tokens))
+                prec = inter / len(p_tokens)
+                rec = inter / len(g_tokens)
+                f1 = (2 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0.0
+                best_r = max(best_r, rec)
+                best_f = max(best_f, f1)
+        token_rec_sum += best_r
+        token_f1_sum += best_f
 
     # Stage 4 Retrieval & Ranking
     r1_list = [r.get("stage4_r1") for r in records if r.get("stage4_r1") is not None]
@@ -187,11 +230,33 @@ def analyze_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             "total": total_samples,
             "rate": (image_correct / total_samples * 100) if total_samples else 0.0
         },
-        "qa_relaxed_acc": {
-            "correct": qa_matches,
+        "qa_exact_match": {
+            "correct": raw_em_cnt,
             "total": total_samples,
-            "rate": (qa_matches / total_samples * 100) if total_samples else 0.0
+            "rate": (raw_em_cnt / total_samples * 100) if total_samples else 0.0
         },
+        "qa_normalized_match": {
+            "correct": norm_hit_cnt,
+            "total": total_samples,
+            "rate": (norm_hit_cnt / total_samples * 100) if total_samples else 0.0
+        },
+        "qa_bold_exact_match": {
+            "correct": bold_em_cnt,
+            "total": total_samples,
+            "rate": (bold_em_cnt / total_samples * 100) if total_samples else 0.0
+        },
+        "joint_primary_acc": {
+            "correct": joint_prim_cnt,
+            "total": total_samples,
+            "rate": (joint_prim_cnt / total_samples * 100) if total_samples else 0.0
+        },
+        "joint_pool_acc": {
+            "correct": joint_pool_cnt,
+            "total": total_samples,
+            "rate": (joint_pool_cnt / total_samples * 100) if total_samples else 0.0
+        },
+        "token_recall": (token_rec_sum / total_samples * 100) if total_samples else 0.0,
+        "token_f1": (token_f1_sum / total_samples * 100) if total_samples else 0.0,
         "stage4_retrieval": {
             "r1": calc_stats(r1_list),
             "mrr": calc_stats(mrr_list),
@@ -359,8 +424,16 @@ def format_text_report(summary: Dict[str, Any], file_path: str, annot_summary: O
     lines.append(f"  • Primary Evidence Image Acc (Top-1)  : {p_acc['rate']:5.2f}% ({p_acc['correct']}/{p_acc['total']})")
     i_acc = summary["image_pool_acc"]
     lines.append(f"  • Image Pool Hit Rate (Recall@K)      : {i_acc['rate']:5.2f}% ({i_acc['correct']}/{i_acc['total']})")
-    qa_acc = summary["qa_relaxed_acc"]
-    lines.append(f"  • Answer Exact / Containment Match    : {qa_acc['rate']:5.2f}% ({qa_acc['correct']}/{qa_acc['total']})")
+
+    em_acc = summary["qa_exact_match"]
+    lines.append(f"  • Raw Full-String Exact Match (EM)    : {em_acc['rate']:5.2f}% ({em_acc['correct']}/{em_acc['total']})")
+    nm_acc = summary["qa_normalized_match"]
+    lines.append(f"  • Normalized Match (STASHBench Hit)   : {nm_acc['rate']:5.2f}% ({nm_acc['correct']}/{nm_acc['total']})")
+    bm_acc = summary["qa_bold_exact_match"]
+    lines.append(f"  • Extracted Bold Token Exact Match    : {bm_acc['rate']:5.2f}% ({bm_acc['correct']}/{bm_acc['total']})")
+    jp_acc = summary["joint_primary_acc"]
+    lines.append(f"  • Joint (Primary Image + Answer)      : {jp_acc['rate']:5.2f}% ({jp_acc['correct']}/{jp_acc['total']})")
+    lines.append(f"  • Token Overlap (SQuAD F1 / Recall)   : Recall={summary['token_recall']:.2f}% | F1={summary['token_f1']:.2f}%")
 
     s4_ret = summary["stage4_retrieval"]
     lines.append(f"  • Stage 4 Image Recall@1 (R@1)        : {s4_ret['r1']['mean']*100:5.2f}% (MRR: {s4_ret['mrr']['mean']:.4f})")
@@ -476,8 +549,17 @@ def format_markdown_report(summary: Dict[str, Any], file_path: str, annot_summar
     md.append(f"| **Primary Evidence Image Top-1 Acc** | **{p_acc['rate']:.2f}%** | {p_acc['correct']} / {p_acc['total']} |")
     i_acc = summary["image_pool_acc"]
     md.append(f"| **Image Pool Recall@K** | **{i_acc['rate']:.2f}%** | {i_acc['correct']} / {i_acc['total']} |")
-    qa_acc = summary["qa_relaxed_acc"]
-    md.append(f"| **Answer Match (Containment)** | **{qa_acc['rate']:.2f}%** | {qa_acc['correct']} / {qa_acc['total']} |")
+
+    em_acc = summary["qa_exact_match"]
+    md.append(f"| **Exact Match (EM)** | **{em_acc['rate']:.2f}%** | {em_acc['correct']} / {em_acc['total']} |")
+    nm_acc = summary["qa_normalized_match"]
+    md.append(f"| **Normalized Match (STASHBench Hit)** | **{nm_acc['rate']:.2f}%** | {nm_acc['correct']} / {nm_acc['total']} |")
+    bm_acc = summary["qa_bold_exact_match"]
+    md.append(f"| **Extracted Bold Token Exact Match** | **{bm_acc['rate']:.2f}%** | {bm_acc['correct']} / {bm_acc['total']} |")
+    jp_acc = summary["joint_primary_acc"]
+    md.append(f"| **Joint (Primary Image + Answer)** | **{jp_acc['rate']:.2f}%** | {jp_acc['correct']} / {jp_acc['total']} |")
+    md.append(f"| **Token Overlap (SQuAD-style)** | Recall: **{summary['token_recall']:.2f}%** | F1: **{summary['token_f1']:.2f}%** |")
+
     s4_ret = summary["stage4_retrieval"]
     md.append(f"| **Stage 4 Image Recall@1 (R@1)** | **{s4_ret['r1']['mean']*100:.2f}%** | MRR: {s4_ret['mrr']['mean']:.4f} |")
     md.append(f"| **Distractor Images Pruned (Stage 4)** | Avg **{s4_ret['distractor_imgs_pruned']['mean']:.2f}** imgs | Max: {s4_ret['distractor_imgs_pruned']['max']:.0f} |")
