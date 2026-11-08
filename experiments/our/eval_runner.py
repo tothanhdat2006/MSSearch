@@ -138,9 +138,24 @@ def main():
 
             images = [resolve_image(m, args.image_dir) for m in candidate_meta]
 
+            gpus = range(torch.cuda.device_count() if torch.cuda.is_initialized() else 0)
+            for d in gpus:
+                torch.cuda.reset_peak_memory_stats(d)
+            ooms_before = sum(torch.cuda.memory_stats(d).get("num_ooms", 0) for d in gpus)
+
             t0 = time.perf_counter()
             resp = run_our_pipeline(engines, images, sample, s_idx)
             latency = round(time.perf_counter() - t0, 3)
+
+            # stages catch exceptions and keep going, so OOMs are read from the allocator
+            cuda_stats = {}
+            if gpus:
+                cuda_stats = {
+                    "cuda_ooms": sum(torch.cuda.memory_stats(d).get("num_ooms", 0) for d in gpus) - ooms_before,
+                    "peak_mem_gib": round(max(torch.cuda.max_memory_allocated(d) for d in gpus) / 2**30, 2),
+                }
+                if cuda_stats["cuda_ooms"]:
+                    print(f"[OOM Count] sample {sample_id}: {cuda_stats['cuda_ooms']} OOM(s) caught inside the pipeline")
 
             pred_text = resp.get("primary_answer", "")
             telemetry = resp.get("telemetry", {})
@@ -184,6 +199,7 @@ def main():
                 "stage4_r1": stage_stats["stage4_r1"], "stage4_mrr": stage_stats["stage4_mrr"],
                 "s6_visual_tokens": stage_stats["s6_visual_tokens"],
                 "latency_sec": latency,
+                **cuda_stats,
             }
 
             out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
