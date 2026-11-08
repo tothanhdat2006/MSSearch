@@ -48,6 +48,8 @@ def load_env_paths():
                         if m:
                             var_name, default_val = m.groups()
                             v = os.environ.get(var_name, default_val)
+                        if "${SAM3_PATH}" in v and "SAM3_PATH" in os.environ:
+                            v = v.replace("${SAM3_PATH}", os.environ["SAM3_PATH"])
                         if "${MODEL_DIR}" in v and "MODEL_DIR" in os.environ:
                             v = v.replace("${MODEL_DIR}", os.environ["MODEL_DIR"])
                         if k not in os.environ and v:

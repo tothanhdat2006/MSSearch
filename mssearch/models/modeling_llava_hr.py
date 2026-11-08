@@ -67,7 +67,7 @@ class ModelLlavaHR:
         self,
         image_pil: Image.Image,
         question: str,
-        max_new_tokens: int = 128
+        max_new_tokens: int = 512
     ) -> str:
         """Run single-image forward inference on LLaVA-HR."""
         prompt = self.get_prompt_from_qs(question)

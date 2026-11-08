@@ -13,7 +13,7 @@ Ablation evaluation framework for dissecting the perceptual backbones and decisi
 Controls tool fast path (Stage 2) and candidate crop open-vocabulary object gating (Stage 4, Stage 5 recursive zoom):
 
 > [!NOTE]
-> The ablation runner reads the detection backbone path from `DETECTOR_PATH` (e.g. `export DETECTOR_PATH="${SAM3_PATH}"` in `experiments/our/env_paths.sh`), not `SAM3_PATH`. Ensure `DETECTOR_PATH` is exported before launching.
+> For the default SAM3 detector, the ablation runner automatically falls back to `SAM3_PATH` from `env_paths.sh` when `DETECTOR_PATH` is unset. Alternative backbones (Grounding DINO, Florence-2, DINOv3) can be specified via `DETECTOR_PATH` or `--detector_path`.
 
 | Key | Model Identifier / Class | Default Source / Weight Path | Role |
 | :--- | :--- | :--- | :--- |
@@ -96,7 +96,7 @@ MSSearch/experiments/our/ablations/
   - `mssearch_requirements_tf5.6.2.txt`: For `Qwen3-VL-8B` (`transformers==5.6.2`).
 - **Gallery Order File**: `gallery_order_seed42.json` must be in the same folder as the annotations JSON; without it, `eval_dataset.py` raises `FileNotFoundError` to prevent silent fallback to image id sorting.
 - **spaCy NLP Pipeline**: `NLP_MODEL` must point to the spaCy folder. If invalid or missing, runners raise an error and terminate immediately.
-- **Detector Path**: Ensure `DETECTOR_PATH` is exported in `env_paths.sh` (e.g. `export DETECTOR_PATH="${SAM3_PATH}"`).
+- **Detector Path**: For SAM3, the runner automatically uses `SAM3_PATH` from `env_paths.sh` when `DETECTOR_PATH` is unset. For other detector backbones, specify via `DETECTOR_PATH` or `--detector_path`.
 - **Python Path**: Set `PYTHONPATH` to the repository root before running ablation scripts.
 
 ---

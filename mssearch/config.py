@@ -120,7 +120,7 @@ class MSSearchConfig:
     # -------------------------------------------------------------------------
     vlm_batch_size: int = 4                      # Batched VLM forward passes (4 or 8) across patches and logit probes
     bbox_expansion_factor: float = 1.25          # Independent 25% padding per patch
-    max_vlm_tokens: int = 128                    # Response token budget (allows complete answers without truncation)
+    max_vlm_tokens: int = 512                    # Response token budget (allows complete answers without truncation)
     prompt_directed_final_answer: bool = False   # Deprecated: reading pipeline strictly follows standard <image>\n<question>
     answer_dedup_similarity: float = 0.85        # Semantic deduplication threshold
 

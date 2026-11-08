@@ -116,7 +116,7 @@ def run_foveated_vlm_reading(
     # 2. Batched Generation across Candidate Crops
     vlm_batch_size = max(1, getattr(config, "vlm_batch_size", 4))
     use_batching = hasattr(zoom_model, "batch_generate_response") and vlm_batch_size > 1
-    max_tokens = getattr(config, "max_vlm_tokens", 128)
+    max_tokens = getattr(config, "max_vlm_tokens", 512)
 
     for b_start in range(0, len(prepared_crops), vlm_batch_size):
         chunk = prepared_crops[b_start : b_start + vlm_batch_size]

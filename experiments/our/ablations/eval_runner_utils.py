@@ -112,7 +112,7 @@ def run_qwen_direct_multi_image(
     engine: Any,
     images: List[Image.Image],
     question: str,
-    max_new_tokens: int = 128,
+    max_new_tokens: int = 512,
 ) -> Tuple[str, List[Any], List[int]]:
     """
     Executes multi-image direct baseline forward pass with dynamic pixel budgeting

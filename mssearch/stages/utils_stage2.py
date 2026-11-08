@@ -104,7 +104,7 @@ def render_visual_prompt_bbox(
     return annotated
 
 
-def _query_vlm_response(zoom_model, image_pil: Image.Image, question: str, max_new_tokens: int = 128) -> str:
+def _query_vlm_response(zoom_model, image_pil: Image.Image, question: str, max_new_tokens: int = 512) -> str:
     """Safely invokes VLM response generation across model APIs with resolution safety shield."""
     safe_img = clamp_image_to_safe_resolution(image_pil, max_dim=1024)
     if hasattr(zoom_model, "generate_response"):

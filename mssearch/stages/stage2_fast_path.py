@@ -105,7 +105,7 @@ def run_direct_global_assessment(
         # Check threshold gate
         if conf > threshold:
             prompt = build_direct_answer_prompt(question, config)
-            raw_answer = _query_vlm_response(zoom_model, img_pil, prompt, max_new_tokens=getattr(config, "max_vlm_tokens", 128))
+            raw_answer = _query_vlm_response(zoom_model, img_pil, prompt, max_new_tokens=getattr(config, "max_vlm_tokens", 512))
             final_ans = extract_final_answer(raw_answer)
 
             if is_negative_or_unanswerable(raw_answer) or (final_ans and is_negative_or_unanswerable(final_ans)):

@@ -14,7 +14,7 @@ class MockZoomModel:
     def __init__(self):
         self.recorded_calls = []
 
-    def generate_response(self, image_pil, question, max_new_tokens=128, **kwargs):
+    def generate_response(self, image_pil, question, max_new_tokens=512, **kwargs):
         self.recorded_calls.append({
             "image": image_pil,
             "question": question,

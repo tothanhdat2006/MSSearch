@@ -1,5 +1,6 @@
 {
   "multi_answer_mode": true,
+  "max_vlm_tokens": 512,
   "scale_budgets_by_num_images": true,
   "entropy_threshold": 0.35,
   "min_patch_entropy": 0.35,

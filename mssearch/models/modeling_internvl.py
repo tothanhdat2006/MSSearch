@@ -378,7 +378,7 @@ class ModelInternvl:
         return confidence
 
     @torch.inference_mode()
-    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[Node] = None, return_zoomed_view=False, max_new_tokens: int = 128):
+    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[Node] = None, return_zoomed_view=False, max_new_tokens: int = 512):
         if searched_nodes is None:
             searched_nodes = []
         if isinstance(image_pil, (list, tuple)):
@@ -429,7 +429,7 @@ class ModelInternvl:
         return outputs
 
     @torch.inference_mode()
-    def generate_response(self, image_pil=None, question: str = "", max_new_tokens: int = 128, **kwargs) -> str:
+    def generate_response(self, image_pil=None, question: str = "", max_new_tokens: int = 512, **kwargs) -> str:
         """Direct free-form text response generation interface for single image, crop, or text-only query."""
         if image_pil is None:
             clean_q = question[len("<image>\n"):].strip() if question.startswith("<image>\n") else question.strip()
@@ -504,7 +504,7 @@ class ModelInternvl:
         self,
         image_list: List[Image.Image],
         questions: Union[str, List[str]],
-        max_new_tokens: int = 128,
+        max_new_tokens: int = 512,
         batch_size: int = 4,
         **kwargs
     ) -> List[str]:

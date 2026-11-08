@@ -414,7 +414,7 @@ class ModelQwenVL:
         return confidence
 
     @torch.inference_mode()
-    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[NodeA], return_zoomed_view=False, max_new_tokens: int = 128):
+    def free_form_using_nodes(self, image_pil, question, searched_nodes: List[NodeA], return_zoomed_view=False, max_new_tokens: int = 512):
         if isinstance(image_pil, (list, tuple)):
             image_input = list(image_pil)
             image_list = image_input
@@ -465,7 +465,7 @@ class ModelQwenVL:
         return outputs
 
     @torch.inference_mode()
-    def generate_response(self, image_pil: Union[Image.Image, List[Image.Image]], question: str, max_new_tokens: int = 128, **kwargs) -> str:
+    def generate_response(self, image_pil: Union[Image.Image, List[Image.Image]], question: str, max_new_tokens: int = 512, **kwargs) -> str:
         """Direct free-form text response generation interface for single image or dual-scale [global, crop] list."""
         return self.free_form_using_nodes(
             image_pil=image_pil,
@@ -581,7 +581,7 @@ class ModelQwenVL:
         self,
         image_inputs: List[Union[Image.Image, List[Image.Image]]],
         questions: List[str],
-        max_new_tokens: int = 128,
+        max_new_tokens: int = 512,
         batch_size: int = 4,
         **kwargs
     ) -> List[str]:
