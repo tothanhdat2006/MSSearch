@@ -418,22 +418,23 @@ def format_text_report(summary: Dict[str, Any], file_path: str, annot_summary: O
         lines.append(f"  • Stage 5 Mode: {s5m:<19s} : {count:4d} / {N} ({pct:5.1f}%)")
 
     # 2. Accuracy & Localization
-    lines.append("\n[2] ACCURACY & LOCALIZATION BENCHMARKS")
+    lines.append("\n[2] PRIMARY BENCHMARK METRICS (STASH-BENCH PROTOCOL)")
     lines.append(subdiv)
     p_acc = summary["primary_image_acc"]
-    lines.append(f"  • Primary Evidence Image Acc (Top-1)  : {p_acc['rate']:5.2f}% ({p_acc['correct']}/{p_acc['total']})")
-    i_acc = summary["image_pool_acc"]
-    lines.append(f"  • Image Pool Hit Rate (Recall@K)      : {i_acc['rate']:5.2f}% ({i_acc['correct']}/{i_acc['total']})")
-
-    em_acc = summary["qa_exact_match"]
-    lines.append(f"  • Raw Full-String Exact Match (EM)    : {em_acc['rate']:5.2f}% ({em_acc['correct']}/{em_acc['total']})")
     nm_acc = summary["qa_normalized_match"]
-    lines.append(f"  • Normalized Match (STASHBench Hit)   : {nm_acc['rate']:5.2f}% ({nm_acc['correct']}/{nm_acc['total']})")
-    bm_acc = summary["qa_bold_exact_match"]
-    lines.append(f"  • Extracted Bold Token Exact Match    : {bm_acc['rate']:5.2f}% ({bm_acc['correct']}/{bm_acc['total']})")
     jp_acc = summary["joint_primary_acc"]
-    lines.append(f"  • Joint (Primary Image + Answer)      : {jp_acc['rate']:5.2f}% ({jp_acc['correct']}/{jp_acc['total']})")
-    lines.append(f"  • Token Overlap (SQuAD F1 / Recall)   : Recall={summary['token_recall']:.2f}% | F1={summary['token_f1']:.2f}%")
+    em_acc = summary["qa_exact_match"]
+    bm_acc = summary["qa_bold_exact_match"]
+    i_acc = summary["image_pool_acc"]
+
+    lines.append(f"  ★ Acc_img     (Evidence Image Identification) : {p_acc['rate']:5.2f}% ({p_acc['correct']}/{p_acc['total']})")
+    lines.append(f"  ★ Acc_text    (Answer Semantic Correctness)   : {nm_acc['rate']:5.2f}% ({nm_acc['correct']}/{nm_acc['total']})")
+    lines.append(f"  ★ Acc_overall (Joint Both Predictions Correct): {jp_acc['rate']:5.2f}% ({jp_acc['correct']}/{jp_acc['total']})")
+    lines.append("")
+    lines.append(f"  • Image Pool Hit Rate (Recall@K)              : {i_acc['rate']:5.2f}% ({i_acc['correct']}/{i_acc['total']})")
+    lines.append(f"  • Raw Full-String Exact Match (EM)            : {em_acc['rate']:5.2f}% ({em_acc['correct']}/{em_acc['total']})")
+    lines.append(f"  • Extracted Bold Token Exact Match            : {bm_acc['rate']:5.2f}% ({bm_acc['correct']}/{bm_acc['total']})")
+    lines.append(f"  • Token Overlap (SQuAD F1 / Recall)           : Recall={summary['token_recall']:.2f}% | F1={summary['token_f1']:.2f}%")
 
     s4_ret = summary["stage4_retrieval"]
     lines.append(f"  • Stage 4 Image Recall@1 (R@1)        : {s4_ret['r1']['mean']*100:5.2f}% (MRR: {s4_ret['mrr']['mean']:.4f})")
@@ -542,24 +543,26 @@ def format_markdown_report(summary: Dict[str, Any], file_path: str, annot_summar
         md.append(f"**Dataset Annotations:** `{annot_summary['annot_file']}` (Matched: {annot_summary['matched_count']} / {annot_summary['total_dataset_samples']})\n")
 
     # Accuracy Table
-    md.append("## 1. Accuracy & Evidence Localization\n")
-    md.append("| Metric | Result | Count / Total |")
-    md.append("|---|:---:|:---:|")
+    md.append("## 1. Primary Benchmark Metrics (STASH-Bench Protocol)\n")
+    md.append("| Primary Metric | Mathematical Notation | Result | Count / Total | Definition |")
+    md.append("|---|:---:|:---:|:---:|---|")
     p_acc = summary["primary_image_acc"]
-    md.append(f"| **Primary Evidence Image Top-1 Acc** | **{p_acc['rate']:.2f}%** | {p_acc['correct']} / {p_acc['total']} |")
-    i_acc = summary["image_pool_acc"]
-    md.append(f"| **Image Pool Recall@K** | **{i_acc['rate']:.2f}%** | {i_acc['correct']} / {i_acc['total']} |")
-
-    em_acc = summary["qa_exact_match"]
-    md.append(f"| **Exact Match (EM)** | **{em_acc['rate']:.2f}%** | {em_acc['correct']} / {em_acc['total']} |")
     nm_acc = summary["qa_normalized_match"]
-    md.append(f"| **Normalized Match (STASHBench Hit)** | **{nm_acc['rate']:.2f}%** | {nm_acc['correct']} / {nm_acc['total']} |")
+    jp_acc = summary["joint_primary_acc"]
+    md.append(f"| **Evidence Image Identification** | $\\mathbf{{Acc}}_{{\\mathbf{{img}}}}$ | **{p_acc['rate']:.2f}%** | {p_acc['correct']} / {p_acc['total']} | Correct primary evidence image top-1 identification |")
+    md.append(f"| **Answer Correctness** | $\\mathbf{{Acc}}_{{\\mathbf{{text}}}}$ | **{nm_acc['rate']:.2f}%** | {nm_acc['correct']} / {nm_acc['total']} | Semantic equivalence to reference answer (STASH-Bench hit) |")
+    md.append(f"| **Joint Overall Accuracy** | $\\mathbf{{Acc}}_{{\\mathbf{{overall}}}}$ | **{jp_acc['rate']:.2f}%** | {jp_acc['correct']} / {jp_acc['total']} | Both $\\mathrm{{Acc}}_{{\\mathrm{{img}}}}$ and $\\mathrm{{Acc}}_{{\\mathrm{{text}}}}$ correct for the same sample |")
+    md.append("")
+    md.append("### Diagnostic & Secondary Metrics\n")
+    md.append("| Diagnostic Metric | Result | Count / Total |")
+    md.append("|---|:---:|:---:|")
+    i_acc = summary["image_pool_acc"]
+    md.append(f"| **Candidate Pool Recall@K** | **{i_acc['rate']:.2f}%** | {i_acc['correct']} / {i_acc['total']} |")
+    em_acc = summary["qa_exact_match"]
+    md.append(f"| **Raw Full-String Exact Match (EM)** | **{em_acc['rate']:.2f}%** | {em_acc['correct']} / {em_acc['total']} |")
     bm_acc = summary["qa_bold_exact_match"]
     md.append(f"| **Extracted Bold Token Exact Match** | **{bm_acc['rate']:.2f}%** | {bm_acc['correct']} / {bm_acc['total']} |")
-    jp_acc = summary["joint_primary_acc"]
-    md.append(f"| **Joint (Primary Image + Answer)** | **{jp_acc['rate']:.2f}%** | {jp_acc['correct']} / {jp_acc['total']} |")
     md.append(f"| **Token Overlap (SQuAD-style)** | Recall: **{summary['token_recall']:.2f}%** | F1: **{summary['token_f1']:.2f}%** |")
-
     s4_ret = summary["stage4_retrieval"]
     md.append(f"| **Stage 4 Image Recall@1 (R@1)** | **{s4_ret['r1']['mean']*100:.2f}%** | MRR: {s4_ret['mrr']['mean']:.4f} |")
     md.append(f"| **Distractor Images Pruned (Stage 4)** | Avg **{s4_ret['distractor_imgs_pruned']['mean']:.2f}** imgs | Max: {s4_ret['distractor_imgs_pruned']['max']:.0f} |")
