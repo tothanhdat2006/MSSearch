@@ -170,7 +170,7 @@ def evaluate_ablation_modal(
             ev_img_ids = [candidate_meta[i].get("image_id") if isinstance(candidate_meta[i], dict) else str(candidate_meta[i]) for i in ev_indices if 0 <= i < len(candidate_meta)]
             is_img_ok = (str(gt_img_id) in [str(x) for x in ev_img_ids]) if (ev_img_ids and gt_img_id) else (False if gt_img_id else None)
 
-            prim_idx = telemetry.get("primary_evidence_image") or (ev_indices[0] if ev_indices else None)
+            prim_idx = telemetry.get("primary_evidence_image") if telemetry.get("primary_evidence_image") is not None else (ev_indices[0] if ev_indices else None)
             prim_id = (candidate_meta[prim_idx].get("image_id") if isinstance(candidate_meta[prim_idx], dict) else str(candidate_meta[prim_idx])) if (prim_idx is not None and 0 <= prim_idx < len(candidate_meta)) else None
             is_prim_ok = (str(gt_img_id) == str(prim_id)) if (gt_img_id and prim_id) else (False if gt_img_id else None)
             stage_stats = compute_stage_ret_rej_tokens(telemetry, gt_img_idx, sample.get("target_bbox"), images)
@@ -196,8 +196,7 @@ def evaluate_ablation_modal(
             }
 
             out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            out_f.flush()
-            os.fsync(out_f.fileno())
+            out_f.flush(); os.fsync(out_f.fileno())
             results_volume.commit()
 
             for img in images:

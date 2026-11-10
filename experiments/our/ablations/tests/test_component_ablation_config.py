@@ -12,6 +12,7 @@ from experiments.our.ablations.eval_runner_utils import (
     resolve_ground_truth,
     format_multi_image_prompt,
     parse_baseline_json_response,
+    run_qwen_direct_multi_image,
 )
 from experiments.our.ablations.eval_models_ablation import (
     load_ablation_engines,
@@ -46,6 +47,13 @@ class TestComponentAblationConfig(unittest.TestCase):
         self.assertEqual(indices, [2])
         self.assertEqual(ans, "blue sedan")
 
+        # Parsing without candidate_meta should still parse integer IDs into indices
+        raw_no_meta = '{"image_ids": [3], "answer": "yellow taxi"}'
+        r_ids, a_ids, idxs, ans_nm = parse_baseline_json_response(raw_no_meta)
+        self.assertEqual(r_ids, [3])
+        self.assertEqual(idxs, [3])
+        self.assertEqual(ans_nm, "yellow taxi")
+
         # Fallback regex when invalid JSON
         raw_fallback = 'I think the answer is: "answer": "golden retriever", "image_id": 1'
         raw_ids, actual_ids, indices, ans = parse_baseline_json_response(raw_fallback, meta)
@@ -58,7 +66,8 @@ class TestComponentAblationConfig(unittest.TestCase):
         # 1. Rigid Quadtree + Single Crop
         with patch("mssearch.models.ModelQwenVL", MagicMock()), \
              patch("experiments.our.ablations.models.load_detector", MagicMock()), \
-             patch("experiments.our.ablations.models.load_visual_scorer", MagicMock()):
+             patch("experiments.our.ablations.models.load_visual_scorer", MagicMock()), \
+             patch.dict("sys.modules", {"spacy": MagicMock()}):
             engines_rigid = load_ablation_engines(component="qwen_fp_rigid_cg_single")
             cfg = engines_rigid["config"]
             self.assertEqual(cfg.partition_mode, "quadrant_only")
@@ -98,6 +107,18 @@ class TestComponentAblationConfig(unittest.TestCase):
         self.assertEqual(resp["primary_evidence_image"], 1)
         self.assertEqual(resp["telemetry"]["route"], "direct_baseline")
         self.assertEqual(resp["telemetry"]["stage5_mode"], "direct_baseline")
+
+    @patch("experiments.our.ablations.eval_models_ablation.run_qwen_direct_multi_image")
+    def test_run_ablation_pipeline_qwen_direct_empty_pred(self, mock_qwen):
+        mock_qwen.return_value = ("not found", [], [])
+        images = [Image.new("RGB", (100, 100)), Image.new("RGB", (100, 100))]
+        engines = {"component": "qwen", "zoom_model": MagicMock(), "config": MSSearchConfig()}
+        sample = {"sample_id": "test_empty", "question": "What is here?"}
+
+        resp = run_ablation_pipeline(engines, images, sample, 0)
+        self.assertEqual(resp["primary_answer"], "not found")
+        self.assertIsNone(resp["primary_evidence_image"])
+        self.assertEqual(resp["evidence_images"], [])
 
     @patch("mssearch.stages.stage1_parser.parse_question_to_active_objects")
     @patch("mssearch.stages.stage2_fast_path.run_tool_based_fast_path")
@@ -145,7 +166,33 @@ class TestComponentAblationConfig(unittest.TestCase):
         self.assertEqual(resp["telemetry"]["route"], "fast_path_direct_fallback")
         self.assertEqual(resp["telemetry"]["stage5_mode"], "direct_baseline")
 
+    def test_run_qwen_direct_multi_image_uncapped_resolution_and_image_ids(self):
+        mock_engine = MagicMock()
+        mock_engine.device = "cpu"
+        mock_engine.processor.apply_chat_template.return_value = "formatted prompt"
+
+        processor_kwargs = {}
+        def mock_processor_call(*args, **kwargs):
+            processor_kwargs.update(kwargs)
+            res = MagicMock()
+            res.input_ids = MagicMock()
+            res.input_ids.__getitem__.return_value = [1, 2]
+            res.to.return_value = res
+            return res
+
+        mock_engine.processor.side_effect = mock_processor_call
+        mock_engine.model.generate.return_value = [[1, 2, 3, 4]]
+        mock_engine.processor.tokenizer.decode.return_value = '```json\n{"image_ids": [2], "answer": "silver car"}\n```'
+
+        images = [Image.new("RGB", (500, 500)), Image.new("RGB", (500, 500)), Image.new("RGB", (500, 500))]
+        ans, pred_0based, pred_indices = run_qwen_direct_multi_image(mock_engine, images, "What car is there?")
+
+        # Resolution must be uncapped (no max_pixels passed in initial generation)
+        self.assertNotIn("max_pixels", processor_kwargs)
+        # Image IDs and 0-based indices must be correctly resolved for candidate meta
+        self.assertEqual(ans, "silver car")
+        self.assertEqual(pred_indices, [2])
+        self.assertEqual(pred_0based, [1])
 
 if __name__ == "__main__":
     unittest.main()
-

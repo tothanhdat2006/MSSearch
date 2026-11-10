@@ -85,7 +85,6 @@ def parse_baseline_json_response(
                 raw_ids = [id_m.group(1).strip("\"'")]
         ans_m = re.search(r"[\"']answer[\"']\s*:\s*[\"']([^\"']+)[\"']", raw_resp)
         pred_ans = ans_m.group(1).strip() if ans_m else raw_resp.strip()
-
     pred_indices, actual_image_ids = [], []
     if candidate_meta:
         for r_id in raw_ids:
@@ -104,7 +103,13 @@ def parse_baseline_json_response(
                         break
     else:
         actual_image_ids = raw_ids
-
+        for r_id in raw_ids:
+            try:
+                idx_int = int(r_id)
+                if idx_int > 0:
+                    pred_indices.append(idx_int)
+            except (ValueError, TypeError):
+                pass
     return raw_ids, actual_image_ids, pred_indices, pred_ans or raw_resp.strip()
 
 
@@ -115,16 +120,11 @@ def run_qwen_direct_multi_image(
     max_new_tokens: int = 512,
 ) -> Tuple[str, List[Any], List[int]]:
     """
-    Executes multi-image direct baseline forward pass with dynamic pixel budgeting
+    Executes multi-image direct baseline forward pass with uncapped model resolution
     and multi-stage OOM recovery (progressive downscaling and sequential fallback).
     """
     n_imgs = max(1, len(images))
     prompt_text = format_multi_image_prompt(n_imgs, question)
-
-    # Dynamic pixel ceiling: caps visual tokens to avoid token explosion on large N
-    target_budget_pixels = 4_000_000
-    per_img_max_pixels = max(128 * 128, min(1024 * 1024, target_budget_pixels // n_imgs))
-
     content = []
     parts = prompt_text.split("<image>")
     for i, part in enumerate(parts):
@@ -135,9 +135,9 @@ def run_qwen_direct_multi_image(
     messages = [{"role": "user", "content": content}]
     full_prompt = engine.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
 
-    def _attempt_generate(imgs, max_px):
+    def _attempt_generate(imgs, max_px: Optional[int] = None):
         call_kwargs = {}
-        if hasattr(engine.processor, "image_processor") and hasattr(engine.processor.image_processor, "max_pixels"):
+        if max_px is not None and hasattr(engine.processor, "image_processor") and hasattr(engine.processor.image_processor, "max_pixels"):
             call_kwargs["max_pixels"] = max_px
             call_kwargs["min_pixels"] = getattr(engine.processor.image_processor, "min_pixels", 28 * 28)
         inputs = engine.processor(text=[full_prompt], images=imgs, return_tensors="pt", padding=True, **call_kwargs).to(engine.device)
@@ -148,13 +148,13 @@ def run_qwen_direct_multi_image(
         return engine.processor.tokenizer.decode(trimmed, skip_special_tokens=True).strip()
 
     try:
-        raw_res = _attempt_generate(images, per_img_max_pixels)
+        raw_res = _attempt_generate(images)
     except torch.OutOfMemoryError:
         torch.cuda.empty_cache(); gc.collect()
         print(f"[OOM Warning] Multi-image forward OOM with N={n_imgs}. Retrying with 50% downscaling...")
         try:
             downscaled = [ImageOps.exif_transpose(im).resize((max(1, im.width // 2), max(1, im.height // 2))) for im in images]
-            raw_res = _attempt_generate(downscaled, per_img_max_pixels // 4)
+            raw_res = _attempt_generate(downscaled)
         except torch.OutOfMemoryError:
             torch.cuda.empty_cache(); gc.collect()
             print(f"[OOM Fallback] Sequential one-by-one forward fallback activated.")
@@ -167,8 +167,14 @@ def run_qwen_direct_multi_image(
                 ans = engine.processor.tokenizer.decode(out[0][len(inp.input_ids[0]):], skip_special_tokens=True).strip()
                 answers.append(ans)
                 del inp, out; torch.cuda.empty_cache()
-            return (answers[0] if answers else "", [0], [1])
+            best_idx = 0
+            for idx, a in enumerate(answers):
+                if a and not any(neg in a.lower() for neg in ["not found", "cannot determine", "no answer", "none"]):
+                    best_idx = idx
+                    break
+            return (answers[best_idx] if answers else "", [best_idx], [best_idx + 1])
 
-    _, _, pred_indices, pred_ans = parse_baseline_json_response(raw_res)
+    candidates = [{"image_id": i} for i in range(1, n_imgs + 1)]
+    _, _, pred_indices, pred_ans = parse_baseline_json_response(raw_res, candidates)
     pred_0based = [(p - 1) for p in pred_indices if p > 0]
     return pred_ans, pred_0based, pred_indices

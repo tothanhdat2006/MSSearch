@@ -48,7 +48,7 @@ Controls the cumulative progression of search components (Table 1 & Table 2):
 
 | Key | Configuration | Behavior / Route |
 | :--- | :--- | :--- |
-| `qwen` | Direct Baseline | Multi-image VLM forward pass on full gallery with dynamic pixel budget |
+| `qwen` | Direct Baseline | Multi-image VLM forward pass on full gallery with uncapped resolution |
 | `qwen_fast_path` | Qwen w/ Fast Path | Tool-based fast path proposal; falls back to Direct Baseline on unresolved queries |
 | `qwen_fp_rigid_cg_single` | Qwen w/ FP + Rigid Quadtree + CG + Single-crop | Fast Path + `quadrant_only` (regular quadrants) + Confidence Gating + isolated 1.25x crops |
 | `qwen_fp_sgap_cg_single` | Qwen w/ FP + SGAP + CG + Single-crop | Fast Path + `sgap_only` (SLIC superpixels) + Confidence Gating + isolated 1.25x crops |

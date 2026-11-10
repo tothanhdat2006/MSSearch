@@ -37,7 +37,7 @@ def load_ablation_engines(
     and NLP pipeline for ablation experiments, configuring component increments.
     """
     from mssearch.config import MSSearchConfig
-    from mssearch.models import ModelQwenVL, ModelInternvl
+    from mssearch.models import ModelQwenVL
     try:
         import spacy
     except ImportError:
@@ -47,6 +47,7 @@ def load_ablation_engines(
     m_str = str(model_path).lower()
     print(f"[Ablation Setup] Loading primary VLM: '{model_path}'...")
     if "internvl" in m_str:
+        from mssearch.models import ModelInternvl
         zoom_model = ModelInternvl(model_path=model_path, device=device)
     elif "llava" in m_str:
         from mssearch.models import ModelGlobalLocal
@@ -147,8 +148,8 @@ def run_ablation_pipeline(
     # Component Route 1: Direct Qwen Baseline
     if component == "qwen":
         pred_ans, pred_0based, _ = run_qwen_direct_multi_image(engines["zoom_model"], candidate_images, question)
-        prim_img = pred_0based[0] if pred_0based else 0
-        boxes = [{"img_idx": i, "box": [0, 0, candidate_images[i].width, candidate_images[i].height]} for i in pred_0based]
+        prim_img = pred_0based[0] if pred_0based else None
+        boxes = [{"img_idx": i, "box": [0, 0, candidate_images[i].width, candidate_images[i].height]} for i in pred_0based if 0 <= i < len(candidate_images)]
         return {
             "primary_answer": pred_ans, "primary_evidence_image": prim_img, "evidence_images": pred_0based,
             "raw_vlm_response": pred_ans, "extractions": [],
@@ -175,8 +176,9 @@ def run_ablation_pipeline(
             zoom_model=engines["zoom_model"], config=cfg, question=question, active_img_indices=list(range(len(candidate_images)))
         )
         if fp_result.triggered:
-            ev_imgs = fp_result.evidence_images if fp_result.evidence_images else ([fp_result.evidence_img_idx] if fp_result.evidence_img_idx is not None else [0])
-            prim_img = fp_result.evidence_img_idx if fp_result.evidence_img_idx is not None else ev_imgs[0]
+            ev_imgs = fp_result.evidence_images if fp_result.evidence_images else ([fp_result.evidence_img_idx] if fp_result.evidence_img_idx is not None else [])
+            ev_imgs = [i for i in ev_imgs if 0 <= i < len(candidate_images)]
+            prim_img = fp_result.evidence_img_idx if fp_result.evidence_img_idx is not None else (ev_imgs[0] if ev_imgs else None)
             boxes = [{"img_idx": i, "box": list(fp_result.detected_boxes[0]) if fp_result.detected_boxes else [0, 0, candidate_images[i].width, candidate_images[i].height]} for i in ev_imgs]
             return {
                 "primary_answer": fp_result.answer, "primary_evidence_image": prim_img, "evidence_images": ev_imgs,
@@ -190,8 +192,8 @@ def run_ablation_pipeline(
             }
         # Fallback to Direct Baseline on candidate images
         pred_ans, pred_0based, _ = run_qwen_direct_multi_image(engines["zoom_model"], candidate_images, question)
-        prim_img = pred_0based[0] if pred_0based else 0
-        boxes = [{"img_idx": i, "box": [0, 0, candidate_images[i].width, candidate_images[i].height]} for i in pred_0based]
+        prim_img = pred_0based[0] if pred_0based else None
+        boxes = [{"img_idx": i, "box": [0, 0, candidate_images[i].width, candidate_images[i].height]} for i in pred_0based if 0 <= i < len(candidate_images)]
         return {
             "primary_answer": pred_ans, "primary_evidence_image": prim_img, "evidence_images": pred_0based,
             "raw_vlm_response": pred_ans, "extractions": [],

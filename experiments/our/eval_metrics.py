@@ -78,7 +78,7 @@ def compute_stage_ret_rej_tokens(
 
     direct_tokens = 0
     stages_exec = telemetry.get("stages_executed", [])
-    if any(s in stages_exec for s in ["phase1_direct_answer", "stage2_fast_path"]) and candidate_images:
+    if any(s in stages_exec for s in ["phase1_direct_answer", "stage2_fast_path", "direct_baseline", "direct_fallback"]) and candidate_images:
         for img in candidate_images:
             iw, ih = img.size if hasattr(img, "size") else (448, 448)
             direct_tokens += int(math.ceil(iw / 28) * math.ceil(ih / 28))
@@ -159,4 +159,3 @@ def compute_stage_ret_rej_tokens(
         "stage4_mrr": stage4_mrr,
         "s6_visual_tokens": s6_tokens,
     }
-
