@@ -324,17 +324,10 @@ class ModelQwenVL:
     def process_nodes_to_image_list(self, nodes, image_pil, root_anyres=True):
         square_image, left, top = expand2square(image_pil, self.background_color)
         if not nodes:
-            # Physical resolution shield: clamp root image to max 1024px to prevent SDPA attention buffer OOM
-            if max(image_pil.width, image_pil.height) > 1024:
-                return [self.resize_image_seg(image_pil, 1024)]
             return [deepcopy(image_pil)] if root_anyres else [self.resize_image(image_pil)]
         if self.is_root_only(nodes):
-            if max(image_pil.width, image_pil.height) > 1024:
-                return [self.resize_image_seg(image_pil, 1024)]
             return [deepcopy(image_pil)] if root_anyres else [self.resize_image(image_pil)]
         if len(nodes) == 0 or self.include_root(nodes):
-            if max(image_pil.width, image_pil.height) > 1024:
-                return [self.resize_image_seg(image_pil, 1024)]
             return [deepcopy(image_pil)]
 
         resized_bboxes = []
