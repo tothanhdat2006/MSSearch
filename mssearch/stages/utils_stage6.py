@@ -28,7 +28,7 @@ class FinalSearchResult:
     evidence_image_indices: List[int]
     extractions: List[EvidenceExtraction] = field(default_factory=list)
     crop_records: List[Dict[str, Any]] = field(default_factory=list)
-
+    voting_scores: List[Dict[str, Any]] = field(default_factory=list)
 
 def extract_final_answer(text: str) -> str:
     """
@@ -227,8 +227,9 @@ def deduplicate_answers(answers: List[str], similarity_threshold: float = 0.85, 
 def resolve_by_majority_voting(
     extractions: List[EvidenceExtraction],
     similarity_thresh: float = 0.85,
-    verbose: bool = False
-) -> Tuple[Optional[str], Optional[int], List[str]]:
+    verbose: bool = False,
+    return_scores: bool = False,
+) -> Any:
     """
     Resolves conflicting candidate answers via semantic frequency and confidence majority voting.
     Returns:
@@ -236,7 +237,7 @@ def resolve_by_majority_voting(
     """
     valid = [e for e in extractions if e.final_answer and not is_negative_or_unanswerable(e.final_answer)]
     if not valid:
-        return None, None, []
+        return (None, None, [], []) if return_scores else (None, None, [])
 
     clusters: List[Dict[str, Any]] = []
     for e in valid:
@@ -282,4 +283,15 @@ def resolve_by_majority_voting(
 
     ranked_answers = [c["rep"] for c in clusters]
     winner = clusters[0]
+    voting_scores = [
+        {
+            "answer": c["rep"],
+            "count": c["count"],
+            "weighted_score": round(float(c["weighted_score"]), 4),
+            "img_idx": c["best_extraction"].img_idx,
+        }
+        for c in clusters
+    ]
+    if return_scores:
+        return winner["rep"], winner["best_extraction"].img_idx, ranked_answers, voting_scores
     return winner["rep"], winner["best_extraction"].img_idx, ranked_answers

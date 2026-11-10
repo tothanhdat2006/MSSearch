@@ -150,13 +150,19 @@ def run_ablation_pipeline(
         pred_ans, pred_0based, _ = run_qwen_direct_multi_image(engines["zoom_model"], candidate_images, question)
         prim_img = pred_0based[0] if pred_0based else None
         boxes = [{"img_idx": i, "box": [0, 0, candidate_images[i].width, candidate_images[i].height]} for i in pred_0based if 0 <= i < len(candidate_images)]
+        c_recs = [{
+            "crop_idx": 0, "img_idx": prim_img, "box": boxes[0]["box"] if boxes else [],
+            "raw_answer": pred_ans, "final_answer": pred_ans, "is_evidence": bool(pred_0based), "source_branch": "direct_baseline"
+        }] if prim_img is not None else []
+        v_scores = [{"answer": pred_ans, "count": 1, "weighted_score": 1.0, "img_idx": prim_img}] if (pred_ans and prim_img is not None) else []
         return {
             "primary_answer": pred_ans, "primary_evidence_image": prim_img, "evidence_images": pred_0based,
             "raw_vlm_response": pred_ans, "extractions": [],
             "telemetry": {
                 "route": "direct_baseline", "routes_executed": ["direct_baseline"], "stages_executed": ["direct_baseline"],
                 "stage5_mode": "direct_baseline", "evidence_images": pred_0based, "primary_evidence_image": prim_img,
-                "stage5_boxes": boxes, "stage6_patch_boxes": [b["box"] for b in boxes],
+                "stage5_boxes": boxes, "stage6_patch_boxes": [b["box"] for b in boxes], "stage6_crops": c_recs,
+                "voting_scores": v_scores, "primary_answer_score": 1.0 if v_scores else None,
                 "num_unified_crops": len(boxes), "timings_sec": {"direct_baseline": round(time.perf_counter() - t_start, 3)},
             }
         }
@@ -180,13 +186,21 @@ def run_ablation_pipeline(
             ev_imgs = [i for i in ev_imgs if 0 <= i < len(candidate_images)]
             prim_img = fp_result.evidence_img_idx if fp_result.evidence_img_idx is not None else (ev_imgs[0] if ev_imgs else None)
             boxes = [{"img_idx": i, "box": list(fp_result.detected_boxes[0]) if fp_result.detected_boxes else [0, 0, candidate_images[i].width, candidate_images[i].height]} for i in ev_imgs]
+            conf_val = float(fp_result.confidence or 1.0)
+            c_recs = [{
+                "crop_idx": 0, "img_idx": prim_img, "box": boxes[0]["box"] if boxes else [],
+                "raw_answer": fp_result.raw_response or fp_result.answer, "final_answer": fp_result.answer,
+                "is_evidence": True, "source_branch": "tool_based_fast_path"
+            }] if (prim_img is not None and 0 <= prim_img < len(candidate_images)) else []
+            v_scores = [{"answer": fp_result.answer, "count": 1, "weighted_score": conf_val, "img_idx": prim_img}] if (fp_result.answer and prim_img is not None) else []
             return {
                 "primary_answer": fp_result.answer, "primary_evidence_image": prim_img, "evidence_images": ev_imgs,
                 "raw_vlm_response": fp_result.raw_response or fp_result.answer, "extractions": [],
                 "telemetry": {
                     "route": "tool_based_fast_path", "routes_executed": ["tool_based_fast_path"], "stages_executed": ["stage1_parser", "stage2_fast_path"],
                     "stage5_mode": "fast_path", "evidence_images": ev_imgs, "primary_evidence_image": prim_img,
-                    "stage5_boxes": boxes, "stage6_patch_boxes": [b["box"] for b in boxes],
+                    "stage5_boxes": boxes, "stage6_patch_boxes": [b["box"] for b in boxes], "stage6_crops": c_recs,
+                    "voting_scores": v_scores, "primary_answer_score": conf_val if v_scores else None,
                     "num_unified_crops": len(boxes), "timings_sec": {"stage2_fast_path": round(time.perf_counter() - t_start, 3)},
                 }
             }
@@ -194,13 +208,19 @@ def run_ablation_pipeline(
         pred_ans, pred_0based, _ = run_qwen_direct_multi_image(engines["zoom_model"], candidate_images, question)
         prim_img = pred_0based[0] if pred_0based else None
         boxes = [{"img_idx": i, "box": [0, 0, candidate_images[i].width, candidate_images[i].height]} for i in pred_0based if 0 <= i < len(candidate_images)]
+        c_recs = [{
+            "crop_idx": 0, "img_idx": prim_img, "box": boxes[0]["box"] if boxes else [],
+            "raw_answer": pred_ans, "final_answer": pred_ans, "is_evidence": bool(pred_0based), "source_branch": "fast_path_fallback"
+        }] if prim_img is not None else []
+        v_scores = [{"answer": pred_ans, "count": 1, "weighted_score": 1.0, "img_idx": prim_img}] if (pred_ans and prim_img is not None) else []
         return {
             "primary_answer": pred_ans, "primary_evidence_image": prim_img, "evidence_images": pred_0based,
             "raw_vlm_response": pred_ans, "extractions": [],
             "telemetry": {
                 "route": "fast_path_direct_fallback", "routes_executed": ["fast_path_fallback"], "stages_executed": ["stage1_parser", "stage2_fast_path", "direct_fallback"],
                 "stage5_mode": "direct_baseline", "evidence_images": pred_0based, "primary_evidence_image": prim_img,
-                "stage5_boxes": boxes, "stage6_patch_boxes": [b["box"] for b in boxes],
+                "stage5_boxes": boxes, "stage6_patch_boxes": [b["box"] for b in boxes], "stage6_crops": c_recs,
+                "voting_scores": v_scores, "primary_answer_score": 1.0 if v_scores else None,
                 "num_unified_crops": len(boxes), "timings_sec": {"fast_path_fallback": round(time.perf_counter() - t_start, 3)},
             }
         }

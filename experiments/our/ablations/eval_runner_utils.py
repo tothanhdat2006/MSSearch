@@ -178,3 +178,9 @@ def run_qwen_direct_multi_image(
     _, _, pred_indices, pred_ans = parse_baseline_json_response(raw_res, candidates)
     pred_0based = [(p - 1) for p in pred_indices if p > 0]
     return pred_ans, pred_0based, pred_indices
+
+
+try:
+    from eval_metrics import format_stage6_answers, format_voting_scores
+except ImportError:
+    from experiments.our.eval_metrics import format_stage6_answers, format_voting_scores

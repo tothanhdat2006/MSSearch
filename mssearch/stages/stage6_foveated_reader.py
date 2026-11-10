@@ -211,11 +211,13 @@ def run_foveated_vlm_reading(
 
 
     # 4. Semantic Deduplication of Answer Memory using clean final answers & Majority Voting
+    voting_scores = []
     if extractions:
-        winner_ans, _, ranked_answers = resolve_by_majority_voting(
+        winner_ans, _, ranked_answers, voting_scores = resolve_by_majority_voting(
             extractions,
             similarity_thresh=getattr(config, "answer_dedup_similarity", 0.75),
-            verbose=config.verbose
+            verbose=config.verbose,
+            return_scores=True,
         )
         final_dedup_answers = ranked_answers if ranked_answers else []
     else:
@@ -236,5 +238,6 @@ def run_foveated_vlm_reading(
         answers=final_dedup_answers,
         evidence_image_indices=valid_evidence_indices,
         extractions=extractions,
-        crop_records=crop_records
+        crop_records=crop_records,
+        voting_scores=voting_scores,
     )

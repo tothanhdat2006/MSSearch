@@ -23,7 +23,7 @@ for p in [_MSSEARCH_ROOT, _OUR_DIR, _CUR_DIR]:
         sys.path.insert(0, p)
 
 from eval_dataset import resolve_image, load_and_slice_dataset
-from eval_metrics import compute_stage_ret_rej_tokens
+from eval_metrics import compute_stage_ret_rej_tokens, format_stage6_answers, format_voting_scores
 from eval_models_ablation import load_ablation_engines, run_ablation_pipeline
 from eval_runner_utils import load_completed_keys, resolve_ground_truth
 
@@ -184,7 +184,9 @@ def main():
                 "stage4_image_scores": stage_stats["stage4_image_scores"], "gt_rank_stage4": stage_stats["gt_rank_stage4"],
                 "stage4_r1": stage_stats["stage4_r1"], "stage4_mrr": stage_stats["stage4_mrr"],
                 "s6_visual_tokens": stage_stats["s6_visual_tokens"],
-                "latency_sec": latency,
+                "latency_sec": latency, "primary_answer_score": telemetry.get("primary_answer_score"),
+                "stage6_answers": format_stage6_answers(telemetry, candidate_meta),
+                "voting_scores": format_voting_scores(telemetry, candidate_meta),
             }
 
             out_f.write(json.dumps(record, ensure_ascii=False) + "\n")

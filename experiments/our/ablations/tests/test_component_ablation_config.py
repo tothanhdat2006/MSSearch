@@ -18,6 +18,10 @@ from experiments.our.ablations.eval_models_ablation import (
     load_ablation_engines,
     run_ablation_pipeline,
 )
+from experiments.our.eval_metrics import (
+    format_stage6_answers,
+    format_voting_scores,
+)
 
 
 class TestComponentAblationConfig(unittest.TestCase):
@@ -194,5 +198,73 @@ class TestComponentAblationConfig(unittest.TestCase):
         self.assertEqual(pred_indices, [2])
         self.assertEqual(pred_0based, [1])
 
+    def test_stage6_answers_and_voting_scores_telemetry(self):
+        candidate_meta = [{"image_id": "img_001"}, {"image_id": "img_002"}, {"image_id": "img_003"}]
+        telemetry = {
+            "stage6_crops": [
+                {
+                    "crop_idx": 0,
+                    "img_idx": 1,
+                    "box": [10, 20, 100, 200],
+                    "raw_answer": "The sedan is blue.",
+                    "final_answer": "blue",
+                    "is_evidence": True,
+                    "source_branch": "SAM3"
+                },
+                {
+                    "crop_idx": 1,
+                    "img_idx": 2,
+                    "box": [50, 50, 150, 150],
+                    "raw_answer": "Not visible",
+                    "final_answer": "not visible",
+                    "is_evidence": False,
+                    "source_branch": "SGAP"
+                }
+            ],
+            "voting_scores": [
+                {"answer": "blue", "count": 2, "weighted_score": 2.5, "img_idx": 1}
+            ],
+            "primary_answer_score": 2.5
+        }
+
+        formatted_answers = format_stage6_answers(telemetry, candidate_meta)
+        self.assertEqual(len(formatted_answers), 2)
+        self.assertEqual(formatted_answers[0]["img_idx"], 1)
+        self.assertEqual(formatted_answers[0]["image_id"], "img_002")
+        self.assertEqual(formatted_answers[0]["raw_answer"], "The sedan is blue.")
+        self.assertEqual(formatted_answers[0]["voting_score"], 2.5)
+        self.assertTrue(formatted_answers[0]["is_evidence"])
+
+        self.assertEqual(formatted_answers[1]["img_idx"], 2)
+        self.assertEqual(formatted_answers[1]["image_id"], "img_003")
+        self.assertIsNone(formatted_answers[1]["voting_score"])
+        self.assertFalse(formatted_answers[1]["is_evidence"])
+
+        formatted_voting = format_voting_scores(telemetry, candidate_meta)
+        self.assertEqual(len(formatted_voting), 1)
+        self.assertEqual(formatted_voting[0]["answer"], "blue")
+        self.assertEqual(formatted_voting[0]["score"], 2.5)
+        self.assertEqual(formatted_voting[0]["votes"], 2)
+        self.assertEqual(formatted_voting[0]["img_idx"], 1)
+        self.assertEqual(formatted_voting[0]["image_id"], "img_002")
+
+    def test_run_ablation_pipeline_telemetry_includes_stage6_and_voting(self):
+        engines = {
+            "component": "qwen",
+            "zoom_model": MagicMock(),
+            "config": MSSearchConfig(),
+        }
+        images = [Image.new("RGB", (200, 200)), Image.new("RGB", (200, 200))]
+        sample = {"sample_id": "s_test", "question": "What is here?"}
+
+        with patch("experiments.our.ablations.eval_models_ablation.run_qwen_direct_multi_image") as mock_direct:
+            mock_direct.return_value = ("white bird", [0], [1])
+            resp = run_ablation_pipeline(engines, images, sample, 0)
+
+            self.assertIn("stage6_crops", resp["telemetry"])
+            self.assertIn("voting_scores", resp["telemetry"])
+            self.assertIn("primary_answer_score", resp["telemetry"])
+            self.assertEqual(resp["telemetry"]["primary_answer_score"], 1.0)
+            self.assertEqual(resp["telemetry"]["voting_scores"][0]["answer"], "white bird")
 if __name__ == "__main__":
     unittest.main()

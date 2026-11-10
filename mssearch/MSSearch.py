@@ -35,7 +35,7 @@ from .stages import (
 from .stages.stage3_partitioning import BoundedPatch
 
 
-def _vote_all_sources(source_records: List[Dict[str, Any]], threshold: float = 0.85):
+def _vote_all_sources(source_records: List[Dict[str, Any]], threshold: float = 0.85, return_scores: bool = False):
     """Vote on *all* valid source-attributed answers, including earlier stages."""
     from .stages.utils_stage6 import EvidenceExtraction, is_negative_or_unanswerable, resolve_by_majority_voting
     items = []
@@ -51,7 +51,7 @@ def _vote_all_sources(source_records: List[Dict[str, Any]], threshold: float = 0
             source_branch=str(record.get("source_branch") or "Unknown"),
             final_answer=ans, crop_score=float(record.get("crop_score") or 0.0),
         ))
-    return resolve_by_majority_voting(items, similarity_thresh=threshold, verbose=False)
+    return resolve_by_majority_voting(items, similarity_thresh=threshold, verbose=False, return_scores=return_scores)
 
 
 class MultiSourceSearchEngine:
@@ -735,10 +735,12 @@ class MultiSourceSearchEngine:
         primary_answer = None
         primary_evidence_img_idx = None
 
+        voting_scores = []
         if harvested_extractions:
-            voted_ans, voted_img_idx, ranked_all_source_answers = _vote_all_sources(
+            voted_ans, voted_img_idx, ranked_all_source_answers, voting_scores = _vote_all_sources(
                 harvested_extractions,
                 threshold=getattr(self.config, "answer_dedup_similarity", 0.85),
+                return_scores=True,
             )
             if ranked_all_source_answers:
                 final_answers_out = ranked_all_source_answers
@@ -774,6 +776,9 @@ class MultiSourceSearchEngine:
         telemetry["source_answer_records"] = harvested_extractions
         telemetry["evidence_images"] = harvested_evidence_images
         telemetry["stage6_patch_boxes"] = harvested_patch_boxes
+        telemetry["voting_scores"] = voting_scores
+        if voting_scores:
+            telemetry["primary_answer_score"] = voting_scores[0].get("weighted_score")
 
         raw_vlm_resp = None
         for e in harvested_extractions:

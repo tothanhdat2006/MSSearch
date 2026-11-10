@@ -53,11 +53,11 @@ def evaluate_our_modal(
             sys.path.insert(0, p)
     try:
         from experiments.our.eval_dataset import load_and_slice_dataset, resolve_image
-        from experiments.our.eval_metrics import compute_stage_ret_rej_tokens
+        from experiments.our.eval_metrics import compute_stage_ret_rej_tokens, format_stage6_answers, format_voting_scores
         from experiments.our.eval_models import load_our_engines, run_our_pipeline
     except ModuleNotFoundError:
         from eval_dataset import load_and_slice_dataset, resolve_image
-        from eval_metrics import compute_stage_ret_rej_tokens
+        from eval_metrics import compute_stage_ret_rej_tokens, format_stage6_answers, format_voting_scores
         from eval_models import load_our_engines, run_our_pipeline
 
     dataset_path = next((p for p in [dataset_path, "/data/annotations_part1234_merged.json", "/data/STASHBench/annotations_part1234_merged.json", "/data/200_samples.json"] if os.path.exists(p)), dataset_path)
@@ -198,12 +198,13 @@ def evaluate_our_modal(
                 "gt_survived_stage4": stage_stats["gt_survived_stage4"], "distractor_imgs_pruned": stage_stats["distractor_imgs_pruned"],
                 "stage4_image_scores": stage_stats["stage4_image_scores"], "gt_rank_stage4": stage_stats["gt_rank_stage4"],
                 "stage4_r1": stage_stats["stage4_r1"], "stage4_mrr": stage_stats["stage4_mrr"], "s6_visual_tokens": stage_stats["s6_visual_tokens"],
-                "latency_sec": lat,
+                "latency_sec": lat, "primary_answer_score": telemetry.get("primary_answer_score"),
+                "stage6_answers": format_stage6_answers(telemetry, candidate_meta),
+                "voting_scores": format_voting_scores(telemetry, candidate_meta),
             }
 
             out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            out_f.flush()
-            os.fsync(out_f.fileno())
+            out_f.flush(); os.fsync(out_f.fileno())
             results_volume.commit()  # Persistent atomic commit per sample
 
             route_str = "+".join(telemetry.get("routes_executed", [])) or telemetry.get("route", "UNKNOWN")

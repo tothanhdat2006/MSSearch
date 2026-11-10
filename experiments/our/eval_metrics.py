@@ -159,3 +159,47 @@ def compute_stage_ret_rej_tokens(
         "stage4_mrr": stage4_mrr,
         "s6_visual_tokens": s6_tokens,
     }
+
+
+
+def format_stage6_answers(telemetry: Dict[str, Any], candidate_meta: List[Any]) -> List[Dict[str, Any]]:
+    """Formats all Stage 6 raw crop responses with source image indices, image IDs, and voting scores."""
+    crops = telemetry.get("stage6_crops", [])
+    v_map = {v.get("answer"): v.get("weighted_score", v.get("score")) for v in telemetry.get("voting_scores", []) if isinstance(v, dict)}
+    res = []
+    for c in crops:
+        if not isinstance(c, dict):
+            continue
+        i = c.get("img_idx")
+        img_id = (candidate_meta[i].get("image_id") if isinstance(candidate_meta[i], dict) else str(candidate_meta[i])) if (i is not None and 0 <= i < len(candidate_meta)) else None
+        res.append({
+            "crop_idx": c.get("crop_idx"),
+            "img_idx": i,
+            "image_id": img_id,
+            "box": c.get("box", []),
+            "raw_answer": c.get("raw_answer", ""),
+            "final_answer": c.get("final_answer", ""),
+            "is_evidence": c.get("is_evidence", False),
+            "voting_score": v_map.get(c.get("final_answer")),
+            "source_branch": c.get("source_branch", ""),
+        })
+    return res
+
+
+def format_voting_scores(telemetry: Dict[str, Any], candidate_meta: List[Any]) -> List[Dict[str, Any]]:
+    """Formats majority voting cluster results with weighted confidence scores and winning source images."""
+    scores = telemetry.get("voting_scores", [])
+    res = []
+    for s in scores:
+        if not isinstance(s, dict):
+            continue
+        i = s.get("img_idx")
+        img_id = (candidate_meta[i].get("image_id") if isinstance(candidate_meta[i], dict) else str(candidate_meta[i])) if (i is not None and 0 <= i < len(candidate_meta)) else None
+        res.append({
+            "answer": s.get("answer", ""),
+            "score": s.get("weighted_score", s.get("score")),
+            "votes": s.get("count", s.get("votes", 1)),
+            "img_idx": i,
+            "image_id": img_id,
+        })
+    return res
