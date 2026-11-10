@@ -76,7 +76,9 @@ case "${MODE}" in
             "qwen"
             "qwen_fast_path"
             "qwen_fp_rigid_cg_single"
+            "qwen_fp_rigid_cg_agg"
             "qwen_fp_sgap_cg_single"
+            "qwen_fp_sgap_cg_agg"
             "qwen_fp_asp_cg_single"
             "qwen_fp_asp_cg_agg"
         )

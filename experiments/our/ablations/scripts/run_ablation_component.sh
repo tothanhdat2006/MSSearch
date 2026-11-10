@@ -5,9 +5,11 @@
 #   1. Qwen (Direct Baseline)
 #   2. Qwen w/ Fast path
 #   3. Qwen w/ Fast path + Rigid quadtree + CG + Single-crop
-#   4. Qwen w/ Fast path + SGAP + CG + Single-crop
-#   5. Qwen w/ Fast path + ASP + CG + Single-crop
-#   6. Qwen w/ Fast path + ASP + CG + Aggregation (Our)
+#   4. Qwen w/ Fast path + Rigid quadtree + CG + Aggregation
+#   5. Qwen w/ Fast path + SGAP + CG + Single-crop
+#   6. Qwen w/ Fast path + SGAP + CG + Aggregation
+#   7. Qwen w/ Fast path + ASP + CG + Single-crop
+#   8. Qwen w/ Fast path + ASP + CG + Aggregation (Ours)
 #
 # Usage:
 #   bash run_ablation_component.sh [component|all] [model] [pool] [extra_args...]
@@ -31,7 +33,9 @@ ALL_COMPONENTS=(
     "qwen"
     "qwen_fast_path"
     "qwen_fp_rigid_cg_single"
+    "qwen_fp_rigid_cg_agg"
     "qwen_fp_sgap_cg_single"
+    "qwen_fp_sgap_cg_agg"
     "qwen_fp_asp_cg_single"
     "qwen_fp_asp_cg_agg"
 )

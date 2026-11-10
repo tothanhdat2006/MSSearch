@@ -51,7 +51,9 @@ Controls the cumulative progression of search components (Table 1 & Table 2):
 | `qwen` | Direct Baseline | Multi-image VLM forward pass on full gallery with uncapped resolution |
 | `qwen_fast_path` | Qwen w/ Fast Path | Tool-based fast path proposal; falls back to Direct Baseline on unresolved queries |
 | `qwen_fp_rigid_cg_single` | Qwen w/ FP + Rigid Quadtree + CG + Single-crop | Fast Path + `quadrant_only` (regular quadrants) + Confidence Gating + isolated 1.25x crops |
+| `qwen_fp_rigid_cg_agg` | Qwen w/ FP + Rigid Quadtree + CG + Aggregation | Fast Path + `quadrant_only` + Confidence Gating + Continuous Enclosure Sub-Canvas Engine |
 | `qwen_fp_sgap_cg_single` | Qwen w/ FP + SGAP + CG + Single-crop | Fast Path + `sgap_only` (SLIC superpixels) + Confidence Gating + isolated 1.25x crops |
+| `qwen_fp_sgap_cg_agg` | Qwen w/ FP + SGAP + CG + Aggregation | Fast Path + `sgap_only` + Confidence Gating + Continuous Enclosure Sub-Canvas Engine |
 | `qwen_fp_asp_cg_single` | Qwen w/ FP + ASP + CG + Single-crop | Fast Path + `hybrid` (entropy-steered ASP) + Confidence Gating + isolated 1.25x crops |
 | `qwen_fp_asp_cg_agg` | Qwen w/ FP + ASP + CG + Aggregation (Ours) | Full STASH-Search: Continuous Enclosure Sub-Canvas Engine + atomic sibling re-fusion |
 

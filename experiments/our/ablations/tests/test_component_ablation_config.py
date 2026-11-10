@@ -78,21 +78,35 @@ class TestComponentAblationConfig(unittest.TestCase):
             self.assertFalse(cfg.enable_continuous_enclosure_subcanvas)
             self.assertFalse(cfg.enable_spatial_compressed_canvas)
 
-            # 2. SGAP + Single Crop
+            # 2. Rigid Quadtree + Aggregation
+            engines_rigid_agg = load_ablation_engines(component="qwen_fp_rigid_cg_agg")
+            cfg = engines_rigid_agg["config"]
+            self.assertEqual(cfg.partition_mode, "quadrant_only")
+            self.assertTrue(cfg.enable_continuous_enclosure_subcanvas)
+            self.assertTrue(cfg.enable_spatial_compressed_canvas)
+
+            # 3. SGAP + Single Crop
             engines_sgap = load_ablation_engines(component="qwen_fp_sgap_cg_single")
             cfg = engines_sgap["config"]
             self.assertEqual(cfg.partition_mode, "sgap_only")
             self.assertFalse(cfg.enable_continuous_enclosure_subcanvas)
             self.assertFalse(cfg.enable_spatial_compressed_canvas)
 
-            # 3. ASP + Single Crop
+            # 4. SGAP + Aggregation
+            engines_sgap_agg = load_ablation_engines(component="qwen_fp_sgap_cg_agg")
+            cfg = engines_sgap_agg["config"]
+            self.assertEqual(cfg.partition_mode, "sgap_only")
+            self.assertTrue(cfg.enable_continuous_enclosure_subcanvas)
+            self.assertTrue(cfg.enable_spatial_compressed_canvas)
+
+            # 5. ASP + Single Crop
             engines_asp = load_ablation_engines(component="qwen_fp_asp_cg_single")
             cfg = engines_asp["config"]
             self.assertEqual(cfg.partition_mode, "hybrid")
             self.assertFalse(cfg.enable_continuous_enclosure_subcanvas)
             self.assertFalse(cfg.enable_spatial_compressed_canvas)
 
-            # 4. ASP + Aggregation (Ours)
+            # 6. ASP + Aggregation (Ours)
             engines_agg = load_ablation_engines(component="qwen_fp_asp_cg_agg")
             cfg = engines_agg["config"]
             self.assertEqual(cfg.partition_mode, "hybrid")

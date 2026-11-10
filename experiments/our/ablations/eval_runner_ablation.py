@@ -62,8 +62,10 @@ def parse_args():
 
     # Component Increment Ablation
     parser.add_argument("--component", type=str, default=None,
-                        choices=["qwen", "qwen_fast_path", "qwen_fp_rigid_cg_single",
-                                 "qwen_fp_sgap_cg_single", "qwen_fp_asp_cg_single", "qwen_fp_asp_cg_agg"],
+                        choices=["qwen", "qwen_fast_path",
+                                 "qwen_fp_rigid_cg_single", "qwen_fp_rigid_cg_agg",
+                                 "qwen_fp_sgap_cg_single", "qwen_fp_sgap_cg_agg",
+                                 "qwen_fp_asp_cg_single", "qwen_fp_asp_cg_agg"],
                         help="Component increment ablation variant.")
 
     # Detector & Scorer Backbones

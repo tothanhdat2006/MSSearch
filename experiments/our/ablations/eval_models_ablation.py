@@ -104,11 +104,19 @@ def load_ablation_engines(
         cfg_dict["enable_continuous_enclosure_subcanvas"] = False
         cfg_dict["enable_spatial_compressed_canvas"] = False
         cfg_dict["spatial_canvas_relational_only"] = False
+    elif component == "qwen_fp_rigid_cg_agg":
+        cfg_dict["partition_mode"] = "quadrant_only"
+        cfg_dict["enable_continuous_enclosure_subcanvas"] = True
+        cfg_dict["enable_spatial_compressed_canvas"] = True
     elif component == "qwen_fp_sgap_cg_single":
         cfg_dict["partition_mode"] = "sgap_only"
         cfg_dict["enable_continuous_enclosure_subcanvas"] = False
         cfg_dict["enable_spatial_compressed_canvas"] = False
         cfg_dict["spatial_canvas_relational_only"] = False
+    elif component == "qwen_fp_sgap_cg_agg":
+        cfg_dict["partition_mode"] = "sgap_only"
+        cfg_dict["enable_continuous_enclosure_subcanvas"] = True
+        cfg_dict["enable_spatial_compressed_canvas"] = True
     elif component == "qwen_fp_asp_cg_single":
         cfg_dict["partition_mode"] = "hybrid"
         cfg_dict["enable_continuous_enclosure_subcanvas"] = False
@@ -118,7 +126,6 @@ def load_ablation_engines(
         cfg_dict["partition_mode"] = "hybrid"
         cfg_dict["enable_continuous_enclosure_subcanvas"] = True
         cfg_dict["enable_spatial_compressed_canvas"] = True
-
     config = MSSearchConfig.from_dict(cfg_dict)
 
     return {
