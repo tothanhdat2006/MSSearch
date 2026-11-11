@@ -102,18 +102,17 @@ def build_mllm_messages(question: str, enable_relational: bool = False) -> List[
                     "text": (
                         "You are an expert visual search parser. Given a question, extract search targets and return a JSON object with:\n"
                         "- \"active_objects\": list of key visual search entities or text needed to answer the question\n"
-                        "- \"target_entity\": the primary object being inspected, counted, or located (or null)\n"
                         "- \"question_type\": one of ['single_object_attribute', 'counting', 'text_reading', 'general']\n"
                         "Return ONLY valid JSON."
                     )
                 }]
             },
             {"role": "user", "content": [{"type": "text", "text": "Question: \"What is the registration number of the boat?\""}]},
-            {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["boat"], "target_entity": "boat", "question_type": "single_object_attribute"}'}]},
+            {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["boat"], "question_type": "single_object_attribute"}'}]},
             {"role": "user", "content": [{"type": "text", "text": "Question: \"What is the color of the mailbox?\""}]},
-            {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["mailbox"], "target_entity": "mailbox", "question_type": "single_object_attribute"}'}]},
+            {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["mailbox"], "question_type": "single_object_attribute"}'}]},
             {"role": "user", "content": [{"type": "text", "text": "Question: \"How many windows are on the brick building?\""}]},
-            {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["brick building", "window"], "target_entity": "window", "question_type": "counting"}'}]},
+            {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["brick building", "window"], "question_type": "counting"}'}]},
             {"role": "user", "content": [{"type": "text", "text": f"Question: \"{question}\""}]}
         ]
 
@@ -151,16 +150,16 @@ def build_few_shot_prompt(question: str, enable_relational: bool = False) -> str
     """Builds single text prompt for text-completion VLMs."""
     if not enable_relational:
         return (
-            "You are an expert visual search parser. Given a question, return a JSON object with 'active_objects', 'target_entity', and 'question_type'.\n\n"
+            "You are an expert visual search parser. Given a question, return a JSON object with 'active_objects' and 'question_type'.\n\n"
             "Example 1 (Single-Object Attribute):\n"
             "Question: \"What is the registration number of the boat?\"\n"
-            "JSON: {\"active_objects\": [\"boat\"], \"target_entity\": \"boat\", \"question_type\": \"single_object_attribute\"}\n\n"
+            "JSON: {\"active_objects\": [\"boat\"], \"question_type\": \"single_object_attribute\"}\n\n"
             "Example 2 (Single-Object Attribute):\n"
             "Question: \"What is the color of the mailbox?\"\n"
-            "JSON: {\"active_objects\": [\"mailbox\"], \"target_entity\": \"mailbox\", \"question_type\": \"single_object_attribute\"}\n\n"
+            "JSON: {\"active_objects\": [\"mailbox\"], \"question_type\": \"single_object_attribute\"}\n\n"
             "Example 3 (Counting):\n"
             "Question: \"How many windows are on the brick building?\"\n"
-            "JSON: {\"active_objects\": [\"brick building\", \"window\"], \"target_entity\": \"window\", \"question_type\": \"counting\"}\n\n"
+            "JSON: {\"active_objects\": [\"brick building\", \"window\"], \"question_type\": \"counting\"}\n\n"
             f"Question: \"{question}\"\nJSON:"
         )
 
@@ -212,7 +211,8 @@ def parse_mllm_json_response(raw_text: str) -> Tuple[List[str], Optional[str], O
             parsed_target = data.get("target_entity")
             if parsed_target:
                 parsed_target = str(parsed_target).strip().lower()
-
+            elif raw_targets:
+                parsed_target = raw_targets[0]
             parsed_anchor = data.get("anchor_entity")
             if parsed_anchor:
                 parsed_anchor = str(parsed_anchor).strip().lower()
