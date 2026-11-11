@@ -74,13 +74,16 @@ case "${MODE}" in
         POOL="${ARGS[1]:-N_5}"
         COMPONENTS=(
             "qwen"
-            "qwen_fast_path"
-            "qwen_fp_rigid_cg_single"
-            "qwen_fp_rigid_cg_agg"
-            "qwen_fp_sgap_cg_single"
-            "qwen_fp_sgap_cg_agg"
-            "qwen_fp_asp_cg_single"
-            "qwen_fp_asp_cg_agg"
+            "qwen_rigid_topk"
+            "qwen_sgap_topk"
+            "qwen_rigid_fg_det_abs"
+            "qwen_sgap_fg_det_abs"
+            "qwen_rigid_fg_exist_abs"
+            "qwen_sgap_fg_exist_abs"
+            "qwen_rigid_fg_det_latent"
+            "qwen_sgap_fg_det_latent"
+            "qwen_rigid_full"
+            "qwen_sgap_full"
         )
         for comp in "${COMPONENTS[@]}"; do
             run_job --component "${comp}" --model "${MODEL}" --pool-mode "${POOL}"
