@@ -112,12 +112,14 @@ def main():
     # 3. Determine target component
     inferred_comp = records[0].get("component", "qwen_sgap_full")
     target_comp = args.component or map_legacy_component_to_repaired(inferred_comp)
-    print(f"[Re-run Tool] Original component: '{inferred_comp}' -> Target component: '{target_comp}'.")
+    inferred_pool = records[0].get("pool_name", args.pool_mode)
+    effective_pool = args.pool_mode if args.pool_mode != "N_5" or "pool_name" not in records[0] else inferred_pool
+    print(f"[Re-run Tool] Original component: '{inferred_comp}' -> Target component: '{target_comp}' | Pool: '{effective_pool}'.")
 
     # 4. Load dataset tasks for fast lookup
     print(f"[Re-run Tool] Loading dataset from '{args.dataset_path}'...")
     all_samples, eval_tasks = load_and_slice_dataset(
-        args.dataset_path, args.pool_mode, None, None, None, args.max_samples
+        args.dataset_path, effective_pool, None, None, None, args.max_samples
     )
     task_map: Dict[str, Any] = {}
     for t in eval_tasks:
@@ -140,6 +142,7 @@ def main():
     )
     # Enforce pure visual search guardrails
     engines["config"].enable_fast_path = False
+    engines["config"].enable_direct_answer = False
     engines["config"].enable_relational_parsing = False
     engines["config"].enable_continuous_enclosure_subcanvas = False
     engines["config"].enable_spatial_compressed_canvas = False
@@ -164,14 +167,19 @@ def main():
             continue
 
         s_idx, sample, pool_name, pool_info = task
-        candidate_meta = pool_info.get("candidate_images", [])
-        images = [resolve_image(c, args.image_dir, getattr(engines["zoom_model"], "image_processor", None)) for c in candidate_meta]
+        candidate_meta = pool_info.get("images", [])
+        images = [resolve_image(c, args.image_dir) for c in candidate_meta]
 
         t0 = time.perf_counter()
         resp = run_ablation_pipeline(engines, images, sample, s_idx)
         lat = round(time.perf_counter() - t0, 3)
 
-        gt_list, gt_img_id, gt_img_idx = resolve_ground_truth(sample, candidate_meta)
+        gt_list = resolve_ground_truth(sample)
+        gt_img = pool_info.get("gt_image") or sample.get("gt_image")
+        gt_img_id = gt_img.get("image_id") if isinstance(gt_img, dict) else (gt_img or "")
+        gt_idx = pool_info.get("gt_index")
+        gt_img_idx = (gt_idx - 1) if gt_idx is not None else next((i for i, m in enumerate(candidate_meta) if str(m.get("image_id")) == str(gt_img_id)), None)
+
         pred_text = str(resp.get("primary_answer", ""))
         telemetry = resp.get("telemetry", {})
         evidence_indices = telemetry.get("evidence_images", [])
@@ -179,7 +187,7 @@ def main():
             candidate_meta[i].get("image_id") if isinstance(candidate_meta[i], dict) else str(candidate_meta[i])
             for i in evidence_indices if 0 <= i < len(candidate_meta)
         ]
-        is_img_ok = (str(gt_img_id) in [str(x) for x in evidence_img_ids]) if (evidence_img_ids and gt_img_id) else False
+        is_img_ok = (str(gt_img_id) in [str(x) for x in evidence_img_ids]) if (evidence_img_ids and gt_img_id) else (False if gt_img_id else None)
 
         prim_img_idx = telemetry.get("primary_evidence_image")
         if prim_img_idx is None and evidence_indices:
@@ -187,7 +195,7 @@ def main():
         prim_img_id = (
             candidate_meta[prim_img_idx].get("image_id") if isinstance(candidate_meta[prim_img_idx], dict) else str(candidate_meta[prim_img_idx])
         ) if (prim_img_idx is not None and 0 <= prim_img_idx < len(candidate_meta)) else None
-        is_prim_img_ok = (str(gt_img_id) == str(prim_img_id)) if (gt_img_id and prim_img_id) else False
+        is_prim_img_ok = (str(gt_img_id) == str(prim_img_id)) if (gt_img_id and prim_img_id) else (False if gt_img_id else None)
 
         stage_stats = compute_stage_ret_rej_tokens(telemetry, gt_img_idx, sample.get("target_bbox"), images)
 

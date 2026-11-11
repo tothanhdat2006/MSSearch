@@ -638,7 +638,7 @@ def run_feature_grouping_and_gating(
                 reverse=True,
             )
 
-        max_allowed_patches = max(config.max_retained_patches, getattr(config, "top_k_retention", 100) * 2)
+        max_allowed_patches = max(config.max_retained_patches, getattr(config, "top_k_retention", 100))
         if getattr(config, "enable_retention_hard_cap", True) and len(sorted_patches) > max_allowed_patches:
             k_cap = max_allowed_patches
             if getattr(config, "enable_dynamic_retention_elasticity", True):
@@ -658,8 +658,8 @@ def run_feature_grouping_and_gating(
                     else:
                         break
 
-                if config.verbose and k_cap > config.max_retained_patches:
-                    delta_k = k_cap - config.max_retained_patches
+                if config.verbose and k_cap > max_allowed_patches:
+                    delta_k = k_cap - max_allowed_patches
                     print(f"[Stage 4][Dynamic Elasticity] Cutoff profile {cutoff_profile} tied: dynamically expanded retention budget by +{delta_k} (retaining {k_cap} patches).")
 
             pruned_by_cap = len(sorted_patches) - k_cap

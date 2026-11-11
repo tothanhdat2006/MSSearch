@@ -100,11 +100,11 @@ def load_ablation_engines(
 
     # Apply Default Configuration Guardrails (Fast Path & Sub-canvas Aggregation Disabled)
     cfg_dict["enable_fast_path"] = False
+    cfg_dict["enable_direct_answer"] = False
     cfg_dict["enable_relational_parsing"] = False
     cfg_dict["enable_continuous_enclosure_subcanvas"] = False
     cfg_dict["enable_spatial_compressed_canvas"] = False
     cfg_dict["spatial_canvas_relational_only"] = False
-
     # Apply Paired Component Increments (Rigid vs SGAP)
     if component == "qwen_rigid_topk":
         cfg_dict["partition_mode"] = "quadrant_only"
