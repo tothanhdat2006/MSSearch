@@ -60,8 +60,7 @@ class MSSearchConfig:
     # -------------------------------------------------------------------------
     enable_feature_grouping: bool = True         # Master toggle for semantic cosine clustering of patches
     enable_existence_scanning: bool = True       # Reorganized Module 3: verify detected groups via VLM
-    top_k_retention: int = 100                   # Candidate retention budget per branch for ablations & fallbacks
-    retain_absent_groups_topk: bool = False      # For ablations: retain top-k centroids from absent groups without VLM latent
+    retain_absent_groups_naive: bool = False     # Ablation Variant B: retain centroid patch of absent groups without VLM latent probe
     grouping_sim_threshold: float = 0.80         # Cosine similarity threshold for grouping patches
     reuse_stage3_features: bool = True           # Reuse patch feature vectors from Stage 3
     sam3_group_det_threshold: float = 0.35       # SAM3 confidence threshold to keep a group

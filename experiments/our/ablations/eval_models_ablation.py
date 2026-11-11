@@ -106,68 +106,60 @@ def load_ablation_engines(
     cfg_dict["enable_spatial_compressed_canvas"] = False
     cfg_dict["spatial_canvas_relational_only"] = False
     # Apply Paired Component Increments (Rigid vs SGAP)
-    if component == "qwen_rigid_topk":
+    if component in ("qwen_rigid_topk",):
         cfg_dict["partition_mode"] = "quadrant_only"
         cfg_dict["enable_feature_grouping"] = False
-        cfg_dict["top_k_retention"] = 100
-    elif component == "qwen_sgap_topk":
+    elif component in ("qwen_sgap_topk",):
         cfg_dict["partition_mode"] = "sgap_only"
         cfg_dict["enable_feature_grouping"] = False
-        cfg_dict["top_k_retention"] = 100
-    elif component == "qwen_rigid_fg_det_abs_topk":
+    elif component in ("qwen_rigid_fg_det_abs", "qwen_rigid_fg_det_abs_topk"):
         cfg_dict["partition_mode"] = "quadrant_only"
         cfg_dict["enable_feature_grouping"] = True
         cfg_dict["enable_existence_scanning"] = False
         cfg_dict["enable_latent_repartition"] = False
-        cfg_dict["retain_absent_groups_topk"] = True
-        cfg_dict["top_k_retention"] = 100
-    elif component == "qwen_sgap_fg_det_abs_topk":
+        cfg_dict["retain_absent_groups_naive"] = True
+    elif component in ("qwen_sgap_fg_det_abs", "qwen_sgap_fg_det_abs_topk"):
         cfg_dict["partition_mode"] = "sgap_only"
         cfg_dict["enable_feature_grouping"] = True
         cfg_dict["enable_existence_scanning"] = False
         cfg_dict["enable_latent_repartition"] = False
-        cfg_dict["retain_absent_groups_topk"] = True
-        cfg_dict["top_k_retention"] = 100
-    elif component == "qwen_rigid_fg_exist_abs_topk":
+        cfg_dict["retain_absent_groups_naive"] = True
+    elif component in ("qwen_rigid_fg_exist_abs", "qwen_rigid_fg_exist_abs_topk"):
         cfg_dict["partition_mode"] = "quadrant_only"
         cfg_dict["enable_feature_grouping"] = True
         cfg_dict["enable_existence_scanning"] = True
         cfg_dict["enable_latent_repartition"] = False
-        cfg_dict["retain_absent_groups_topk"] = True
-        cfg_dict["top_k_retention"] = 100
-    elif component == "qwen_sgap_fg_exist_abs_topk":
+        cfg_dict["retain_absent_groups_naive"] = True
+    elif component in ("qwen_sgap_fg_exist_abs", "qwen_sgap_fg_exist_abs_topk"):
         cfg_dict["partition_mode"] = "sgap_only"
         cfg_dict["enable_feature_grouping"] = True
         cfg_dict["enable_existence_scanning"] = True
         cfg_dict["enable_latent_repartition"] = False
-        cfg_dict["retain_absent_groups_topk"] = True
-        cfg_dict["top_k_retention"] = 100
-    elif component == "qwen_rigid_fg_det_latent_repart":
+        cfg_dict["retain_absent_groups_naive"] = True
+    elif component in ("qwen_rigid_fg_det_latent", "qwen_rigid_fg_det_latent_repart"):
         cfg_dict["partition_mode"] = "quadrant_only"
         cfg_dict["enable_feature_grouping"] = True
         cfg_dict["enable_existence_scanning"] = False
         cfg_dict["enable_latent_repartition"] = True
-        cfg_dict["retain_absent_groups_topk"] = False
-        cfg_dict["top_k_retention"] = 100
-    elif component == "qwen_sgap_fg_det_latent_repart":
+        cfg_dict["retain_absent_groups_naive"] = False
+    elif component in ("qwen_sgap_fg_det_latent", "qwen_sgap_fg_det_latent_repart"):
         cfg_dict["partition_mode"] = "sgap_only"
         cfg_dict["enable_feature_grouping"] = True
         cfg_dict["enable_existence_scanning"] = False
         cfg_dict["enable_latent_repartition"] = True
-        cfg_dict["retain_absent_groups_topk"] = False
-        cfg_dict["top_k_retention"] = 100
+        cfg_dict["retain_absent_groups_naive"] = False
     elif component == "qwen_rigid_full":
         cfg_dict["partition_mode"] = "quadrant_only"
         cfg_dict["enable_feature_grouping"] = True
         cfg_dict["enable_existence_scanning"] = True
         cfg_dict["enable_latent_repartition"] = True
-        cfg_dict["retain_absent_groups_topk"] = False
+        cfg_dict["retain_absent_groups_naive"] = False
     elif component == "qwen_sgap_full":
         cfg_dict["partition_mode"] = "sgap_only"
         cfg_dict["enable_feature_grouping"] = True
         cfg_dict["enable_existence_scanning"] = True
         cfg_dict["enable_latent_repartition"] = True
-        cfg_dict["retain_absent_groups_topk"] = False
+        cfg_dict["retain_absent_groups_naive"] = False
     # Legacy compatibility mappings
     elif component == "qwen_fp_rigid_cg_single":
         cfg_dict["partition_mode"] = "quadrant_only"

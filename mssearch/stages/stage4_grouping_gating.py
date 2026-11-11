@@ -78,7 +78,7 @@ def run_feature_grouping_and_gating(
 
     # If grouping is ablated by config, keep all bounded patches directly
     if not config.enable_feature_grouping:
-        top_k = getattr(config, "top_k_retention", 100)
+        k_unclustered = getattr(config, "max_retained_patches", 20)
         sorted_bp = sorted(
             bounded_patches,
             key=lambda p: (
@@ -88,9 +88,9 @@ def run_feature_grouping_and_gating(
             ),
             reverse=True,
         )
-        retained = sorted_bp[:top_k]
+        retained = sorted_bp[:k_unclustered]
         if config.verbose:
-            print(f"[Stage 4] Feature grouping disabled by config; retaining top {len(retained)}/{len(bounded_patches)} bounded patches ranked by SigLIP similarity (top_k={top_k}).")
+            print(f"[Stage 4] Feature grouping disabled by config; retaining top {len(retained)}/{len(bounded_patches)} bounded patches ranked by SigLIP similarity (cap={k_unclustered}).")
         group_records = []
         if return_debug:
             for idx, p in enumerate(retained):
@@ -324,12 +324,11 @@ def run_feature_grouping_and_gating(
         # Queue unresolved groups for VLM probing or apply modular toggle fallbacks
         enable_exist = getattr(config, "enable_existence_scanning", getattr(config, "enable_existence_gating", True))
         enable_latent = getattr(config, "enable_latent_repartition", getattr(config, "enable_latent_gating", True))
-        retain_abs = getattr(config, "retain_absent_groups_topk", False)
+        retain_abs_naive = getattr(config, "retain_absent_groups_naive", getattr(config, "retain_absent_groups_topk", False))
 
         if not has_active_match:
             if group_detected_objects:
                 best_det = max(group_detected_objects, key=lambda d: d["score"])
-                state["best_det_box"] = best_det.get("local_box")
                 if enable_exist and zoom_model is not None:
                     best_patch = bounded_patches[best_det["patch_idx"]]
                     best_box_ints = tuple(int(round(float(c))) for c in best_patch.box)
@@ -349,9 +348,9 @@ def run_feature_grouping_and_gating(
                         "state": state,
                     })
                 else:
-                    # Existence Scanning disabled: directly confirm detected group
+                    # Existence Scanning disabled: directly confirm detected group with detector score
                     state["has_active_match"] = True
-                    state["match_reason"] = f"detector_topk_confirmed (score={best_det['score']:.2f})"
+                    state["match_reason"] = f"sam3_det_raw (score={best_det['score']:.2f})"
             else:
                 # Absent group (no detections)
                 if enable_latent and zoom_model is not None and active_objects:
@@ -359,10 +358,10 @@ def run_feature_grouping_and_gating(
                         "g_idx": g_idx,
                         "state": state,
                     })
-                elif retain_abs:
-                    # Latent disabled but retain absent group centroids requested
+                elif retain_abs_naive:
+                    # Latent disabled: Variant B naive absent centroid retention
                     state["has_active_match"] = True
-                    state["match_reason"] = "absent_topk_retained"
+                    state["match_reason"] = "naive_absent_centroid"
                 else:
                     state["has_active_match"] = False
                     state["match_reason"] = "latent_disabled_pruned"
@@ -517,20 +516,20 @@ def run_feature_grouping_and_gating(
         })
 
         if has_active_match:
-            is_detection = ("sam3_det" in match_reason or "detection" in match_reason or "stage2" in match_reason or "detector_topk" in match_reason)
+            is_detection = ("sam3_det" in match_reason or "detection" in match_reason or "stage2" in match_reason)
             group_score = 0.0
             if is_detection:
                 group_score = 2.0 + (vlm_exist_score if vlm_exist_score is not None else 0.5) + max_det_score
             elif "latent" in match_reason:
                 group_score = 1.0 + (vlm_latent_score if vlm_latent_score is not None else 0.0)
-            elif "absent_topk" in match_reason:
+            elif "naive_absent" in match_reason or "absent_topk" in match_reason:
                 group_score = 0.5 + float(max_siglip_score)
             else:
                 group_score = 0.5
 
             if getattr(config, "enable_group_retention_caps", True):
                 if is_detection:
-                    k_det = max(getattr(config, "max_patches_per_detected_group", 4), getattr(config, "top_k_retention", 100) if "detector_topk" in match_reason else 4)
+                    k_det = getattr(config, "max_patches_per_detected_group", 8)
                     detected_members = []
                     non_detected_members = []
                     for i in member_indices:
@@ -577,10 +576,10 @@ def run_feature_grouping_and_gating(
                         )
                     ]
                     chosen_indices = (detected_sorted + non_detected_sorted)[:k_det]
-                elif "absent_topk" in match_reason:
+                elif "naive_absent" in match_reason or "absent_topk" in match_reason:
                     chosen_indices = [rep_idx]
                 else:
-                    k_lat = getattr(config, "max_patches_per_latent_group", 1)
+                    k_lat = getattr(config, "max_patches_per_latent_group", 2)
                     if rep_idx in member_indices:
                         other_indices = [i for i in member_indices if i != rep_idx]
                         chosen_indices = ([rep_idx] + other_indices)[:k_lat]
@@ -638,7 +637,7 @@ def run_feature_grouping_and_gating(
                 reverse=True,
             )
 
-        max_allowed_patches = max(config.max_retained_patches, getattr(config, "top_k_retention", 100))
+        max_allowed_patches = getattr(config, "max_retained_patches", 20)
         if getattr(config, "enable_retention_hard_cap", True) and len(sorted_patches) > max_allowed_patches:
             k_cap = max_allowed_patches
             if getattr(config, "enable_dynamic_retention_elasticity", True):

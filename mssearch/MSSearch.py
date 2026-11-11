@@ -424,15 +424,56 @@ class MultiSourceSearchEngine:
         telemetry["route"] = "visual_search_branch" if len(routes_executed) == 1 else "waterfall_cascade"
         telemetry["routes_executed"] = routes_executed
         t0 = time.perf_counter()
-        # Reuses feature map extracted during Stage 2 canvas check
-        feature_cache = (fast_path_result.feature_cache if fast_path_result is not None and self.config.reuse_stage2_features else {})
+        feature_cache: Dict[int, np.ndarray] = {}
+        detected_boxes_by_image: Dict[int, List[Tuple[int, int, int, int]]] = {}
+
+        if fast_path_result is not None:
+            if self.config.reuse_stage2_features:
+                feature_cache = fast_path_result.feature_cache
+            detected_boxes_by_image = getattr(fast_path_result, "boxes_by_image", {})
+
+        # Autonomous vision feature extraction when fast path is disabled or cache empty
+        if not feature_cache and self.sam_model is not None and candidate_images:
+            import torch
+            t_feat = time.perf_counter()
+            target_indices = unresolved_images if unresolved_images else list(range(len(candidate_images)))
+            for idx in target_indices:
+                if 0 <= idx < len(candidate_images):
+                    try:
+                        with torch.inference_mode():
+                            bb_out, proc_res, txt_id = self.sam_model.batch_inference(
+                                candidate_images[idx], active_objects
+                            )
+                            if bb_out is not None and "vision_features" in bb_out:
+                                vf = bb_out["vision_features"]
+                                vf_np = vf.detach().cpu().float().numpy().squeeze(0) if isinstance(vf, torch.Tensor) else np.squeeze(vf, axis=0)
+                                feature_cache[idx] = vf_np
+                            if proc_res and txt_id:
+                                img_boxes = []
+                                for tid in txt_id:
+                                    res = proc_res.get(tid, {}) if isinstance(proc_res, dict) else {}
+                                    b_list = res.get("boxes", [])
+                                    s_list = res.get("scores", [])
+                                    if isinstance(b_list, torch.Tensor): b_list = b_list.tolist()
+                                    if isinstance(s_list, torch.Tensor): s_list = s_list.tolist()
+                                    for b, s in zip(b_list, s_list):
+                                        if float(s) >= getattr(sub_config, "sam3_group_det_threshold", 0.35):
+                                            img_boxes.append(tuple(int(round(float(c))) for c in b[:4]))
+                                if img_boxes:
+                                    detected_boxes_by_image[idx] = img_boxes
+                    except Exception as e:
+                        if is_verbose:
+                            print(f"[Stage 3][Feature Extraction Warning] SAM3 forward failed on image {idx}: {e}")
+            telemetry["timings_sec"]["sam3_canvas_features"] = round(time.perf_counter() - t_feat, 3)
+
         bounded_patches = partition_candidate_images(
             candidate_images=candidate_images,
             stage2_feature_cache=feature_cache,
             config=sub_config,
             active_objects=active_objects,
             siglip_model=self.siglip_model,
-            target_img_indices=unresolved_images
+            target_img_indices=unresolved_images,
+            sam_model=self.sam_model
         )
         lat_s3 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage3_partitioning"] = lat_s3
@@ -452,7 +493,7 @@ class MultiSourceSearchEngine:
             active_objects=active_objects,
             sam_model=self.sam_model,
             config=sub_config,
-            detected_boxes_by_image=fast_path_result.boxes_by_image,
+            detected_boxes_by_image=detected_boxes_by_image,
             zoom_model=self.zoom_model,
             return_debug=True,
             question=question
@@ -507,12 +548,25 @@ class MultiSourceSearchEngine:
                         local_cfg.max_partition_depth = min(
                             local_cfg.max_partition_depth, local_cfg.max_latent_repartition_depth
                         )
+                        local_feature_cache: Dict[int, np.ndarray] = {}
+                        if self.sam_model is not None:
+                            import torch
+                            try:
+                                with torch.inference_mode():
+                                    bb_out, _, _ = self.sam_model.batch_inference(parent_crop, active_objects)
+                                    if bb_out is not None and "vision_features" in bb_out:
+                                        vf = bb_out["vision_features"]
+                                        local_feature_cache[0] = vf.detach().cpu().float().numpy().squeeze(0) if isinstance(vf, torch.Tensor) else np.squeeze(vf, axis=0)
+                            except Exception:
+                                pass
+
                         local_child_patches = partition_candidate_images(
                             candidate_images=[parent_crop],
-                            stage2_feature_cache={},
+                            stage2_feature_cache=local_feature_cache,
                             config=local_cfg,
                             active_objects=active_objects,
-                            siglip_model=self.siglip_model
+                            siglip_model=self.siglip_model,
+                            sam_model=self.sam_model
                         )
 
                         if local_child_patches:

@@ -83,63 +83,61 @@ class TestComponentAblationConfig(unittest.TestCase):
             cfg1 = load_ablation_engines(component="qwen_rigid_topk")["config"]
             self.assertEqual(cfg1.partition_mode, "quadrant_only")
             self.assertFalse(cfg1.enable_feature_grouping)
-            self.assertEqual(cfg1.top_k_retention, 100)
             self.assertFalse(cfg1.enable_fast_path)
 
             # 2. SGAP Top-K
             cfg2 = load_ablation_engines(component="qwen_sgap_topk")["config"]
             self.assertEqual(cfg2.partition_mode, "sgap_only")
             self.assertFalse(cfg2.enable_feature_grouping)
-            self.assertEqual(cfg2.top_k_retention, 100)
             self.assertFalse(cfg2.enable_fast_path)
 
-            # 3. Rigid FG + Det Top-K + Abs Top-K
-            cfg3 = load_ablation_engines(component="qwen_rigid_fg_det_abs_topk")["config"]
+            # 3. Rigid FG + Det + Naive Absent (Variant B)
+            cfg3 = load_ablation_engines(component="qwen_rigid_fg_det_abs")["config"]
             self.assertEqual(cfg3.partition_mode, "quadrant_only")
             self.assertTrue(cfg3.enable_feature_grouping)
             self.assertFalse(cfg3.enable_existence_scanning)
             self.assertFalse(cfg3.enable_latent_repartition)
-            self.assertTrue(cfg3.retain_absent_groups_topk)
+            self.assertTrue(cfg3.retain_absent_groups_naive)
 
-            # 4. SGAP FG + Det Top-K + Abs Top-K
-            cfg4 = load_ablation_engines(component="qwen_sgap_fg_det_abs_topk")["config"]
+            # 4. SGAP FG + Det + Naive Absent (Variant B)
+            cfg4 = load_ablation_engines(component="qwen_sgap_fg_det_abs")["config"]
             self.assertEqual(cfg4.partition_mode, "sgap_only")
             self.assertTrue(cfg4.enable_feature_grouping)
             self.assertFalse(cfg4.enable_existence_scanning)
             self.assertFalse(cfg4.enable_latent_repartition)
-            self.assertTrue(cfg4.retain_absent_groups_topk)
+            self.assertTrue(cfg4.retain_absent_groups_naive)
 
-            # 5. Rigid FG + Existence Scanning + Abs Top-K
-            cfg5 = load_ablation_engines(component="qwen_rigid_fg_exist_abs_topk")["config"]
+            # 5. Rigid FG + Existence Scanning + Naive Absent (Variant B)
+            cfg5 = load_ablation_engines(component="qwen_rigid_fg_exist_abs")["config"]
             self.assertEqual(cfg5.partition_mode, "quadrant_only")
             self.assertTrue(cfg5.enable_feature_grouping)
             self.assertTrue(cfg5.enable_existence_scanning)
             self.assertFalse(cfg5.enable_latent_repartition)
-            self.assertTrue(cfg5.retain_absent_groups_topk)
+            self.assertTrue(cfg5.retain_absent_groups_naive)
 
-            # 6. SGAP FG + Existence Scanning + Abs Top-K
-            cfg6 = load_ablation_engines(component="qwen_sgap_fg_exist_abs_topk")["config"]
+            # 6. SGAP FG + Existence Scanning + Naive Absent (Variant B)
+            cfg6 = load_ablation_engines(component="qwen_sgap_fg_exist_abs")["config"]
             self.assertEqual(cfg6.partition_mode, "sgap_only")
             self.assertTrue(cfg6.enable_feature_grouping)
             self.assertTrue(cfg6.enable_existence_scanning)
             self.assertFalse(cfg6.enable_latent_repartition)
-            self.assertTrue(cfg6.retain_absent_groups_topk)
+            self.assertTrue(cfg6.retain_absent_groups_naive)
 
-            # 7. Rigid FG + Det Top-K + Latent Re-partitioning
-            cfg7 = load_ablation_engines(component="qwen_rigid_fg_det_latent_repart")["config"]
+            # 7. Rigid FG + Det + Latent Re-partitioning
+            cfg7 = load_ablation_engines(component="qwen_rigid_fg_det_latent")["config"]
             self.assertEqual(cfg7.partition_mode, "quadrant_only")
             self.assertTrue(cfg7.enable_feature_grouping)
             self.assertFalse(cfg7.enable_existence_scanning)
             self.assertTrue(cfg7.enable_latent_repartition)
-            self.assertFalse(cfg7.retain_absent_groups_topk)
+            self.assertFalse(cfg7.retain_absent_groups_naive)
 
-            # 8. SGAP FG + Det Top-K + Latent Re-partitioning
-            cfg8 = load_ablation_engines(component="qwen_sgap_fg_det_latent_repart")["config"]
+            # 8. SGAP FG + Det + Latent Re-partitioning
+            cfg8 = load_ablation_engines(component="qwen_sgap_fg_det_latent")["config"]
             self.assertEqual(cfg8.partition_mode, "sgap_only")
             self.assertTrue(cfg8.enable_feature_grouping)
             self.assertFalse(cfg8.enable_existence_scanning)
             self.assertTrue(cfg8.enable_latent_repartition)
-            self.assertFalse(cfg8.retain_absent_groups_topk)
+            self.assertFalse(cfg8.retain_absent_groups_naive)
 
             # 9. Rigid Full
             cfg9 = load_ablation_engines(component="qwen_rigid_full")["config"]
@@ -147,6 +145,7 @@ class TestComponentAblationConfig(unittest.TestCase):
             self.assertTrue(cfg9.enable_feature_grouping)
             self.assertTrue(cfg9.enable_existence_scanning)
             self.assertTrue(cfg9.enable_latent_repartition)
+            self.assertFalse(cfg9.retain_absent_groups_naive)
 
             # 10. SGAP Full (Ours)
             cfg10 = load_ablation_engines(component="qwen_sgap_full")["config"]
@@ -154,6 +153,7 @@ class TestComponentAblationConfig(unittest.TestCase):
             self.assertTrue(cfg10.enable_feature_grouping)
             self.assertTrue(cfg10.enable_existence_scanning)
             self.assertTrue(cfg10.enable_latent_repartition)
+            self.assertFalse(cfg10.retain_absent_groups_naive)
             self.assertFalse(cfg10.enable_continuous_enclosure_subcanvas)
     @patch("experiments.our.ablations.eval_models_ablation.run_qwen_direct_multi_image")
     def test_run_ablation_pipeline_qwen_direct(self, mock_qwen):

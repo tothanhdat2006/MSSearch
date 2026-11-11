@@ -61,16 +61,10 @@ def is_fast_path_affected(record: Dict[str, Any]) -> bool:
 
 
 def map_legacy_component_to_repaired(comp: str) -> str:
-    """Maps legacy fast-path component keys to their pure visual search counterparts."""
-    mapping = {
-        "qwen_fp_rigid_cg_single": "qwen_rigid_full",
-        "qwen_fp_sgap_cg_single": "qwen_sgap_full",
-        "qwen_fp_rigid_cg_agg": "qwen_rigid_full",
-        "qwen_fp_sgap_cg_agg": "qwen_sgap_full",
-        "qwen_fp_asp_cg_single": "qwen_sgap_full",
-        "qwen_fp_asp_cg_agg": "qwen_sgap_full",
-    }
-    return mapping.get(comp, comp)
+    m = {"qwen_fp_rigid_cg_single": "qwen_rigid_full", "qwen_fp_sgap_cg_single": "qwen_sgap_full",
+         "qwen_fp_rigid_cg_agg": "qwen_rigid_full", "qwen_fp_sgap_cg_agg": "qwen_sgap_full",
+         "qwen_fp_asp_cg_single": "qwen_sgap_full", "qwen_fp_asp_cg_agg": "qwen_sgap_full"}
+    return m.get(comp, comp)
 
 
 def main():
@@ -245,13 +239,9 @@ def main():
 
     new_correct_count = sum(1 for r in repaired_records if r.get("is_image_correct") is True)
     tot = len(repaired_records)
-    print("\n" + "=" * 60)
-    print(f"[Re-run Complete] Successfully repaired {len(affected_indices)} fast-path samples.")
-    print(f"Output File: '{out_file}'")
-    print(f"Image Accuracy: {old_correct_count}/{tot} ({old_correct_count/tot*100:.2f}%) -> {new_correct_count}/{tot} ({new_correct_count/tot*100:.2f}%)")
-    print(f"Total Replay Time: {time.perf_counter() - t_start_all:.1f}s")
-    print("=" * 60)
-
+    print(f"\n[Re-run Complete] Repaired {len(affected_indices)} fast-path samples -> '{out_file}'\n"
+          f"Image Accuracy: {old_correct_count}/{tot} ({old_correct_count/tot*100:.2f}%) -> {new_correct_count}/{tot} ({new_correct_count/tot*100:.2f}%)\n"
+          f"Total Time: {time.perf_counter() - t_start_all:.1f}s")
 
 if __name__ == "__main__":
     main()

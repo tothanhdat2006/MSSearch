@@ -43,6 +43,7 @@ def partition_candidate_images(
     active_objects: Optional[List[str]] = None,
     siglip_model: Optional[Any] = None,
     target_img_indices: Optional[List[int]] = None,
+    sam_model: Optional[Any] = None,
 ) -> List[BoundedPatch]:
     """
     Executes Entropy-Gated Recursive Patch Partitioning across candidate images.
@@ -61,16 +62,28 @@ def partition_candidate_images(
             ((0, 0, img_w, img_h), 0, None)
         ]
 
-        # Get cached feature map or default empty
+        # Get cached feature map or extract dynamically
         feat_map = stage2_feature_cache.get(img_idx, None)
         if feat_map is not None:
             if config.verbose:
-                print(f"[Stage 3][Non-Fallback] Image {img_idx}: Reusing cached Stage 2 vision feature map (Shape: {feat_map.shape}).")
-        else:
+                print(f"[Stage 3][Non-Fallback] Image {img_idx}: Reusing cached vision feature map (Shape: {feat_map.shape}).")
+        elif sam_model is not None and active_objects:
+            try:
+                import torch
+                with torch.inference_mode():
+                    bb_out, _, _ = sam_model.batch_inference(img_pil, active_objects)
+                    if bb_out is not None and "vision_features" in bb_out:
+                        vf = bb_out["vision_features"]
+                        feat_map = vf.detach().cpu().float().numpy().squeeze(0) if isinstance(vf, torch.Tensor) else np.squeeze(vf, axis=0)
+                        if config.verbose:
+                            print(f"[Stage 3][Dynamic Feature Extraction] Image {img_idx}: Extracted vision feature map via SAM3 (Shape: {feat_map.shape}).")
+            except Exception as e:
+                if config.verbose:
+                    print(f"[Stage 3][Feature Warning] Dynamic feature extraction failed on image {img_idx}: {e}")
+        if feat_map is None:
             feat_map = np.zeros((256, 72, 72), dtype=np.float32)
             if config.verbose:
-                print(f"[Stage 3][Fallback] Image {img_idx}: No Stage 2 feature map in cache; falling back to zero-initialized feature map.")
-
+                print(f"[Stage 3][Fallback] Image {img_idx}: No vision feature map available; falling back to zero-initialized feature map.")
         img_patches: List[BoundedPatch] = []
 
         while work_queue:
