@@ -24,6 +24,7 @@ class CandidateCrop:
     is_compressed_canvas: bool = False
     remapped_boxes: Optional[List[Tuple[int, int, int, int]]] = None
     original_boxes: Optional[List[Tuple[int, int, int, int]]] = None
+    is_already_expanded: bool = False
 
     @property
     def confidence_score(self) -> float:

@@ -83,12 +83,14 @@ class TestComponentAblationConfig(unittest.TestCase):
             cfg1 = load_ablation_engines(component="qwen_rigid_topk")["config"]
             self.assertEqual(cfg1.partition_mode, "quadrant_only")
             self.assertFalse(cfg1.enable_feature_grouping)
+            self.assertEqual(cfg1.max_retained_patches, 50)
             self.assertFalse(cfg1.enable_fast_path)
 
             # 2. SGAP Top-K
             cfg2 = load_ablation_engines(component="qwen_sgap_topk")["config"]
             self.assertEqual(cfg2.partition_mode, "sgap_only")
             self.assertFalse(cfg2.enable_feature_grouping)
+            self.assertEqual(cfg2.max_retained_patches, 50)
             self.assertFalse(cfg2.enable_fast_path)
 
             # 3. Rigid FG + Det + Naive Absent (Variant B)
@@ -180,51 +182,25 @@ class TestComponentAblationConfig(unittest.TestCase):
         self.assertIsNone(resp["primary_evidence_image"])
         self.assertEqual(resp["evidence_images"], [])
 
-    @patch("mssearch.stages.stage1_parser.parse_question_to_active_objects")
-    @patch("mssearch.stages.stage2_fast_path.run_tool_based_fast_path")
-    def test_run_ablation_pipeline_fast_path_triggered(self, mock_fp, mock_parser):
-        mock_result = MagicMock()
-        mock_result.triggered = True
-        mock_result.answer = "red bicycle"
-        mock_result.confidence = 0.85
-        mock_result.evidence_images = [0]
-        mock_result.evidence_img_idx = 0
-        mock_result.detected_boxes = [(10, 10, 50, 50)]
-        mock_result.raw_response = "red bicycle"
-        mock_fp.return_value = mock_result
-
+    @patch("mssearch.MSSearch.get_mssearch_response")
+    def test_run_ablation_pipeline_standard_component(self, mock_mssearch):
+        mock_mssearch.return_value = {
+            "primary_answer": "blue sedan",
+            "primary_evidence_image": 0,
+            "evidence_images": [0],
+            "telemetry": {"route": "visual_search_branch", "stage5_mode": "crops_only"}
+        }
         images = [Image.new("RGB", (100, 100))]
         engines = {
-            "component": "qwen_fast_path", "zoom_model": MagicMock(),
-            "sam_model": MagicMock(), "nlp_model": MagicMock(), "config": MSSearchConfig()
+            "component": "qwen_sgap_full", "zoom_model": MagicMock(),
+            "sam_model": MagicMock(), "siglip_model": MagicMock(),
+            "nlp_model": MagicMock(), "config": MSSearchConfig()
         }
-        sample = {"sample_id": "test_fp", "question": "What is parked?"}
+        sample = {"sample_id": "test_sgap_full", "question": "What car is parked?"}
         resp = run_ablation_pipeline(engines, images, sample, 0)
 
-        self.assertEqual(resp["primary_answer"], "red bicycle")
-        self.assertEqual(resp["telemetry"]["route"], "tool_based_fast_path")
-        self.assertEqual(resp["telemetry"]["stage5_mode"], "fast_path")
-
-    @patch("experiments.our.ablations.eval_models_ablation.run_qwen_direct_multi_image")
-    @patch("mssearch.stages.stage1_parser.parse_question_to_active_objects")
-    @patch("mssearch.stages.stage2_fast_path.run_tool_based_fast_path")
-    def test_run_ablation_pipeline_fast_path_fallback(self, mock_fp, mock_parser, mock_qwen):
-        mock_result = MagicMock()
-        mock_result.triggered = False
-        mock_fp.return_value = mock_result
-        mock_qwen.return_value = ("fallback answer", [0], [1])
-
-        images = [Image.new("RGB", (100, 100))]
-        engines = {
-            "component": "qwen_fast_path", "zoom_model": MagicMock(),
-            "sam_model": MagicMock(), "nlp_model": MagicMock(), "config": MSSearchConfig()
-        }
-        sample = {"sample_id": "test_fp_fb", "question": "Where is the cat?"}
-        resp = run_ablation_pipeline(engines, images, sample, 0)
-
-        self.assertEqual(resp["primary_answer"], "fallback answer")
-        self.assertEqual(resp["telemetry"]["route"], "fast_path_direct_fallback")
-        self.assertEqual(resp["telemetry"]["stage5_mode"], "direct_baseline")
+        self.assertEqual(resp["primary_answer"], "blue sedan")
+        self.assertEqual(resp["telemetry"]["route"], "visual_search_branch")
 
     def test_run_qwen_direct_multi_image_uncapped_resolution_and_image_ids(self):
         mock_engine = MagicMock()

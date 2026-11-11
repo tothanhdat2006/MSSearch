@@ -630,12 +630,14 @@ class MultiSourceSearchEngine:
                                                 })
                                     if child_dets:
                                         best_det_score = max(d["score"] for d in child_dets)
+                                        parent_lat = float(g.get("vlm_latent_score") or 0.70)
+                                        calibrated_child_score = 2.0 + parent_lat + float(best_det_score)
                                         child_bp = BoundedPatch(
                                             img_idx=img_idx,
                                             box=child_global_box,
                                             feature_vector=cp.feature_vector,
                                             entropy=cp.entropy,
-                                            confidence_score=float(best_det_score), # Unboosted continuous score in [0.0, 1.0]
+                                            confidence_score=calibrated_child_score,
                                             siglip_score=cp.siglip_score,
                                             parent_id=parent_box,
                                             level=getattr(cp, "level", 1) + 1
@@ -647,17 +649,17 @@ class MultiSourceSearchEngine:
                             elif child_patch_objs:
                                 # Fallback when SAM3 is not loaded (e.g. testing)
                                 for cp, child_global_box in child_patch_objs:
+                                    parent_lat = float(g.get("vlm_latent_score") or 0.70)
                                     child_bp = BoundedPatch(
                                         img_idx=img_idx,
                                         box=child_global_box,
                                         feature_vector=cp.feature_vector,
                                         entropy=cp.entropy,
-                                        confidence_score=float(min(1.0, g.get("vlm_latent_score") or 0.5)),
+                                        confidence_score=2.0 + parent_lat,
                                         siglip_score=cp.siglip_score,
                                         parent_id=parent_box,
                                         level=getattr(cp, "level", 1) + 1
                                     )
-                                    setattr(child_bp, "is_fine_grain", True)
                                     setattr(child_bp, "is_recursive_child", True)
                                     surviving_children.append(child_bp)
 

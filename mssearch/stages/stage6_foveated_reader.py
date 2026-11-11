@@ -67,6 +67,8 @@ def run_foveated_vlm_reading(
         img_pil = candidate_images[img_idx]
         img_w, img_h = img_pil.size
 
+        is_already_expanded = getattr(item, "is_already_expanded", False)
+
         if getattr(item, "is_compressed_canvas", False):
             # Spatial compressed canvas contains all retained patches with empty rows/cols excised
             foveated_crop = item.crop_image
@@ -78,24 +80,39 @@ def run_foveated_vlm_reading(
                 fcw, fch = foveated_crop.size
                 local_target_box = (0, 0, fcw, fch)
                 local_target_boxes = [local_target_box]
+        elif is_already_expanded:
+            # Stage 5 already applied the 1.25x context buffer: use crop_image and box directly!
+            foveated_crop = item.crop_image if item.crop_image is not None else img_pil.crop(item.box)
+            exp_box = item.box
+            fcw, fch = foveated_crop.size
+            if fcw < 8 or fch < 8:
+                continue
+            orig_boxes = getattr(item, "original_boxes", []) or []
+            if orig_boxes:
+                orig_b = orig_boxes[0]
+                x1, y1 = exp_box[0], exp_box[1]
+                local_target_box = (
+                    max(0, orig_b[0] - x1), max(0, orig_b[1] - y1),
+                    min(fcw, orig_b[2] - x1), min(fch, orig_b[3] - y1)
+                )
+            else:
+                local_target_box = (0, 0, fcw, fch)
+            local_target_boxes = [local_target_box]
         else:
-            # Expand bounding box independently by 1.25x
+            # Unexpanded fallback (e.g. direct calls lacking Stage 5 expansion): apply 1.25x expansion
             exp_box = expand_bounding_box(
                 item.box, img_w, img_h, expansion_factor=config.bbox_expansion_factor
             )
-
             foveated_crop = img_pil.crop(exp_box)
             fcw, fch = foveated_crop.size
             if fcw < 8 or fch < 8:
                 continue
-
             x1, y1 = exp_box[0], exp_box[1]
             local_target_box = (
                 item.box[0] - x1, item.box[1] - y1,
                 item.box[2] - x1, item.box[3] - y1
             )
             local_target_boxes = [local_target_box]
-
         vlm_image_input: Image.Image = foveated_crop
 
         # VLM Answer Prompt (<image>\n<question> matching CVSearch standard)
