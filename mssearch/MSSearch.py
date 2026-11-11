@@ -293,23 +293,25 @@ class MultiSourceSearchEngine:
             print(f"[Stage 1: Question Parsing] Decision: Extracted Active Objects {list(active_objects)} | Type: '{getattr(active_objects, 'question_type', 'standard')}' (Latency: {lat_s1}s)")
 
         # ---------------------------------------------------------------------
-        # Stage 2: Tool-Based Fast Path Canvas Check
+        # Stage 2: Tool-Based Fast Path Canvas Check (Bypassed if enable_fast_path=False)
         # ---------------------------------------------------------------------
-        t0 = time.perf_counter()
-        fast_path_result: FastPathResult = run_tool_based_fast_path(
-            candidate_images=candidate_images,
-            active_objects=active_objects,
-            question=reading_question,
-            sam_model=self.sam_model,
-            zoom_model=self.zoom_model,
-            config=sub_config,
-            active_img_indices=unresolved_images
-        )
-        lat_s2 = round(time.perf_counter() - t0, 3)
-        telemetry["timings_sec"]["stage2_fast_path"] = lat_s2
-        telemetry["stages_executed"].append("stage2_fast_path")
+        fast_path_result = None
+        if getattr(sub_config, "enable_fast_path", False):
+            t0 = time.perf_counter()
+            fast_path_result = run_tool_based_fast_path(
+                candidate_images=candidate_images,
+                active_objects=active_objects,
+                question=reading_question,
+                sam_model=self.sam_model,
+                zoom_model=self.zoom_model,
+                config=sub_config,
+                active_img_indices=unresolved_images
+            )
+            lat_s2 = round(time.perf_counter() - t0, 3)
+            telemetry["timings_sec"]["stage2_fast_path"] = lat_s2
+            telemetry["stages_executed"].append("stage2_fast_path")
 
-        if fast_path_result.triggered:
+        if fast_path_result is not None and fast_path_result.triggered:
             routes_executed.append("tool_based_fast_path")
             telemetry["fast_path_confidence"] = fast_path_result.confidence
             ev_imgs = fast_path_result.evidence_images if fast_path_result.evidence_images else ([fast_path_result.evidence_img_idx] if fast_path_result.evidence_img_idx is not None else [])
@@ -407,13 +409,14 @@ class MultiSourceSearchEngine:
                 }
             elif is_verbose:
                 print(f"[Stage 2][Waterfall Cascade] Fast path confirmed on images {ev_imgs}. Unresolved images {unresolved_images} cascading to Visual Search branch...")
-        else:
+        elif fast_path_result is not None:
             if not is_quiet:
                 if getattr(fast_path_result, "bypass_reason", None) == "targets_not_detected":
                     print(f"[Stage 2: Tool Fast Path] Decision: NOT TRIGGERED (Targets not found on canvas) -> Cascading to Stage 3 (Latency: {lat_s2}s)")
                 else:
                     print(f"[Stage 2: Tool Fast Path] Decision: NOT TRIGGERED (Confidence: {fast_path_result.confidence:.2f} < {self.config.fast_path_conf_threshold:.2f}) -> Cascading to Stage 3 (Latency: {lat_s2}s)")
-
+        elif not is_quiet and is_verbose:
+            print("[Stage 2: Tool Fast Path] Bypassed by configuration (enable_fast_path=False) -> Cascading directly to Stage 3.")
         # ---------------------------------------------------------------------
         # Stage 3: Entropy-Gated Recursive Patch Partitioning & SAM3-SGAP
         # ---------------------------------------------------------------------
@@ -422,7 +425,7 @@ class MultiSourceSearchEngine:
         telemetry["routes_executed"] = routes_executed
         t0 = time.perf_counter()
         # Reuses feature map extracted during Stage 2 canvas check
-        feature_cache = fast_path_result.feature_cache if self.config.reuse_stage2_features else {}
+        feature_cache = (fast_path_result.feature_cache if fast_path_result is not None and self.config.reuse_stage2_features else {})
         bounded_patches = partition_candidate_images(
             candidate_images=candidate_images,
             stage2_feature_cache=feature_cache,

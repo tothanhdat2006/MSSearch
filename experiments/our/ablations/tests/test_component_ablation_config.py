@@ -3,10 +3,18 @@ Unit tests for Component Increment Ablation suite.
 Verifies config parameter mapping, helper formatting, and pipeline routing logic.
 """
 
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
-from PIL import Image
 
+for mod in [
+    "torch", "torch.nn", "torch.nn.functional", "torch.cuda",
+    "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont",
+    "spacy", "numpy", "cv2", "transformers"
+]:
+    if mod not in sys.modules:
+        sys.modules[mod] = MagicMock()
+from PIL import Image
 from mssearch.config import MSSearchConfig
 from experiments.our.ablations.eval_runner_utils import (
     resolve_ground_truth,
@@ -67,52 +75,86 @@ class TestComponentAblationConfig(unittest.TestCase):
         self.assertEqual(ans, "golden retriever")
 
     def test_component_config_mappings(self):
-        # 1. Rigid Quadtree + Single Crop
         with patch("mssearch.models.ModelQwenVL", MagicMock()), \
              patch("experiments.our.ablations.models.load_detector", MagicMock()), \
              patch("experiments.our.ablations.models.load_visual_scorer", MagicMock()), \
              patch.dict("sys.modules", {"spacy": MagicMock()}):
-            engines_rigid = load_ablation_engines(component="qwen_fp_rigid_cg_single")
-            cfg = engines_rigid["config"]
-            self.assertEqual(cfg.partition_mode, "quadrant_only")
-            self.assertFalse(cfg.enable_continuous_enclosure_subcanvas)
-            self.assertFalse(cfg.enable_spatial_compressed_canvas)
+            # 1. Rigid Top-K
+            cfg1 = load_ablation_engines(component="qwen_rigid_topk")["config"]
+            self.assertEqual(cfg1.partition_mode, "quadrant_only")
+            self.assertFalse(cfg1.enable_feature_grouping)
+            self.assertEqual(cfg1.top_k_retention, 100)
+            self.assertFalse(cfg1.enable_fast_path)
 
-            # 2. Rigid Quadtree + Aggregation
-            engines_rigid_agg = load_ablation_engines(component="qwen_fp_rigid_cg_agg")
-            cfg = engines_rigid_agg["config"]
-            self.assertEqual(cfg.partition_mode, "quadrant_only")
-            self.assertTrue(cfg.enable_continuous_enclosure_subcanvas)
-            self.assertTrue(cfg.enable_spatial_compressed_canvas)
+            # 2. SGAP Top-K
+            cfg2 = load_ablation_engines(component="qwen_sgap_topk")["config"]
+            self.assertEqual(cfg2.partition_mode, "sgap_only")
+            self.assertFalse(cfg2.enable_feature_grouping)
+            self.assertEqual(cfg2.top_k_retention, 100)
+            self.assertFalse(cfg2.enable_fast_path)
 
-            # 3. SGAP + Single Crop
-            engines_sgap = load_ablation_engines(component="qwen_fp_sgap_cg_single")
-            cfg = engines_sgap["config"]
-            self.assertEqual(cfg.partition_mode, "sgap_only")
-            self.assertFalse(cfg.enable_continuous_enclosure_subcanvas)
-            self.assertFalse(cfg.enable_spatial_compressed_canvas)
+            # 3. Rigid FG + Det Top-K + Abs Top-K
+            cfg3 = load_ablation_engines(component="qwen_rigid_fg_det_abs_topk")["config"]
+            self.assertEqual(cfg3.partition_mode, "quadrant_only")
+            self.assertTrue(cfg3.enable_feature_grouping)
+            self.assertFalse(cfg3.enable_existence_scanning)
+            self.assertFalse(cfg3.enable_latent_repartition)
+            self.assertTrue(cfg3.retain_absent_groups_topk)
 
-            # 4. SGAP + Aggregation
-            engines_sgap_agg = load_ablation_engines(component="qwen_fp_sgap_cg_agg")
-            cfg = engines_sgap_agg["config"]
-            self.assertEqual(cfg.partition_mode, "sgap_only")
-            self.assertTrue(cfg.enable_continuous_enclosure_subcanvas)
-            self.assertTrue(cfg.enable_spatial_compressed_canvas)
+            # 4. SGAP FG + Det Top-K + Abs Top-K
+            cfg4 = load_ablation_engines(component="qwen_sgap_fg_det_abs_topk")["config"]
+            self.assertEqual(cfg4.partition_mode, "sgap_only")
+            self.assertTrue(cfg4.enable_feature_grouping)
+            self.assertFalse(cfg4.enable_existence_scanning)
+            self.assertFalse(cfg4.enable_latent_repartition)
+            self.assertTrue(cfg4.retain_absent_groups_topk)
 
-            # 5. ASP + Single Crop
-            engines_asp = load_ablation_engines(component="qwen_fp_asp_cg_single")
-            cfg = engines_asp["config"]
-            self.assertEqual(cfg.partition_mode, "hybrid")
-            self.assertFalse(cfg.enable_continuous_enclosure_subcanvas)
-            self.assertFalse(cfg.enable_spatial_compressed_canvas)
+            # 5. Rigid FG + Existence Scanning + Abs Top-K
+            cfg5 = load_ablation_engines(component="qwen_rigid_fg_exist_abs_topk")["config"]
+            self.assertEqual(cfg5.partition_mode, "quadrant_only")
+            self.assertTrue(cfg5.enable_feature_grouping)
+            self.assertTrue(cfg5.enable_existence_scanning)
+            self.assertFalse(cfg5.enable_latent_repartition)
+            self.assertTrue(cfg5.retain_absent_groups_topk)
 
-            # 6. ASP + Aggregation (Ours)
-            engines_agg = load_ablation_engines(component="qwen_fp_asp_cg_agg")
-            cfg = engines_agg["config"]
-            self.assertEqual(cfg.partition_mode, "hybrid")
-            self.assertTrue(cfg.enable_continuous_enclosure_subcanvas)
-            self.assertTrue(cfg.enable_spatial_compressed_canvas)
+            # 6. SGAP FG + Existence Scanning + Abs Top-K
+            cfg6 = load_ablation_engines(component="qwen_sgap_fg_exist_abs_topk")["config"]
+            self.assertEqual(cfg6.partition_mode, "sgap_only")
+            self.assertTrue(cfg6.enable_feature_grouping)
+            self.assertTrue(cfg6.enable_existence_scanning)
+            self.assertFalse(cfg6.enable_latent_repartition)
+            self.assertTrue(cfg6.retain_absent_groups_topk)
 
+            # 7. Rigid FG + Det Top-K + Latent Re-partitioning
+            cfg7 = load_ablation_engines(component="qwen_rigid_fg_det_latent_repart")["config"]
+            self.assertEqual(cfg7.partition_mode, "quadrant_only")
+            self.assertTrue(cfg7.enable_feature_grouping)
+            self.assertFalse(cfg7.enable_existence_scanning)
+            self.assertTrue(cfg7.enable_latent_repartition)
+            self.assertFalse(cfg7.retain_absent_groups_topk)
+
+            # 8. SGAP FG + Det Top-K + Latent Re-partitioning
+            cfg8 = load_ablation_engines(component="qwen_sgap_fg_det_latent_repart")["config"]
+            self.assertEqual(cfg8.partition_mode, "sgap_only")
+            self.assertTrue(cfg8.enable_feature_grouping)
+            self.assertFalse(cfg8.enable_existence_scanning)
+            self.assertTrue(cfg8.enable_latent_repartition)
+            self.assertFalse(cfg8.retain_absent_groups_topk)
+
+            # 9. Rigid Full
+            cfg9 = load_ablation_engines(component="qwen_rigid_full")["config"]
+            self.assertEqual(cfg9.partition_mode, "quadrant_only")
+            self.assertTrue(cfg9.enable_feature_grouping)
+            self.assertTrue(cfg9.enable_existence_scanning)
+            self.assertTrue(cfg9.enable_latent_repartition)
+
+            # 10. SGAP Full (Ours)
+            cfg10 = load_ablation_engines(component="qwen_sgap_full")["config"]
+            self.assertEqual(cfg10.partition_mode, "sgap_only")
+            self.assertTrue(cfg10.enable_feature_grouping)
+            self.assertTrue(cfg10.enable_existence_scanning)
+            self.assertTrue(cfg10.enable_latent_repartition)
+            self.assertFalse(cfg10.enable_continuous_enclosure_subcanvas)
     @patch("experiments.our.ablations.eval_models_ablation.run_qwen_direct_multi_image")
     def test_run_ablation_pipeline_qwen_direct(self, mock_qwen):
         mock_qwen.return_value = ("white bird", [1], [2])

@@ -78,14 +78,34 @@ def run_feature_grouping_and_gating(
 
     # If grouping is ablated by config, keep all bounded patches directly
     if not config.enable_feature_grouping:
-        if config.verbose:
-            print(f"[Stage 4] Feature grouping disabled by config; retaining all {len(bounded_patches)} bounded patches directly without semantic pruning.")
+        top_k = getattr(config, "top_k_retention", 100)
         sorted_bp = sorted(
             bounded_patches,
-            key=lambda p: ((p.confidence_score or 0.0), (p.siglip_score if p.siglip_score is not None else 0.0), p.entropy),
+            key=lambda p: (
+                p.siglip_score if p.siglip_score is not None else 0.0,
+                (p.confidence_score or 0.0),
+                p.entropy,
+            ),
             reverse=True,
         )
-        return (sorted_bp, []) if return_debug else sorted_bp
+        retained = sorted_bp[:top_k]
+        if config.verbose:
+            print(f"[Stage 4] Feature grouping disabled by config; retaining top {len(retained)}/{len(bounded_patches)} bounded patches ranked by SigLIP similarity (top_k={top_k}).")
+        group_records = []
+        if return_debug:
+            for idx, p in enumerate(retained):
+                group_records.append({
+                    "group_idx": idx,
+                    "img_idx": p.img_idx,
+                    "rep_box": list(p.box),
+                    "status": "KEPT",
+                    "member_indices": [idx],
+                    "match_reason": "topk_unclustered",
+                    "vlm_exist_score": None,
+                    "vlm_latent_score": None,
+                    "is_latent_repartition_candidate": False,
+                })
+        return (retained, group_records) if return_debug else retained
 
     # 1. Group patches using cached Stage 3 feature vectors
     groups, sim_mat = group_patches_by_cosine_similarity(
@@ -301,34 +321,51 @@ def run_feature_grouping_and_gating(
         }
         group_states.append(state)
 
-        # Queue unresolved groups for VLM probing
+        # Queue unresolved groups for VLM probing or apply modular toggle fallbacks
+        enable_exist = getattr(config, "enable_existence_scanning", getattr(config, "enable_existence_gating", True))
+        enable_latent = getattr(config, "enable_latent_repartition", getattr(config, "enable_latent_gating", True))
+        retain_abs = getattr(config, "retain_absent_groups_topk", False)
+
         if not has_active_match:
-            if group_detected_objects and config.enable_existence_gating and zoom_model is not None:
+            if group_detected_objects:
                 best_det = max(group_detected_objects, key=lambda d: d["score"])
-                best_patch = bounded_patches[best_det["patch_idx"]]
-                best_box_ints = tuple(int(round(float(c))) for c in best_patch.box)
-                best_patch_crop = candidate_images[best_patch.img_idx].crop(best_box_ints)
-                target_label = best_det["label"]
-                local_box = best_det.get("local_box", [0, 0, best_patch_crop.width, best_patch_crop.height])
-                state["best_det_box"] = local_box
-                fovea_crop, fb = extract_micro_fovea_crop(best_patch_crop, local_box, expansion_ratio=1.75, min_dim=256)
-                state["fovea_box"] = fb
-                state["vlm_tested_patch_idx"] = best_det["patch_idx"]
-                state["vlm_tested_role"] = "Detection Crop (Micro-Fovea)"
-                state["vlm_prompt"] = config.existence_prompt_template.format(target_label)
+                state["best_det_box"] = best_det.get("local_box")
+                if enable_exist and zoom_model is not None:
+                    best_patch = bounded_patches[best_det["patch_idx"]]
+                    best_box_ints = tuple(int(round(float(c))) for c in best_patch.box)
+                    best_patch_crop = candidate_images[best_patch.img_idx].crop(best_box_ints)
+                    target_label = best_det["label"]
+                    local_box = best_det.get("local_box", [0, 0, best_patch_crop.width, best_patch_crop.height])
+                    fovea_crop, fb = extract_micro_fovea_crop(best_patch_crop, local_box, expansion_ratio=1.75, min_dim=256)
+                    state["fovea_box"] = fb
+                    state["vlm_tested_patch_idx"] = best_det["patch_idx"]
+                    state["vlm_tested_role"] = "Detection Crop (Micro-Fovea)"
+                    state["vlm_prompt"] = config.existence_prompt_template.format(target_label)
 
-                existence_queue.append({
-                    "g_idx": g_idx,
-                    "crop": fovea_crop,
-                    "label": target_label,
-                    "state": state,
-                })
-            elif not group_detected_objects and config.enable_latent_gating and zoom_model is not None and active_objects:
-                latent_queue.append({
-                    "g_idx": g_idx,
-                    "state": state,
-                })
-
+                    existence_queue.append({
+                        "g_idx": g_idx,
+                        "crop": fovea_crop,
+                        "label": target_label,
+                        "state": state,
+                    })
+                else:
+                    # Existence Scanning disabled: directly confirm detected group
+                    state["has_active_match"] = True
+                    state["match_reason"] = f"detector_topk_confirmed (score={best_det['score']:.2f})"
+            else:
+                # Absent group (no detections)
+                if enable_latent and zoom_model is not None and active_objects:
+                    latent_queue.append({
+                        "g_idx": g_idx,
+                        "state": state,
+                    })
+                elif retain_abs:
+                    # Latent disabled but retain absent group centroids requested
+                    state["has_active_match"] = True
+                    state["match_reason"] = "absent_topk_retained"
+                else:
+                    state["has_active_match"] = False
+                    state["match_reason"] = "latent_disabled_pruned"
     # Phase 1: Vectorized VLM Existence Probing
     vlm_batch_size = getattr(config, "vlm_gating_batch_size", 4)
     if existence_queue and zoom_model is not None:
@@ -480,18 +517,20 @@ def run_feature_grouping_and_gating(
         })
 
         if has_active_match:
-            is_detection = ("sam3_det" in match_reason or "detection" in match_reason or "stage2" in match_reason)
+            is_detection = ("sam3_det" in match_reason or "detection" in match_reason or "stage2" in match_reason or "detector_topk" in match_reason)
             group_score = 0.0
             if is_detection:
                 group_score = 2.0 + (vlm_exist_score if vlm_exist_score is not None else 0.5) + max_det_score
             elif "latent" in match_reason:
                 group_score = 1.0 + (vlm_latent_score if vlm_latent_score is not None else 0.0)
+            elif "absent_topk" in match_reason:
+                group_score = 0.5 + float(max_siglip_score)
             else:
                 group_score = 0.5
 
             if getattr(config, "enable_group_retention_caps", True):
                 if is_detection:
-                    k_det = getattr(config, "max_patches_per_detected_group", 4)
+                    k_det = max(getattr(config, "max_patches_per_detected_group", 4), getattr(config, "top_k_retention", 100) if "detector_topk" in match_reason else 4)
                     detected_members = []
                     non_detected_members = []
                     for i in member_indices:
@@ -538,6 +577,8 @@ def run_feature_grouping_and_gating(
                         )
                     ]
                     chosen_indices = (detected_sorted + non_detected_sorted)[:k_det]
+                elif "absent_topk" in match_reason:
+                    chosen_indices = [rep_idx]
                 else:
                     k_lat = getattr(config, "max_patches_per_latent_group", 1)
                     if rep_idx in member_indices:
@@ -597,8 +638,9 @@ def run_feature_grouping_and_gating(
                 reverse=True,
             )
 
-        if getattr(config, "enable_retention_hard_cap", True) and len(sorted_patches) > config.max_retained_patches:
-            k_cap = config.max_retained_patches
+        max_allowed_patches = max(config.max_retained_patches, getattr(config, "top_k_retention", 100) * 2)
+        if getattr(config, "enable_retention_hard_cap", True) and len(sorted_patches) > max_allowed_patches:
+            k_cap = max_allowed_patches
             if getattr(config, "enable_dynamic_retention_elasticity", True):
                 cutoff_p = sorted_patches[k_cap - 1]
                 cutoff_profile = (

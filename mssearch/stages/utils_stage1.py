@@ -91,8 +91,32 @@ def parse_visual_query_structure(question: str, query_meta: Optional[Dict[str, A
     return "", "", ""
 
 
-def build_mllm_messages(question: str) -> List[Dict[str, Any]]:
+def build_mllm_messages(question: str, enable_relational: bool = False) -> List[Dict[str, Any]]:
     """Builds chat completion message list for MLLM semantic question parsing."""
+    if not enable_relational:
+        return [
+            {
+                "role": "system",
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        "You are an expert visual search parser. Given a question, extract search targets and return a JSON object with:\n"
+                        "- \"active_objects\": list of key visual search entities or text needed to answer the question\n"
+                        "- \"target_entity\": the primary object being inspected, counted, or located (or null)\n"
+                        "- \"question_type\": one of ['single_object_attribute', 'counting', 'text_reading', 'general']\n"
+                        "Return ONLY valid JSON."
+                    )
+                }]
+            },
+            {"role": "user", "content": [{"type": "text", "text": "Question: \"What is the registration number of the boat?\""}]},
+            {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["boat"], "target_entity": "boat", "question_type": "single_object_attribute"}'}]},
+            {"role": "user", "content": [{"type": "text", "text": "Question: \"What is the color of the mailbox?\""}]},
+            {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["mailbox"], "target_entity": "mailbox", "question_type": "single_object_attribute"}'}]},
+            {"role": "user", "content": [{"type": "text", "text": "Question: \"How many windows are on the brick building?\""}]},
+            {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["brick building", "window"], "target_entity": "window", "question_type": "counting"}'}]},
+            {"role": "user", "content": [{"type": "text", "text": f"Question: \"{question}\""}]}
+        ]
+
     return [
         {
             "role": "system",
@@ -123,8 +147,23 @@ def build_mllm_messages(question: str) -> List[Dict[str, Any]]:
     ]
 
 
-def build_few_shot_prompt(question: str) -> str:
+def build_few_shot_prompt(question: str, enable_relational: bool = False) -> str:
     """Builds single text prompt for text-completion VLMs."""
+    if not enable_relational:
+        return (
+            "You are an expert visual search parser. Given a question, return a JSON object with 'active_objects', 'target_entity', and 'question_type'.\n\n"
+            "Example 1 (Single-Object Attribute):\n"
+            "Question: \"What is the registration number of the boat?\"\n"
+            "JSON: {\"active_objects\": [\"boat\"], \"target_entity\": \"boat\", \"question_type\": \"single_object_attribute\"}\n\n"
+            "Example 2 (Single-Object Attribute):\n"
+            "Question: \"What is the color of the mailbox?\"\n"
+            "JSON: {\"active_objects\": [\"mailbox\"], \"target_entity\": \"mailbox\", \"question_type\": \"single_object_attribute\"}\n\n"
+            "Example 3 (Counting):\n"
+            "Question: \"How many windows are on the brick building?\"\n"
+            "JSON: {\"active_objects\": [\"brick building\", \"window\"], \"target_entity\": \"window\", \"question_type\": \"counting\"}\n\n"
+            f"Question: \"{question}\"\nJSON:"
+        )
+
     return (
         "You are an expert visual search parser. Given a question, return a JSON object with 'active_objects', 'target_entity', 'anchor_entity', 'question_type', and 'is_relational'.\n\n"
         "Example 1 (Cross-Object Relational):\n"
@@ -141,7 +180,6 @@ def build_few_shot_prompt(question: str) -> str:
         "JSON: {\"active_objects\": [\"mailbox\"], \"target_entity\": \"mailbox\", \"anchor_entity\": null, \"question_type\": \"single_object_attribute\", \"is_relational\": false}\n\n"
         f"Question: \"{question}\"\nJSON:"
     )
-
 
 def parse_mllm_json_response(raw_text: str) -> Tuple[List[str], Optional[str], Optional[str], str, bool, str]:
     """

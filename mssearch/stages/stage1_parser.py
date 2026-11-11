@@ -68,13 +68,16 @@ def parse_question_to_active_objects(
     raw_text = ""
     extraction_strategy = "Strategy 3: Syntactic Clause Extraction (Fallback)"
 
+    # Check whether relational parsing is enabled in config (default False)
+    enable_relational = getattr(config, "enable_relational_parsing", False) if config else False
+
     # Strategy 1: Direct MLLM In-Context Semantic Parser (Preferred - uses LLM backbone)
     if zoom_model is not None and (hasattr(zoom_model, "generate_text") or hasattr(zoom_model, "generate_response")):
         if verbose:
             print("[Stage 1][Strategy 1] Initiating MLLM in-context unified semantic parsing...")
         try:
-            mllm_messages = build_mllm_messages(question)
-            few_shot_prompt = build_few_shot_prompt(question)
+            mllm_messages = build_mllm_messages(question, enable_relational=enable_relational)
+            few_shot_prompt = build_few_shot_prompt(question, enable_relational=enable_relational)
 
             if hasattr(zoom_model, "generate_text"):
                 try:
@@ -98,6 +101,9 @@ def parse_question_to_active_objects(
             if strategy_name:
                 extraction_strategy = strategy_name
 
+            if not enable_relational:
+                parsed_is_relational = False
+                parsed_anchor_entity = None
         except Exception as e:
             if verbose:
                 import traceback
@@ -156,8 +162,8 @@ def parse_question_to_active_objects(
         else:
             parsed_question_type = "general"
 
-    # Strict invariant: single target is definitionally non-relational
-    if len(clean_targets) <= 1:
+    # Strict invariant: if relational parsing disabled or single target, enforce non-relational
+    if not enable_relational or len(clean_targets) <= 1:
         parsed_is_relational = False
         parsed_anchor_entity = None
 
@@ -165,7 +171,6 @@ def parse_question_to_active_objects(
         parsed_target_entity = clean_targets[0]
     if not parsed_anchor_entity and len(clean_targets) > 1 and parsed_is_relational:
         parsed_anchor_entity = clean_targets[1]
-
     parsed_question = ParsedQuestion(
         active_objects=clean_targets,
         question_type=parsed_question_type,

@@ -17,14 +17,14 @@ class MSSearchConfig:
     # Stage 1: Question Parsing & Active Object Set
     # -------------------------------------------------------------------------
     use_mllm_object_parser: bool = True          # Use MLLM language model directly for zero-shot object extraction
+    enable_relational_parsing: bool = False      # Whether MLLM parser extracts relational classification (False treats queries as single-crop search)
     nlp_model_name: str = "en_core_web_sm"
-
     # -------------------------------------------------------------------------
     # Stage 2: 2-Gate Early Assessment (Direct Global Answer & Fast Path)
     # -------------------------------------------------------------------------
     enable_direct_answer: bool = True            # Phase 1: Direct Global Answer via Yes/No logit sufficiency probing
     direct_answer_conf_threshold: float = 0.60   # Minimum sufficiency confidence c_q [-1, 1] to answer directly on root
-    enable_fast_path: bool = True                # Phase 2: Tool-Based Fast Path via SAM3 Proposals
+    enable_fast_path: bool = False               # Phase 2: Tool-Based Fast Path via SAM3 Proposals (Default False per ablation findings)
     fast_path_conf_threshold: float = 0.70       # Existence confidence threshold for fast path instant exit
     enable_visual_prompt_bbox: bool = True       # Draw bounding box on composite crop
     enable_textual_prompt_coords: bool = False   # Feed textual [x1, y1, x2, y2] coordinates into prompt
@@ -37,7 +37,7 @@ class MSSearchConfig:
     entropy_threshold: float = 0.35              # H < 0.35 -> Quadrants, H >= 0.35 -> SAM3-SGAP
     min_patch_entropy: float = 0.35              # Minimum entropy required to retain patch (H < min_patch_entropy -> pruned; 0.35 preserves smooth painted walls/signs)
     entropy_weights: Tuple[float, float, float] = (0.35, 0.35, 0.30)  # Shannon, Sobel, Laplacian
-    partition_mode: str = "hybrid"               # "hybrid", "quadrant_only", "sgap_only"
+    partition_mode: str = "sgap_only"            # "sgap_only" (default for main method), "quadrant_only", "hybrid"
     sgap_min_splits: int = 4                     # Default 4 splits (aligned with CVSearch)
     sgap_max_splits: int = 8                     # Default 8 splits (aligned with CVSearch)
     sgap_n_atoms: int = 100
@@ -58,7 +58,10 @@ class MSSearchConfig:
     # -------------------------------------------------------------------------
     # Stage 4: SAM3 Feature Grouping & Open-Vocabulary Gating
     # -------------------------------------------------------------------------
-    enable_feature_grouping: bool = True
+    enable_feature_grouping: bool = True         # Master toggle for semantic cosine clustering of patches
+    enable_existence_scanning: bool = True       # Reorganized Module 3: verify detected groups via VLM
+    top_k_retention: int = 100                   # Candidate retention budget per branch for ablations & fallbacks
+    retain_absent_groups_topk: bool = False      # For ablations: retain top-k centroids from absent groups without VLM latent
     grouping_sim_threshold: float = 0.80         # Cosine similarity threshold for grouping patches
     reuse_stage3_features: bool = True           # Reuse patch feature vectors from Stage 3
     sam3_group_det_threshold: float = 0.35       # SAM3 confidence threshold to keep a group
@@ -100,10 +103,10 @@ class MSSearchConfig:
     ios_containment_threshold: float = 0.95      # Intersection-over-Self (IoS) threshold for nested containment pruning
     enable_stage5_spatial_nms: bool = True       # Suppress duplicate/overlapping candidate crops on same image
     stage5_nms_iou_threshold: float = 0.60       # Spatial IoU threshold for candidate patch deduplication
-    enable_continuous_enclosure_subcanvas: bool = True # Group candidates into continuous un-sliced sub-canvases <= 1024px
+    enable_continuous_enclosure_subcanvas: bool = False # Deprecated in main method: Group candidates into continuous sub-canvases
     max_sub_canvases: int = 4                    # Maximum number of sub-canvases to dispatch to Stage 6 (fits in single VLM batch)
     seam_overlap_threshold: float = 0.10         # Minimum overlap ratio along quadtree seam to trigger atomic sibling re-fusion
-    enable_spatial_compressed_canvas: bool = True # Excise empty rows/cols to form spatial compressed canvas for all samples
+    enable_spatial_compressed_canvas: bool = False # Deprecated in main method: excise empty rows/cols to form spatial compressed canvas
     spatial_compression_gutter_px: int = 28      # Visual separator gap (px) between non-contiguous compressed intervals
     spatial_canvas_relational_only: bool = True  # If True, synthesizes spatial compressed canvas layout ONLY for cross-object relational questions; uses individual crops for single-object questions
     max_canvas_dimension_px: int = 1024          # Hard upper bound on synthesized canvas width and height (prevents VLM downsampling blur)

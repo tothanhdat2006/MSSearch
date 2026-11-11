@@ -98,20 +98,25 @@ def run_resolution_screening(
         )
 
     # 2. Candidate Pool Aggregation: Crops Only (Single-Object) vs. Spatial Layout (Cross-Object)
-    if is_relational is None and is_cross_object is not None:
+    enable_relational = getattr(config, "enable_relational_parsing", False) if config else False
+    if not enable_relational:
+        is_relational = False
+        is_cross_object = False
+    elif is_relational is None and is_cross_object is not None:
         is_relational = is_cross_object
-
-    if is_relational is None:
+    elif is_relational is None:
         is_relational = is_relational_question(active_objects, question=question, zoom_model=zoom_model)
 
-    enable_compressed_canvas = getattr(config, "enable_spatial_compressed_canvas", True) if config else True
+    enable_compressed_canvas = getattr(config, "enable_spatial_compressed_canvas", False) if config else False
+    enable_cont_enc = getattr(config, "enable_continuous_enclosure_subcanvas", False) if config else False
     relational_only = getattr(config, "spatial_canvas_relational_only", True) if config else True
 
-    if relational_only:
-        use_layout = enable_compressed_canvas and is_relational
+    if not (enable_compressed_canvas or enable_cont_enc):
+        use_layout = False
+    elif relational_only:
+        use_layout = (enable_compressed_canvas or enable_cont_enc) and is_relational
     else:
-        use_layout = enable_compressed_canvas
-
+        use_layout = (enable_compressed_canvas or enable_cont_enc)
     gutter_px = getattr(config, "spatial_compression_gutter_px", 28) if config else 28
     max_canvas_dim = getattr(config, "max_canvas_dimension_px", 1024) if config else 1024
     enable_jic = getattr(config, "enable_joint_interaction_crop", True) if config else True

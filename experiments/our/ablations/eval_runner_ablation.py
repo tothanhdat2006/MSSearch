@@ -63,6 +63,11 @@ def parse_args():
     # Component Increment Ablation
     parser.add_argument("--component", type=str, default=None,
                         choices=["qwen", "qwen_fast_path",
+                                 "qwen_rigid_topk", "qwen_sgap_topk",
+                                 "qwen_rigid_fg_det_abs_topk", "qwen_sgap_fg_det_abs_topk",
+                                 "qwen_rigid_fg_exist_abs_topk", "qwen_sgap_fg_exist_abs_topk",
+                                 "qwen_rigid_fg_det_latent_repart", "qwen_sgap_fg_det_latent_repart",
+                                 "qwen_rigid_full", "qwen_sgap_full",
                                  "qwen_fp_rigid_cg_single", "qwen_fp_rigid_cg_agg",
                                  "qwen_fp_sgap_cg_single", "qwen_fp_sgap_cg_agg",
                                  "qwen_fp_asp_cg_single", "qwen_fp_asp_cg_agg"],
