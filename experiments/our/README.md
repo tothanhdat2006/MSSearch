@@ -82,7 +82,7 @@ export OUTPUT_BASE_DIR=""
 - **`eval_metrics.py`** (<250 lines): Computes text answer metrics (accuracy, token precision, recall, F1) and tracks Stage 1-6 telemetry: target retention, background rejection, visual token budget, and crop sizes.
 - **`eval_models.py`** (<250 lines): Loads perception engines (`ModelQwenVL`, `ModelGlobalLocal`, `ModelInternvl`, `sam3_inference`, `SigLIPScorer`, spaCy). Fails loudly if dependencies or weights are missing (including `NLP_MODEL`, which must point to the spaCy folder; runners do not continue without spaCy).
 - **`eval_runner.py`** (<250 lines): Orchestrates benchmark evaluation over candidate images, auto-saves timestamped config snapshots, and atomically flushes results line-by-line (`flush()` + `os.fsync()`) to prevent data loss. Requires `PYTHONPATH` set to the repository root.
-- **`config_default.json`**: Master configuration setting `entropy_threshold: 0.35`, `max_patches_per_image: 64`, `max_partition_depth: 4`, and clean foveated prompt reading (`<image>\n<question>`).
+- **`config_default.json`**: Master configuration setting `partition_mode: "sgap_only"`, `enable_fast_path: false`, `enable_relational_parsing: false`, `max_retained_patches: 20`, `max_patches_per_detected_group: 8`, and clean native single-crop reading (`<image>\n<question>`).
 
 ---
 

@@ -315,32 +315,46 @@ Sweeps probability thresholds **0.3** (high recall), **0.7** (high precision), a
 ```bash
 bash experiments/our/ablations/scripts/run_ablation_gate_threshold.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
-
-### 4.4 Full Matrix Sweep (`run_ablation_matrix.sh` or Slurm)
+### 4.4 Search Component Increment Sweep (`run_ablation_component.sh`)
+Sweeps the 11 paired search module configurations (`qwen`, `qwen_rigid_topk`, `qwen_sgap_topk`, `qwen_rigid_fg_det_abs`, `qwen_sgap_fg_det_abs`, `qwen_rigid_fg_exist_abs`, `qwen_sgap_fg_exist_abs`, `qwen_rigid_fg_det_latent`, `qwen_sgap_fg_det_latent`, `qwen_rigid_full`, `qwen_sgap_full`) on any candidate pool size ($N \in \{1, 5, 10, 20\}$):
 ```bash
-# Local execution
-bash experiments/our/ablations/scripts/run_ablation_matrix.sh Qwen/Qwen3-VL-8B-Instruct
+# Sweep all 11 components on N=5:
+bash experiments/our/ablations/scripts/run_ablation_component.sh all Qwen/Qwen3-VL-8B-Instruct N_5
 
-# HPC Slurm batch submission
-sbatch experiments/our/ablations/scripts/run_ablation_slurm.slurm
+# Sweep all 11 components on N=20:
+bash experiments/our/ablations/scripts/run_ablation_component.sh all Qwen/Qwen3-VL-8B-Instruct N_20
+
+# Run an individual component (e.g. Full SGAP Method):
+python experiments/our/ablations/eval_runner_ablation.py \
+    --component qwen_sgap_full \
+    --model_path Qwen/Qwen3-VL-8B-Instruct \
+    --pool_mode N_20
 ```
 
 ### 4.5 Cloud Ablation on Modal (`run_modal_ablation.sh`)
 Execute any ablation sweep in the cloud using persistent volumes (`mssearch-data`, `mssearch-models`, `mssearch-results` at `/results/ablation`):
 ```bash
-# Detector sweep (SAM3, Grounding DINO, Florence-2, DINOv3)
-bash experiments/our/ablations/scripts/run_modal_ablation.sh detector Qwen/Qwen3-VL-8B-Instruct N_5 --detach
+# Component sweep on N=20 (11 components in background):
+bash experiments/our/ablations/scripts/run_modal_ablation.sh component Qwen/Qwen3-VL-8B-Instruct N_20 --detach
 
-# Visual screening scorer sweep (SigLIP, SigLIP2-384, SigLIP2-512, CLIP-B/32, CLIP-L/14, EVA-02-L/14)
-bash experiments/our/ablations/scripts/run_modal_ablation.sh scorer Qwen/Qwen3-VL-8B-Instruct N_5 --detach
+# Component sweep on N=5:
+bash experiments/our/ablations/scripts/run_modal_ablation.sh component Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 
-# Gating threshold sweep (0.3, 0.7, 0.5)
-bash experiments/our/ablations/scripts/run_modal_ablation.sh gate Qwen/Qwen3-VL-8B-Instruct N_5 --detach
-
-# Full cross-ablation sweep
-bash experiments/our/ablations/scripts/run_modal_ablation.sh all Qwen/Qwen3-VL-8B-Instruct N_5 --detach
+# Run a single component on Modal:
+modal run --detach experiments/our/ablations/scripts/run_ablation_modal.py \
+    --component qwen_sgap_full \
+    --model-name Qwen/Qwen3-VL-8B-Instruct \
+    --pool-mode N_20
 ```
 
+### 4.6 Stage 1 Question Parser Prompt Comparison Tool
+To verify MLLM parser outputs under the old relational prompt vs. the new stripped prompt across the benchmark:
+```bash
+python experiments/our/scripts/compare_stage1_prompts.py \
+    --all \
+    --dataset_path /data/STASHBench/annotations_part1234_merged.json \
+    --model_path Qwen/Qwen3-VL-8B-Instruct
+```
 
 ---
 

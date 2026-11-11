@@ -44,19 +44,23 @@ Controls candidate patch gating in Stage 4 (existence probe and speculative late
 | `0.7` | $0.70$ | $+0.40$ | High Precision: prunes aggressively, only passing high-certainty evidence |
 
 ### Axis 4: Search Component Increment (`--component`)
-Controls the cumulative progression of search components (Table 1 & Table 2):
+Controls the cumulative progression of the 4 core search modules (Table 1 & Table 2) evaluated as paired Rigid vs. SGAP increments:
 
-| Key | Configuration | Behavior / Route |
-| :--- | :--- | :--- |
-| `qwen` | Direct Baseline | Multi-image VLM forward pass on full gallery with uncapped resolution |
-| `qwen_fast_path` | Qwen w/ Fast Path | Tool-based fast path proposal; falls back to Direct Baseline on unresolved queries |
-| `qwen_fp_rigid_cg_single` | Qwen w/ FP + Rigid Quadtree + CG + Single-crop | Fast Path + `quadrant_only` (regular quadrants) + Confidence Gating + isolated 1.25x crops |
-| `qwen_fp_rigid_cg_agg` | Qwen w/ FP + Rigid Quadtree + CG + Aggregation | Fast Path + `quadrant_only` + Confidence Gating + Continuous Enclosure Sub-Canvas Engine |
-| `qwen_fp_sgap_cg_single` | Qwen w/ FP + SGAP + CG + Single-crop | Fast Path + `sgap_only` (SLIC superpixels) + Confidence Gating + isolated 1.25x crops |
-| `qwen_fp_sgap_cg_agg` | Qwen w/ FP + SGAP + CG + Aggregation | Fast Path + `sgap_only` + Confidence Gating + Continuous Enclosure Sub-Canvas Engine |
-| `qwen_fp_asp_cg_single` | Qwen w/ FP + ASP + CG + Single-crop | Fast Path + `hybrid` (entropy-steered ASP) + Confidence Gating + isolated 1.25x crops |
-| `qwen_fp_asp_cg_agg` | Qwen w/ FP + ASP + CG + Aggregation (Ours) | Full STASH-Search: Continuous Enclosure Sub-Canvas Engine + atomic sibling re-fusion |
+| Key | Partition | Grouping | Existence Scanning (Detected) | Latent Re-partitioning (Absent) | Retention Budget |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| `qwen` | Baseline | Off | Off | Off | Direct zero-shot VLM on full gallery images |
+| `qwen_rigid_topk` | Rigid | Off | Off | Off | Global top-50 patches ranked by SigLIP |
+| `qwen_sgap_topk` | SGAP | Off | Off | Off | Global top-50 patches ranked by SigLIP |
+| `qwen_rigid_fg_det_abs` | Rigid | **On** | **Off** *(Trust detector)* | **Off** *(Variant B: Naive centroid)* | 8 det / 1 abs centroid |
+| `qwen_sgap_fg_det_abs` | SGAP | **On** | **Off** *(Trust detector)* | **Off** *(Variant B: Naive centroid)* | 8 det / 1 abs centroid |
+| `qwen_rigid_fg_exist_abs` | Rigid | **On** | **ON** *(VLM verified)* | **Off** *(Variant B: Naive centroid)* | **Isolates Existence Scanning** |
+| `qwen_sgap_fg_exist_abs` | SGAP | **On** | **ON** *(VLM verified)* | **Off** *(Variant B: Naive centroid)* | **Isolates Existence Scanning** |
+| `qwen_rigid_fg_det_latent` | Rigid | **On** | **Off** *(Trust detector)* | **ON** *(VLM latent zoom)* | **Isolates Latent Re-partitioning** |
+| `qwen_sgap_fg_det_latent` | SGAP | **On** | **Off** *(Trust detector)* | **ON** *(VLM latent zoom)* | **Isolates Latent Re-partitioning** |
+| `qwen_rigid_full` | Rigid | **On** | **ON** *(VLM verified)* | **ON** *(VLM latent zoom)* | Full Rigid Single-Crop Method |
+| `qwen_sgap_full` *(Ours)* | SGAP | **On** | **ON** *(VLM verified)* | **ON** *(VLM latent zoom)* | Full SGAP Single-Crop Method |
 
+*Note: Dynamic retention elasticity (`enable_dynamic_retention_elasticity = True`) is preserved for grouped methods to retain score ties at the 20th patch cutoff.*
 ---
 
 ## 2. Directory Structure
@@ -127,13 +131,16 @@ bash experiments/our/ablations/scripts/run_ablation_gate_threshold.sh Qwen/Qwen3
 ```
 
 ### D. Run Search Component Increment Sweep
-Sweeps the cumulative component hierarchy (`qwen` -> `qwen_fast_path` -> `qwen_fp_rigid_cg_single` -> `qwen_fp_sgap_cg_single` -> `qwen_fp_asp_cg_single` -> `qwen_fp_asp_cg_agg`) on pool $N=5$:
+Sweeps all 11 component increments on pool $N=5$ (or any specified pool):
 ```bash
 cd MSSearch
 bash experiments/our/ablations/scripts/run_ablation_component.sh all Qwen/Qwen3-VL-8B-Instruct N_5
 
-# Or run an individual increment:
-bash experiments/our/ablations/scripts/run_ablation_component.sh qwen_fp_rigid_cg_single Qwen/Qwen3-VL-8B-Instruct N_5
+# Or run an individual component (e.g. Full SGAP):
+bash experiments/our/ablations/scripts/run_ablation_component.sh qwen_sgap_full Qwen/Qwen3-VL-8B-Instruct N_5
+
+# Or isolate Existence Scanning:
+bash experiments/our/ablations/scripts/run_ablation_component.sh qwen_sgap_fg_exist_abs Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 
 ### E. Run Specific Pair or Component via CLI Runner
@@ -175,9 +182,8 @@ bash experiments/our/ablations/scripts/run_modal_ablation.sh scorer Qwen/Qwen3-V
 # Gating threshold sweep (0.3, 0.7, 0.5)
 bash experiments/our/ablations/scripts/run_modal_ablation.sh gate Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 
-# Component increment sweep (all 6 components)
+# Component increment sweep (all 11 paired components)
 bash experiments/our/ablations/scripts/run_modal_ablation.sh component Qwen/Qwen3-VL-8B-Instruct N_5 --detach
-
 # Full matrix sweep across all 3 axes
 bash experiments/our/ablations/scripts/run_modal_ablation.sh all Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 ```
