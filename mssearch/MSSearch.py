@@ -13,7 +13,7 @@ Features:
 
 import os
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from PIL import Image
 import numpy as np
 import torch
