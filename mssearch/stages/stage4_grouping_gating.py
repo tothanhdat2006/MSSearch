@@ -413,6 +413,7 @@ def run_feature_grouping_and_gating(
             "According to your common sense knowledge and the content of the image, is it possible to find a {} by further zooming the sub-patch? Answer Yes or No.",
         )
 
+    latent_queue.sort(key=lambda item: item["state"].get("max_siglip_score", 0.0), reverse=True)
     evaluated_latent_items = latent_queue[:max_latent_evals]
     capped_latent_items = latent_queue[max_latent_evals:]
     for item in capped_latent_items:
