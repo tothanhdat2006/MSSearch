@@ -22,7 +22,7 @@ class MSSearchConfig:
     # -------------------------------------------------------------------------
     # Stage 2: 2-Gate Early Assessment (Direct Global Answer & Fast Path)
     # -------------------------------------------------------------------------
-    enable_direct_answer: bool = True            # Phase 1: Direct Global Answer via Yes/No logit sufficiency probing
+    enable_direct_answer: bool = False            # Phase 1: Direct Global Answer via Yes/No logit sufficiency probing
     direct_answer_conf_threshold: float = 0.60   # Minimum sufficiency confidence c_q [-1, 1] to answer directly on root
     enable_fast_path: bool = False               # Phase 2: Tool-Based Fast Path via SAM3 Proposals (Default False per ablation findings)
     fast_path_conf_threshold: float = 0.70       # Existence confidence threshold for fast path instant exit
