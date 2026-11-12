@@ -108,11 +108,11 @@ def load_ablation_engines(
     if component in ("qwen_rigid_topk",):
         cfg_dict["partition_mode"] = "quadrant_only"
         cfg_dict["enable_feature_grouping"] = False
-        cfg_dict["max_retained_patches"] = 50
+        cfg_dict["max_retained_patches"] = 20
     elif component in ("qwen_sgap_topk",):
         cfg_dict["partition_mode"] = "sgap_only"
         cfg_dict["enable_feature_grouping"] = False
-        cfg_dict["max_retained_patches"] = 50
+        cfg_dict["max_retained_patches"] = 20
     elif component in ("qwen_rigid_fg_det_abs", "qwen_rigid_fg_det_abs_topk"):
         cfg_dict["partition_mode"] = "quadrant_only"
         cfg_dict["enable_feature_grouping"] = True

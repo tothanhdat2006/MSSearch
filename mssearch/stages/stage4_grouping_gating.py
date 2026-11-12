@@ -89,6 +89,9 @@ def run_feature_grouping_and_gating(
             reverse=True,
         )
         retained = sorted_bp[:k_unclustered]
+        for p in retained:
+            if p.confidence_score is None:
+                p.confidence_score = float(p.siglip_score if p.siglip_score is not None else 0.5)
         if config.verbose:
             print(f"[Stage 4] Feature grouping disabled by config; retaining top {len(retained)}/{len(bounded_patches)} bounded patches ranked by SigLIP similarity (cap={k_unclustered}).")
         group_records = []

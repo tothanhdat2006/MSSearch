@@ -83,14 +83,14 @@ class TestComponentAblationConfig(unittest.TestCase):
             cfg1 = load_ablation_engines(component="qwen_rigid_topk")["config"]
             self.assertEqual(cfg1.partition_mode, "quadrant_only")
             self.assertFalse(cfg1.enable_feature_grouping)
-            self.assertEqual(cfg1.max_retained_patches, 50)
+            self.assertEqual(cfg1.max_retained_patches, 20)
             self.assertFalse(cfg1.enable_fast_path)
 
             # 2. SGAP Top-K
             cfg2 = load_ablation_engines(component="qwen_sgap_topk")["config"]
             self.assertEqual(cfg2.partition_mode, "sgap_only")
             self.assertFalse(cfg2.enable_feature_grouping)
-            self.assertEqual(cfg2.max_retained_patches, 50)
+            self.assertEqual(cfg2.max_retained_patches, 20)
             self.assertFalse(cfg2.enable_fast_path)
 
             # 3. Rigid FG + Det + Naive Absent (Variant B)

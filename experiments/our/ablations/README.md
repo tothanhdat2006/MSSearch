@@ -49,8 +49,8 @@ Controls the cumulative progression of the 4 core search modules (Table 1 & Tabl
 | Key | Partition | Grouping | Existence Scanning (Detected) | Latent Re-partitioning (Absent) | Retention Budget |
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | `qwen` | Baseline | Off | Off | Off | Direct zero-shot VLM on full gallery images |
-| `qwen_rigid_topk` | Rigid | Off | Off | Off | Global top-50 patches ranked by SigLIP |
-| `qwen_sgap_topk` | SGAP | Off | Off | Off | Global top-50 patches ranked by SigLIP |
+| `qwen_rigid_topk` | Rigid | Off | Off | Off | Base 20 patches/img ranked by SigLIP (scales with N) |
+| `qwen_sgap_topk` | SGAP | Off | Off | Off | Base 20 patches/img ranked by SigLIP (scales with N) |
 | `qwen_rigid_fg_det_abs` | Rigid | **On** | **Off** *(Trust detector)* | **Off** *(Variant B: Naive centroid)* | 8 det / 1 abs centroid |
 | `qwen_sgap_fg_det_abs` | SGAP | **On** | **Off** *(Trust detector)* | **Off** *(Variant B: Naive centroid)* | 8 det / 1 abs centroid |
 | `qwen_rigid_fg_exist_abs` | Rigid | **On** | **ON** *(VLM verified)* | **Off** *(Variant B: Naive centroid)* | **Isolates Existence Scanning** |
