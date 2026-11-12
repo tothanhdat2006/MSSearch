@@ -390,7 +390,7 @@ def run_feature_grouping_and_gating(
                 st["has_active_match"] = True
                 st["match_reason"] = f"sam3_det_vlm_confirmed (conf={score:.2f} >= {config.existence_confidence_threshold:.2f})"
             else:
-                if config.enable_latent_gating and active_objects:
+                if enable_latent and active_objects:
                     latent_queue.append({"g_idx": st["g_idx"], "state": st})
 
     # Phase 2: Vectorized VLM Latent Probing (Budget Capped)
