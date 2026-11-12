@@ -288,7 +288,7 @@ def run_feature_grouping_and_gating(
 
         # Safeguard B: High-confidence SAM3 or SigLIP bypass
         max_siglip_score = max([bounded_patches[mem_i].siglip_score or 0.0 for mem_i in member_indices], default=0.0)
-        if getattr(config, "bypass_vlm_for_confirmed_groups", True) and not has_active_match:
+        if getattr(config, "bypass_vlm_for_confirmed_groups", False) and not has_active_match:
             if max_det_score >= config.sam3_group_det_threshold:
                 has_active_match = True
                 best_det = max(group_detected_objects, key=lambda d: d["score"])

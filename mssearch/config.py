@@ -73,7 +73,7 @@ class MSSearchConfig:
     enable_existence_gating: bool = True         # Query VLM existence confidence to verify SAM3 detections
     existence_confidence_threshold: float = 0.0  # Minimum VLM existence confidence [-1, 1] to confirm detection
     existence_prompt_template: str = "Is there a '{}' in the image? Answer Yes or No."
-    bypass_vlm_for_confirmed_groups: bool = True # Skip VLM existence check if SAM3 det >= threshold or SigLIP >= 0.45
+    bypass_vlm_for_confirmed_groups: bool = False # False: enforce genuine VLM existence verification; do not bypass with raw detector score
     max_latent_evals: int = 20                   # Cap speculative VLM latent checks to top K groups (surfaced parameter)
     enable_prioritized_sam3_scanning: bool = True # Scan only high-priority candidate patches / centroids with SAM3
     max_sam3_eval_patches: int = 64              # Upper bound on expensive SAM3 patch scans in Stage 4
