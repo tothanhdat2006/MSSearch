@@ -14,6 +14,7 @@ Controls tool fast path (Stage 2) and candidate crop open-vocabulary object gati
 
 > [!NOTE]
 > For the default SAM3 detector, the ablation runner automatically falls back to `SAM3_PATH` from `env_paths.sh` when `DETECTOR_PATH` is unset. Alternative backbones (Grounding DINO, Florence-2, DINOv3) can be specified via `DETECTOR_PATH` or `--detector_path`.
+> In the SGAP-only architecture (`qwen_sgap_full`), the detector backbone must provide dense 4D/3D `vision_features` (supported by `sam3` and `dinov3`). Bounding-box-only detectors (`grounding_dino`, `florence2`) do not emit dense feature maps and fail fast if evaluated under SGAP without features.
 
 | Key | Model Identifier / Class | Default Source / Weight Path | Role |
 | :--- | :--- | :--- | :--- |

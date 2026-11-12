@@ -87,12 +87,9 @@ class DINOv3Detector(BaseDetector):
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         outputs = self.model(**inputs)
 
-        # Dense patch representations for Stage 2/3 feature reuse
-        last_hidden = outputs.last_hidden_state  # [1, num_tokens, D]
-        backbone_out = {"vision_features": last_hidden}
-
-        # Derive region proposals from ViT patch activation energy
+        # Derive region proposals and dense 4D feature map from ViT patch representations
         # Exclude CLS token if present (num_patches = num_tokens - 1 or num_tokens)
+        last_hidden = outputs.last_hidden_state
         tokens = last_hidden[0]
         if tokens.size(0) > 1:
             patch_tokens = tokens[1:] if tokens.size(0) % 2 != 0 else tokens
@@ -105,6 +102,14 @@ class DINOv3Detector(BaseDetector):
         side = int(energy.size(0) ** 0.5)
         boxes: List[List[float]] = []
         scores: List[float] = []
+
+        # Dense patch representations reshaped to 4D [1, D, side, side] for Stage 3 SGAP
+        if side > 1:
+            grid_tokens = patch_tokens[: side * side]  # [side * side, D]
+            vision_features = grid_tokens.view(side, side, -1).permute(2, 0, 1).unsqueeze(0)  # [1, D, side, side]
+            backbone_out = {"vision_features": vision_features}
+        else:
+            backbone_out = None
 
         if side > 1:
             grid = energy[: side * side].view(side, side)

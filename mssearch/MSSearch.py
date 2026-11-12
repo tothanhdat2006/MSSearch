@@ -464,6 +464,20 @@ class MultiSourceSearchEngine:
                     except Exception as e:
                         if is_verbose:
                             print(f"[Stage 3][Feature Extraction Warning] SAM3 forward failed on image {idx}: {e}")
+            if not feature_cache and target_indices:
+                det_name = type(self.sam_model).__name__ if self.sam_model is not None else "None"
+                if sub_config.partition_mode in ("sgap_only", "hybrid"):
+                    raise RuntimeError(
+                        f"[MSSearch Error] SGAP visual search ('{sub_config.partition_mode}') strictly requires dense "
+                        f"'vision_features' [C, H, W] from the detector backbone, but detector '{det_name}' provided none. "
+                        f"Fallback execution is strictly disabled."
+                    )
+                if getattr(sub_config, "enable_feature_grouping", True):
+                    raise RuntimeError(
+                        f"[MSSearch Error] Feature Grouping strictly requires dense 'vision_features' [C, H, W] "
+                        f"from the detector backbone, but detector '{det_name}' provided none. "
+                        f"Fallback execution is strictly disabled."
+                    )
             telemetry["timings_sec"]["sam3_canvas_features"] = round(time.perf_counter() - t_feat, 3)
 
         bounded_patches = partition_candidate_images(

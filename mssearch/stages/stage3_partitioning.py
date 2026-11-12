@@ -81,9 +81,19 @@ def partition_candidate_images(
                 if config.verbose:
                     print(f"[Stage 3][Feature Warning] Dynamic feature extraction failed on image {img_idx}: {e}")
         if feat_map is None:
-            feat_map = np.zeros((256, 72, 72), dtype=np.float32)
-            if config.verbose:
-                print(f"[Stage 3][Fallback] Image {img_idx}: No vision feature map available; falling back to zero-initialized feature map.")
+            det_name = type(sam_model).__name__ if sam_model is not None else "None"
+            if config.partition_mode in ("sgap_only", "hybrid"):
+                raise RuntimeError(
+                    f"[Stage 3 Error] Image {img_idx}: SGAP partitioning ('{config.partition_mode}') requires a dense vision feature map [C, H, W], "
+                    f"but detector '{det_name}' provided no 'vision_features'. "
+                    f"Silent fallback to zero-initialized feature maps is strictly disabled."
+                )
+            if getattr(config, "enable_feature_grouping", True):
+                raise RuntimeError(
+                    f"[Stage 3 Error] Image {img_idx}: Feature Grouping requires pooled feature vectors from a dense vision feature map, "
+                    f"but detector '{det_name}' provided no 'vision_features'. "
+                    f"Silent fallback to zero-initialized feature maps is strictly disabled."
+                )
         img_patches: List[BoundedPatch] = []
 
         while work_queue:
@@ -230,7 +240,7 @@ def partition_candidate_images(
                     if cached_siglip_score is None or cached_siglip_score < getattr(config, "saliency_target_threshold", 0.35):
                         continue
 
-                _, pooled_vec = slice_feature_map(feat_map, box_ints, img_w, img_h)
+                _, pooled_vec = slice_feature_map(feat_map, box_ints, img_w, img_h) if feat_map is not None else (None, np.zeros((0,), dtype=np.float32))
 
                 img_patches.append(
                     BoundedPatch(

@@ -170,6 +170,65 @@ class TestAblationAdapters(unittest.TestCase):
         self.assertEqual(processed_results[1]["boxes"], [])
         self.assertEqual(processed_results[2]["scores"], [])
 
+    def test_dinov3_4d_tensor_reshape(self):
+        detector = DINOv3Detector(model_name_or_path="stub", device="cpu")
+        detector.stub_mode = False
+        mock_proc = MagicMock()
+        mock_model = MagicMock()
+        mock_proc.return_value = {"pixel_values": torch.ones(1, 3, 224, 224)}
+
+        # 197 tokens (1 CLS + 196 patches = 14x14 grid) of dim 64
+        mock_out = MagicMock()
+        mock_out.last_hidden_state = torch.ones(1, 197, 64)
+        mock_model.return_value = mock_out
+        detector.processor = mock_proc
+        detector.model = mock_model
+
+        backbone_out, proc_res, tids = detector.batch_inference(self.dummy_img, ["car"])
+        self.assertIsNotNone(backbone_out)
+        self.assertIn("vision_features", backbone_out)
+        vf = backbone_out["vision_features"]
+        # Must be 4D: [1, D=64, H=14, W=14]
+        self.assertEqual(vf.shape, (1, 64, 14, 14))
+
+    def test_slice_feature_map_contracts(self):
+        import numpy as np
+        from mssearch.stages.utils_stage3 import slice_feature_map
+
+        # 1. Standard 3D feature map [C=32, H=14, W=14]
+        feat_3d = np.ones((32, 14, 14), dtype=np.float32)
+        sub_feat, pooled = slice_feature_map(feat_3d, (0, 0, 100, 100), 200, 200)
+        self.assertEqual(sub_feat.ndim, 3)
+        self.assertEqual(len(pooled), 32)
+
+        # 2. Defensive handling of unpermuted 2D patch tokens [196, 32]
+        feat_2d = np.ones((196, 32), dtype=np.float32)
+        sub_feat_2d, pooled_2d = slice_feature_map(feat_2d, (0, 0, 100, 100), 200, 200)
+        self.assertEqual(sub_feat_2d.ndim, 3)
+        self.assertEqual(len(pooled_2d), 32)
+
+        # 3. None feature map raises RuntimeError
+        with self.assertRaises(RuntimeError):
+            slice_feature_map(None, (0, 0, 100, 100), 200, 200)
+
+    def test_strict_no_fallback_on_missing_features(self):
+        from mssearch.stages.stage3_partitioning import partition_candidate_images
+        from mssearch.config import MSSearchConfig
+
+        # Mock detector with no vision features
+        mock_det = MagicMock()
+        mock_det.batch_inference.return_value = (None, {}, [1])
+
+        cfg = MSSearchConfig(partition_mode="sgap_only")
+        with self.assertRaises(RuntimeError):
+            partition_candidate_images(
+                candidate_images=[self.dummy_img],
+                stage2_feature_cache={},
+                config=cfg,
+                active_objects=["car"],
+                sam_model=mock_det,
+            )
+
     @patch("transformers.AutoProcessor.from_pretrained")
     @patch("transformers.AutoModel.from_pretrained")
     def test_clip_scorer_bounds(self, mock_model_cls, mock_proc_cls):

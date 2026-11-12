@@ -105,7 +105,9 @@ def main():
     m_name = os.path.basename(os.path.normpath(args.model_path))
 
     if args.component:
-        prefix = f"results_ablation_component_{args.component}_{m_name}_{args.pool_mode}"
+        det_tag = f"_{args.detector}" if args.detector != "sam3" else ""
+        sc_tag = f"_{args.scorer}" if args.scorer != "siglip" else ""
+        prefix = f"results_ablation_comp_{args.component}{det_tag}{sc_tag}_{m_name}_{args.pool_mode}"
     else:
         gate_tag = f"_gate{args.gate_threshold}" if args.gate_threshold is not None else ""
         prefix = f"results_ablation_{args.detector}_{args.scorer}{gate_tag}_{m_name}_{args.pool_mode}"
