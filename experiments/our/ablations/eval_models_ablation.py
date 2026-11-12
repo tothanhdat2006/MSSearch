@@ -99,7 +99,6 @@ def load_ablation_engines(
 
     # Apply Default Configuration Guardrails (Fast Path & Sub-canvas Aggregation Disabled)
     cfg_dict["enable_fast_path"] = False
-    cfg_dict["enable_direct_answer"] = False
     cfg_dict["enable_relational_parsing"] = False
     cfg_dict["enable_continuous_enclosure_subcanvas"] = False
     cfg_dict["enable_spatial_compressed_canvas"] = False
