@@ -10,7 +10,7 @@ MODELSCOPE_SAM3_URL = "https://www.modelscope.cn/models/llp1995/sam3/resolve/mas
 MODELSCOPE_SPACY_URL = "https://www.modelscope.cn/models/llp1995/sam3/resolve/master/en_core_web_sm-3.8.0.tar.gz"
 SIGLIP_HF_REPO = "google/siglip2-so400m-patch16-512"
 GROUNDING_DINO_HF_REPO = "IDEA-Research/grounding-dino-base"
-FLORENCE2_HF_REPO = "microsoft/Florence-2-large"
+FLORENCE2_HF_REPO = "florence-community/Florence-2-large"
 CLIP_B32_HF_REPO = "openai/clip-vit-base-patch32"
 CLIP_L14_HF_REPO = "openai/clip-vit-large-patch14"
 EVA02_L14_HF_REPO = "timm/eva02_large_patch14_clip_336.merged2b_s6b_b61k"
@@ -106,7 +106,6 @@ def main():
         snapshot_download(
             repo_id=args.siglip_repo,
             local_dir=siglip_target_dir,
-            local_dir_use_symlinks=False,
             token=args.hf_token
         )
     print(f"[Verified] SigLIP weights ready at '{siglip_target_dir}'.")
@@ -135,7 +134,6 @@ def main():
                     snapshot_download(
                         repo_id=repo_id,
                         local_dir=target_dir,
-                        local_dir_use_symlinks=False,
                         token=args.hf_token
                     )
                     print(f"[Verified] {label} weights ready at '{target_dir}'.")
