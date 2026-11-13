@@ -97,17 +97,20 @@ class Florence2Detector(BaseDetector):
                 try:
                     pixel_vals = inputs["pixel_values"]
                     vision_feats = None
-                    if hasattr(self.model, "_encode_image"):
+                    tower = getattr(getattr(self.model, "model", None), "vision_tower", None)
+                    if tower is not None:
+                        out = tower(pixel_vals)
+                        vision_feats = getattr(out, "last_hidden_state", out)
+                    elif hasattr(self.model, "_encode_image"):
                         vision_feats = self.model._encode_image(pixel_vals)
-                    elif hasattr(self.model, "get_image_features"):
-                        vision_feats = self.model.get_image_features(pixel_vals)
 
                     if vision_feats is not None and vision_feats.ndim == 3:
+                        # Legacy tokens are [pooled, grid...]: keep the trailing grid tokens
                         B_f, N_f, C_f = vision_feats.shape
                         grid_size = int(math.isqrt(N_f))
-                        if grid_size > 0:
-                            feat = vision_feats[:, :grid_size * grid_size, :].permute(0, 2, 1).reshape(B_f, C_f, grid_size, grid_size)
-                            backbone_out = {"vision_features": feat}
+                        vision_feats = vision_feats[:, N_f - grid_size * grid_size:, :].permute(0, 2, 1).reshape(B_f, C_f, grid_size, grid_size)
+                    if vision_feats is not None and vision_feats.ndim == 4:
+                        backbone_out = {"vision_features": vision_feats}
                 except Exception:
                     backbone_out = None
 
