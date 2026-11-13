@@ -39,7 +39,7 @@ def load_detector(
     Factory for open-vocabulary detection engines:
     - 'sam3': SAM3 baseline (weights at sam3_path)
     - 'grounding_dino': Grounding DINO (HF: IDEA-Research/grounding-dino-base)
-    - 'florence2': Florence-2-large (HF: microsoft/Florence-2-large)
+    - 'florence2': Florence-2-large (HF: florence-community/Florence-2-large)
     """
     det_lower = str(detector_type).lower().strip().replace("-", "_")
     if det_lower in ("none", "null", "no", "false", ""):
@@ -51,7 +51,7 @@ def load_detector(
         name = model_path_or_name or "IDEA-Research/grounding-dino-base"
         return GroundingDinoDetector(model_name_or_path=name, device=device, **kwargs)
     elif det_lower in ("florence2", "florence_2", "florence", "florence2_large"):
-        name = model_path_or_name or "microsoft/Florence-2-large"
+        name = model_path_or_name or "florence-community/Florence-2-large"
         return Florence2Detector(model_name_or_path=name, device=device, **kwargs)
     else:
         raise ValueError(f"Unknown detector_type '{detector_type}'. Supported: 'sam3', 'grounding_dino', 'florence2'.")

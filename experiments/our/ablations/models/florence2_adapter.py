@@ -1,7 +1,7 @@
 """
 Florence-2 detector adapter for MSSearch ablation suite.
-Uses Microsoft Florence-2-large via Hugging Face AutoModelForCausalLM / AutoProcessor
-with task prompt <CAPTION_TO_PHRASE_GROUNDING>.
+Uses the native transformers Florence-2 (AutoModelForImageTextToText / AutoProcessor,
+florence-community/Florence-2-large) with task prompt <CAPTION_TO_PHRASE_GROUNDING>.
 """
 
 from typing import List, Tuple, Dict, Any, Optional
@@ -12,19 +12,19 @@ from .base import BaseDetector
 
 class Florence2Detector(BaseDetector):
     """
-    Open-vocabulary detector adapter using Microsoft Florence-2-large
-    (microsoft/Florence-2-large or microsoft/Florence-2-base).
+    Open-vocabulary detector adapter using Florence-2-large
+    (florence-community/Florence-2-large or florence-community/Florence-2-base).
     """
 
     def __init__(
         self,
-        model_name_or_path: str = "microsoft/Florence-2-large",
+        model_name_or_path: str = "florence-community/Florence-2-large",
         device: str = "cuda:0",
         torch_dtype: Optional[torch.dtype] = None,
         lazy_load: bool = False,
         **kwargs,
     ):
-        self.model_name = model_name_or_path or "microsoft/Florence-2-large"
+        self.model_name = model_name_or_path or "florence-community/Florence-2-large"
         self.device = device if torch.cuda.is_available() else "cpu"
         self.dtype = torch_dtype or (torch.float16 if torch.cuda.is_available() else torch.float32)
 
@@ -36,17 +36,13 @@ class Florence2Detector(BaseDetector):
 
     def _load_model(self):
         """Loads Florence-2 processor and model."""
-        from transformers import AutoProcessor, AutoModelForCausalLM
+        from transformers import AutoProcessor, AutoModelForImageTextToText
 
         print(f"[Florence2Detector] Loading '{self.model_name}' on {self.device} ({self.dtype})...")
-        self.processor = AutoProcessor.from_pretrained(
-            self.model_name,
-            trust_remote_code=True,
-        )
-        self.model = AutoModelForCausalLM.from_pretrained(
+        self.processor = AutoProcessor.from_pretrained(self.model_name)
+        self.model = AutoModelForImageTextToText.from_pretrained(
             self.model_name,
             torch_dtype=self.dtype,
-            trust_remote_code=True,
         ).to(self.device).eval()
 
     def _ensure_loaded(self):
