@@ -371,6 +371,20 @@ def slice_feature_map(
     Slices the full-canvas feature map feat [C, H_f, W_f] corresponding to box (x1, y1, x2, y2),
     and computes the average pooled embedding [C].
     """
+    if feat is None:
+        raise RuntimeError("[slice_feature_map Error] Feature map is None. Fallback disabled.")
+
+    if feat.ndim == 2:
+        import math
+        n_tok, dim = feat.shape
+        s = int(math.isqrt(n_tok))
+        if s * s == n_tok:
+            feat = feat.reshape(s, s, dim).transpose(2, 0, 1)
+        else:
+            raise ValueError(f"[slice_feature_map Error] Cannot reshape 2D feature map with shape {feat.shape} into 3D grid.")
+    elif feat.ndim != 3:
+        raise ValueError(f"[slice_feature_map Error] Expected 3D feature map [C, H, W], got shape {feat.shape}.")
+
     C, H_f, W_f = feat.shape
     x1, y1, x2, y2 = box
 

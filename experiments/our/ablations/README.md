@@ -13,7 +13,8 @@ Ablation evaluation framework for dissecting the perceptual backbones and decisi
 In the default architecture (Row 2: Rigid quadtree + Top-k retention), the detector is bypassed to save ~3.5 GB VRAM and avoid unnecessary detection inference. This axis evaluates whether re-enabling Stage 4 Feature Grouping with different visual experts improves over the Rigid Top-k baseline:
 
 > [!NOTE]
-> For the default SAM3 detector, the ablation runner automatically falls back to `SAM3_PATH` from `env_paths.sh` when `DETECTOR_PATH` is unset. Alternative backbones (Grounding DINO, Florence-2, DINOv3) can be specified via `DETECTOR_PATH` or `--detector_path`. To evaluate with SGAP partitioning instead of Rigid, pass `--sgap`.
+> For the default SAM3 detector, the ablation runner automatically falls back to `SAM3_PATH` from `env_paths.sh` when `DETECTOR_PATH` is unset. Alternative backbones (Grounding DINO, Florence-2) can be specified via `DETECTOR_PATH` or `--detector_path`. To evaluate with SGAP partitioning instead of Rigid, pass `--sgap`.
+> Bounding-box-only detectors (`grounding_dino`, `florence2`) provide detection proposals but do not emit dense feature maps. Under SGAP partitioning, SAM3 feature maps are preserved for Stage 3 superpixel partitioning while the detector expert supplies bounding box proposals.
 
 | Key | Model Identifier / Class | Default Source / Weight Path | Role |
 | :--- | :--- | :--- | :--- |

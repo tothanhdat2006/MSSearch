@@ -77,7 +77,9 @@ def evaluate_ablation_modal(
 
     m_clean = os.path.basename(os.path.normpath(model_name))
     if component:
-        prefix = f"results_ablation_component_{component}_{m_clean}_{pool_mode}"
+        d_tag = f"_{detector}" if detector != "sam3" else ""
+        s_tag = f"_{scorer}" if scorer != "siglip" else ""
+        prefix = f"results_ablation_comp_{component}{d_tag}{s_tag}_{m_clean}_{pool_mode}"
     else:
         gate_tag = f"_gate{gate_threshold}" if gate_threshold is not None else ""
         prefix = f"results_ablation_{detector}_{scorer}{gate_tag}_{m_clean}_{pool_mode}"
