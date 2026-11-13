@@ -66,6 +66,8 @@ class SigLIPScorer:
         model_name: str = "google/siglip2-so400m-patch16-512",
         device: str = "cuda:0",
         torch_dtype: torch.dtype = torch.float16,
+        calib_center: float = 0.20,
+        calib_scale: float = 12.0,
         **kwargs,
     ):
         model_candidate = kwargs.get("model_path", model_name)
@@ -79,6 +81,8 @@ class SigLIPScorer:
         self.model_name = model_candidate
         self.device = device if torch.cuda.is_available() else "cpu"
         self.dtype = torch_dtype if torch.cuda.is_available() else torch.float32
+        self.calib_center = float(calib_center)
+        self.calib_scale = float(calib_scale)
         self.model = None
         self.processor = None
         self.is_siglip = "siglip" in self.model_name.lower()
@@ -178,8 +182,14 @@ class SigLIPScorer:
                 img_embeds = _extract_embedding_tensor(img_embeds)
                 img_embeds = img_embeds / img_embeds.norm(dim=-1, keepdim=True)
 
-                logits_per_image = torch.matmul(img_embeds, text_embeds.t()) * logit_scale + logit_bias
-                probs = torch.sigmoid(logits_per_image) if self.is_siglip else torch.softmax(logits_per_image, dim=-1)
+                cos_sim = torch.matmul(img_embeds, text_embeds.t())
+                if self.is_siglip:
+                    logits_per_image = cos_sim * logit_scale + logit_bias
+                    probs = torch.sigmoid(logits_per_image)
+                else:
+                    # Pure cosine similarity for contrastive vision-language encoders (CLIP, EVA)
+                    probs = cos_sim
+
                 max_probs = probs.max(dim=-1).values
                 scores.extend(max_probs.cpu().tolist())
         else:
@@ -202,7 +212,9 @@ class SigLIPScorer:
                 if self.is_siglip:
                     probs = torch.sigmoid(logits_per_image)
                 else:
-                    probs = torch.softmax(logits_per_image, dim=-1)
+                    scale = self.model.logit_scale.exp() if hasattr(self.model, "logit_scale") else 100.0
+                    cos_sim = logits_per_image / scale
+                    probs = cos_sim
 
                 max_probs = probs.max(dim=-1).values
                 scores.extend(max_probs.cpu().tolist())

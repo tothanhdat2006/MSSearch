@@ -135,9 +135,7 @@ class EVA02VisualScorer(BaseVisualScorer):
 
             cos_sim = torch.matmul(img_embeds, text_embeds.t())
             max_sim = cos_sim.max(dim=-1).values
-
-            probs = torch.sigmoid((max_sim - self.calib_center) * self.calib_scale)
-            scores.extend(probs.cpu().tolist())
+            scores.extend(max_sim.cpu().tolist())
 
         # ponytail: clamp bounds to [0.0, 1.0]
         return [float(min(1.0, max(0.0, s))) for s in scores]
