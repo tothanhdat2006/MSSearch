@@ -1,7 +1,7 @@
 # MSSearch Ablation Study Suite
 
 Ablation evaluation framework for dissecting the perceptual backbones and decision thresholds of the MSSearch pipeline across three independent axes:
-1. **Visual Expert / Detection Backbone** (evaluating **SAM3**, **Grounding DINO**, or **Florence-2** without feature grouping under SGAP / Rigid partitioning vs. the Rigid Top-k baseline).
+1. **Visual Expert / Detection Backbone** (evaluating **SAM3**, **Grounding DINO**, **Florence-2**, or **OWLv2** without feature grouping under SGAP / Rigid partitioning vs. the Rigid Top-k baseline).
 2. **Low-Resolution Zero-Shot Screening Scorer** (evaluating **SigLIP**, **SigLIP2-384**, **SigLIP2-512**, **CLIP-ViT-B/32**, **CLIP-ViT-L/14**, or **EVA-02-L/14** under the default Rigid Top-k architecture).
 3. **Candidate Retention Budget Top-K** (sweeping base patches per image $k \in \{1, 5, 10, 20, 40\}$, replacing the obsolete gating threshold).
 
@@ -21,6 +21,7 @@ In the default architecture (Row 2: Rigid quadtree + Top-k retention), the detec
 | `sam3` | `sam3_inference` | `${MODEL_DIR}/sam3/sam3.pt` | Unified promptable segmentation/detection baseline |
 | `grounding_dino` | `GroundingDinoDetector` | `IDEA-Research/grounding-dino-base` | Text-grounded open-set object detection |
 | `florence2` | `Florence2Detector` | `florence-community/Florence-2-large` | Open-vocabulary phrase grounding (<CAPTION_TO_PHRASE_GROUNDING>) |
+| `owlv2` | `OWLv2Detector` | `google/owlv2-base-patch16-ensemble` | Open-vocabulary text-guided object detection & ViT patch features |
 | `none` | `None` | N/A | Bypasses detector entirely (Rigid Top-k default) |
 
 ### Axis 2: Low-Resolution Visual Scorer (`--scorer`)
@@ -81,6 +82,8 @@ MSSearch/experiments/our/ablations/
 │   ├── sam3_adapter.py            # SAM3 wrapper conforming to BaseDetector
 │   ├── grounding_dino_adapter.py  # Grounding DINO adapter via HF Transformers
 │   ├── florence2_adapter.py       # Florence-2-large adapter via HF Transformers
+│   ├── owlv2_adapter.py           # OWLv2 adapter via HF Transformers
+│   ├── unified_vision_extractor.py # Unified spatial feature map & detection extractor
 │   ├── clip_scorer_adapter.py     # CLIP-ViT-B/32 and CLIP-ViT-L/14 scorer
 │   └── eva02_scorer_adapter.py    # EVA-02-L/14 scorer (open_clip / timm / HF)
 ├── scripts/

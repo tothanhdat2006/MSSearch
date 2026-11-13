@@ -11,6 +11,7 @@ MODELSCOPE_SPACY_URL = "https://www.modelscope.cn/models/llp1995/sam3/resolve/ma
 SIGLIP_HF_REPO = "google/siglip2-so400m-patch16-512"
 GROUNDING_DINO_HF_REPO = "IDEA-Research/grounding-dino-base"
 FLORENCE2_HF_REPO = "florence-community/Florence-2-large"
+OWLV2_HF_REPO = "google/owlv2-base-patch16-ensemble"
 CLIP_B32_HF_REPO = "openai/clip-vit-base-patch32"
 CLIP_L14_HF_REPO = "openai/clip-vit-large-patch14"
 EVA02_L14_HF_REPO = "timm/eva02_large_patch14_clip_336.merged2b_s6b_b61k"
@@ -33,6 +34,8 @@ def parse_args():
                         help="HuggingFace repo ID for Grounding DINO.")
     parser.add_argument("--florence2_repo", type=str, default=FLORENCE2_HF_REPO,
                         help="HuggingFace repo ID for Florence-2.")
+    parser.add_argument("--owlv2_repo", type=str, default=OWLV2_HF_REPO,
+                        help="HuggingFace repo ID for OWLv2.")
     parser.add_argument("--clip_b32_repo", type=str, default=CLIP_B32_HF_REPO,
                         help="HuggingFace repo ID for CLIP-ViT-B/32.")
     parser.add_argument("--clip_l14_repo", type=str, default=CLIP_L14_HF_REPO,
@@ -114,6 +117,7 @@ def main():
         ablation_targets = [
             ("grounding-dino-base", args.grounding_dino_repo, "Grounding DINO"),
             ("Florence-2-large", args.florence2_repo, "Florence-2"),
+            ("owlv2-base-patch16-ensemble", args.owlv2_repo, "OWLv2"),
             ("clip-vit-base-patch32", args.clip_b32_repo, "CLIP-ViT-B/32"),
             ("clip-vit-large-patch14", args.clip_l14_repo, "CLIP-ViT-L/14"),
             ("eva02_large_patch14_clip_336", args.eva02_repo, "EVA-02-L/14"),

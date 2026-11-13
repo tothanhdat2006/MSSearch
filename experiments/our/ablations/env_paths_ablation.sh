@@ -8,6 +8,7 @@
 # 1. Ablation Detection Models
 export GROUNDING_DINO_PATH=".../models/grounding-dino-base"
 export FLORENCE2_PATH=".../models/Florence-2-large"
+export OWLV2_PATH=".../models/owlv2-base-patch16-ensemble"
 
 # 2. Ablation Visual Screening Models
 export CLIP_B32_NAME=".../models/clip-vit-base-patch32"

@@ -73,6 +73,8 @@ except ImportError:
 from models.base import BaseDetector, BaseVisualScorer
 from models.grounding_dino_adapter import GroundingDinoDetector
 from models.florence2_adapter import Florence2Detector
+from models.owlv2_adapter import OWLv2Detector
+from models.unified_vision_extractor import UnifiedVisionExtractor
 from models.clip_scorer_adapter import CLIPVisualScorer, format_clip_prompts
 from models.eva02_scorer_adapter import EVA02VisualScorer
 from models import load_detector, load_visual_scorer
@@ -150,11 +152,56 @@ class TestAblationAdapters(unittest.TestCase):
             self.dummy_img, ["car", "person"]
         )
 
-        self.assertIsNone(backbone_out)
         self.assertEqual(text_id, [1, 2])
         self.assertIn(1, processed_results)
         self.assertEqual(processed_results[1]["boxes"][0], [5, 10, 50, 81])
         self.assertEqual(processed_results[1]["scores"][0], 0.95)
+
+    @patch("transformers.Owlv2Processor.from_pretrained")
+    @patch("transformers.Owlv2ForObjectDetection.from_pretrained")
+    def test_owlv2_contract(self, mock_model_cls, mock_proc_cls):
+        mock_proc = MagicMock()
+        mock_model = MagicMock()
+        mock_proc_cls.return_value = mock_proc
+        mock_model_cls.return_value.to.return_value.eval.return_value = mock_model
+        mock_proc.return_value = {
+            "input_ids": torch.tensor([[1, 2]]),
+            "pixel_values": torch.ones(1, 3, 150, 200),
+        }
+
+        # Mock patch tokens: 1 CLS + 16 patches (4x4 grid), dim 32
+        mock_vision = MagicMock()
+        mock_vision.last_hidden_state = torch.ones(1, 17, 32)
+        mock_model.owlv2.vision_model.return_value = mock_vision
+
+        mock_proc.post_process_grounded_object_detection.return_value = [{
+            "boxes": torch.tensor([[10.0, 20.0, 60.0, 80.0]]),
+            "scores": torch.tensor([0.92]),
+            "labels": torch.tensor([0]),
+        }]
+
+        detector = OWLv2Detector(model_name_or_path="mock-owlv2", device="cpu")
+        backbone_out, processed_results, text_id = detector.batch_inference(
+            self.dummy_img, ["car", "person"]
+        )
+
+        self.assertIsNotNone(backbone_out)
+        self.assertIn("vision_features", backbone_out)
+        self.assertEqual(backbone_out["vision_features"].shape, (1, 32, 4, 4))
+        self.assertEqual(text_id, [1, 2])
+        self.assertIn(1, processed_results)
+        self.assertEqual(processed_results[1]["boxes"][0], [10, 20, 60, 80])
+        self.assertAlmostEqual(processed_results[1]["scores"][0], 0.92, places=2)
+
+    def test_owlv2_stub_mode(self):
+        detector = OWLv2Detector(model_name_or_path="stub", device="cpu")
+        self.assertTrue(detector.stub_mode)
+        backbone_out, processed_results, text_id = detector.batch_inference(
+            self.dummy_img, ["car", "person"]
+        )
+        self.assertIsNone(backbone_out)
+        self.assertEqual(text_id, [1, 2])
+        self.assertEqual(processed_results[1]["boxes"], [])
 
     def test_slice_feature_map_contracts(self):
         import numpy as np
@@ -225,6 +272,11 @@ class TestAblationAdapters(unittest.TestCase):
              patch("transformers.AutoModelForCausalLM.from_pretrained"):
             det_f2 = load_detector("florence2", device="cpu")
             self.assertIsInstance(det_f2, BaseDetector)
+
+        with patch("transformers.Owlv2Processor.from_pretrained"), \
+             patch("transformers.Owlv2ForObjectDetection.from_pretrained"):
+            det_owl = load_detector("owlv2", device="cpu")
+            self.assertIsInstance(det_owl, BaseDetector)
 
         with patch("transformers.AutoProcessor.from_pretrained"), \
              patch("transformers.AutoModel.from_pretrained"):

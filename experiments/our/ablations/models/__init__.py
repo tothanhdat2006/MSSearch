@@ -7,6 +7,8 @@ from .base import BaseDetector, BaseVisualScorer
 from .sam3_adapter import SAM3Detector
 from .grounding_dino_adapter import GroundingDinoDetector
 from .florence2_adapter import Florence2Detector
+from .owlv2_adapter import OWLv2Detector
+from .unified_vision_extractor import UnifiedVisionExtractor
 from .clip_scorer_adapter import CLIPVisualScorer
 from .eva02_scorer_adapter import EVA02VisualScorer
 
@@ -22,6 +24,8 @@ __all__ = [
     "SAM3Detector",
     "GroundingDinoDetector",
     "Florence2Detector",
+    "OWLv2Detector",
+    "UnifiedVisionExtractor",
     "CLIPVisualScorer",
     "EVA02VisualScorer",
     "load_detector",
@@ -40,6 +44,7 @@ def load_detector(
     - 'sam3': SAM3 baseline (weights at sam3_path)
     - 'grounding_dino': Grounding DINO (HF: IDEA-Research/grounding-dino-base)
     - 'florence2': Florence-2-large (HF: florence-community/Florence-2-large)
+    - 'owlv2': OWLv2 (HF: google/owlv2-base-patch16-ensemble)
     """
     det_lower = str(detector_type).lower().strip().replace("-", "_")
     if det_lower in ("none", "null", "no", "false", ""):
@@ -53,8 +58,11 @@ def load_detector(
     elif det_lower in ("florence2", "florence_2", "florence", "florence2_large"):
         name = model_path_or_name or "florence-community/Florence-2-large"
         return Florence2Detector(model_name_or_path=name, device=device, **kwargs)
+    elif det_lower in ("owlv2", "owl_v2", "owl"):
+        name = model_path_or_name or "google/owlv2-base-patch16-ensemble"
+        return OWLv2Detector(model_name_or_path=name, device=device, **kwargs)
     else:
-        raise ValueError(f"Unknown detector_type '{detector_type}'. Supported: 'sam3', 'grounding_dino', 'florence2'.")
+        raise ValueError(f"Unknown detector_type '{detector_type}'. Supported: 'sam3', 'grounding_dino', 'florence2', 'owlv2'.")
 
 
 def load_visual_scorer(

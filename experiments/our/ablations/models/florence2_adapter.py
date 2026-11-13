@@ -5,6 +5,7 @@ florence-community/Florence-2-large) with task prompt <CAPTION_TO_PHRASE_GROUNDI
 """
 
 from typing import List, Tuple, Dict, Any, Optional
+import math
 from PIL import Image
 import torch
 from .base import BaseDetector
@@ -35,15 +36,23 @@ class Florence2Detector(BaseDetector):
             self._load_model()
 
     def _load_model(self):
-        """Loads Florence-2 processor and model."""
-        from transformers import AutoProcessor, AutoModelForImageTextToText
+        """Loads Florence-2 processor and model (supports both native florence-community and legacy microsoft checkpoints)."""
+        from transformers import AutoProcessor, AutoModelForImageTextToText, AutoModelForCausalLM
 
         print(f"[Florence2Detector] Loading '{self.model_name}' on {self.device} ({self.dtype})...")
-        self.processor = AutoProcessor.from_pretrained(self.model_name)
-        self.model = AutoModelForImageTextToText.from_pretrained(
-            self.model_name,
-            torch_dtype=self.dtype,
-        ).to(self.device).eval()
+        try:
+            self.processor = AutoProcessor.from_pretrained(self.model_name)
+            self.model = AutoModelForImageTextToText.from_pretrained(
+                self.model_name,
+                torch_dtype=self.dtype,
+            ).to(self.device).eval()
+        except Exception:
+            self.processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                torch_dtype=self.dtype,
+                trust_remote_code=True,
+            ).to(self.device).eval()
 
     def _ensure_loaded(self):
         if self.model is None and self.model_name != "stub":
@@ -72,6 +81,7 @@ class Florence2Detector(BaseDetector):
         self._ensure_loaded()
         w, h = image.size
         processed_results: Dict[int, Dict[str, Any]] = {}
+        backbone_out = None
 
         for idx, prompt in enumerate(text_prompts, start=1):
             clean_text = prompt.strip()
@@ -81,6 +91,25 @@ class Florence2Detector(BaseDetector):
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             if "pixel_values" in inputs and self.dtype in (torch.float16, torch.bfloat16):
                 inputs["pixel_values"] = inputs["pixel_values"].to(self.dtype)
+
+            # Extract DaViT Spatial Features & Reshape to (1, C, H_f, W_f)
+            if backbone_out is None and "pixel_values" in inputs:
+                try:
+                    pixel_vals = inputs["pixel_values"]
+                    vision_feats = None
+                    if hasattr(self.model, "_encode_image"):
+                        vision_feats = self.model._encode_image(pixel_vals)
+                    elif hasattr(self.model, "get_image_features"):
+                        vision_feats = self.model.get_image_features(pixel_vals)
+
+                    if vision_feats is not None and vision_feats.ndim == 3:
+                        B_f, N_f, C_f = vision_feats.shape
+                        grid_size = int(math.isqrt(N_f))
+                        if grid_size > 0:
+                            feat = vision_feats[:, :grid_size * grid_size, :].permute(0, 2, 1).reshape(B_f, C_f, grid_size, grid_size)
+                            backbone_out = {"vision_features": feat}
+                except Exception:
+                    backbone_out = None
 
             generated_ids = self.model.generate(
                 input_ids=inputs.get("input_ids"),
@@ -117,4 +146,4 @@ class Florence2Detector(BaseDetector):
                 "scores": scores,
             }
 
-        return None, processed_results, text_id
+        return backbone_out, processed_results, text_id

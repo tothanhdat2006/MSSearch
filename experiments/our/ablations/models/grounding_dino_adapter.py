@@ -61,6 +61,7 @@ class GroundingDinoDetector(BaseDetector):
         w, h = image.size
         processed_results: Dict[int, Dict[str, Any]] = {}
         text_id = list(range(1, len(text_prompts) + 1))
+        backbone_out = None
 
         for idx, prompt in enumerate(text_prompts, start=1):
             clean_text = prompt.strip().rstrip(".") + "."
@@ -68,6 +69,19 @@ class GroundingDinoDetector(BaseDetector):
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             if self.dtype == torch.float16 and "pixel_values" in inputs:
                 inputs["pixel_values"] = inputs["pixel_values"].to(self.dtype)
+
+            # Extract dense spatial feature map from Swin backbone scale index 1 (1, 256, H_f, W_f)
+            if backbone_out is None and hasattr(self.model, "model") and hasattr(self.model.model, "backbone"):
+                try:
+                    pixel_vals = inputs.get("pixel_values")
+                    pixel_m = inputs.get("pixel_mask", None)
+                    vision_outputs = self.model.model.backbone(pixel_vals, pixel_m)
+                    feat_map = vision_outputs[0][1][0]
+                    if feat_map.ndim == 3:
+                        feat_map = feat_map.unsqueeze(0)
+                    backbone_out = {"vision_features": feat_map}
+                except Exception:
+                    backbone_out = None
 
             outputs = self.model(**inputs)
             target_sizes = torch.tensor([[h, w]], device=self.device)
@@ -99,7 +113,7 @@ class GroundingDinoDetector(BaseDetector):
                 "scores": [float(s) for s in scores],
             }
 
-        return None, processed_results, text_id
+        return backbone_out, processed_results, text_id
 
     @torch.inference_mode()
     def batch_inference_multi_images(

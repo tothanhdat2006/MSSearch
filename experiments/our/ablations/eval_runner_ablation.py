@@ -72,7 +72,7 @@ def parse_args():
 
     # Detector & Scorer Backbones
     parser.add_argument("--detector", type=str, default=os.environ.get("DETECTOR_TYPE", "none"),
-                        choices=["sam3", "grounding_dino", "florence2", "none"],
+                        choices=["sam3", "grounding_dino", "florence2", "owlv2", "none"],
                         help="Visual expert / detector backbone (or 'none' for pure top-k).")
     parser.add_argument("--detector_path", type=str, default=os.environ.get("DETECTOR_PATH", os.environ.get("SAM3_PATH", None)))
     parser.add_argument("--scorer", type=str, default=os.environ.get("SCORER_TYPE", "siglip"),
