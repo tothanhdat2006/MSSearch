@@ -41,7 +41,7 @@ def load_detector(
     Factory for open-vocabulary detection engines:
     - 'sam3': SAM3 baseline (weights at sam3_path)
     - 'grounding_dino': Grounding DINO (HF: IDEA-Research/grounding-dino-base)
-    - 'florence2': Florence-2-large (HF: microsoft/Florence-2-large)
+    - 'florence2': Florence-2-large (HF: florence-community/Florence-2-large)
     - 'dinov3': DINOv3-ViT-L/16 (HF: facebook/dinov3-vitl16-pretrain-lvd1689m)
     """
     det_lower = str(detector_type).lower().strip().replace("-", "_")
@@ -54,7 +54,7 @@ def load_detector(
         name = model_path_or_name or "IDEA-Research/grounding-dino-base"
         return GroundingDinoDetector(model_name_or_path=name, device=device, **kwargs)
     elif det_lower in ("florence2", "florence_2", "florence", "florence2_large"):
-        name = model_path_or_name or "microsoft/Florence-2-large"
+        name = model_path_or_name or "florence-community/Florence-2-large"
         return Florence2Detector(model_name_or_path=name, device=device, **kwargs)
     elif det_lower in ("dinov3", "dino_v3", "dinov3_vitl16", "dinov3_lvd1689m"):
         name = model_path_or_name or "facebook/dinov3-vitl16-pretrain-lvd1689m"

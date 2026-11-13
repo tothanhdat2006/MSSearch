@@ -109,7 +109,7 @@ def evaluate_ablation_modal(
 
     det_map = {
         "grounding_dino": ("/models/grounding-dino-base", "IDEA-Research/grounding-dino-base"),
-        "florence2": ("/models/Florence-2-large", "microsoft/Florence-2-large"),
+        "florence2": ("/models/Florence-2-large", "florence-community/Florence-2-large"),
         "dinov3": ("/models/dinov3-vitl16-pretrain-lvd1689m", "facebook/dinov3-vitl16-pretrain-lvd1689m"),
     }
     sc_map = {

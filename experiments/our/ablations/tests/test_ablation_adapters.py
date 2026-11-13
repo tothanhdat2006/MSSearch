@@ -128,7 +128,7 @@ class TestAblationAdapters(unittest.TestCase):
         self.assertAlmostEqual(s1, 0.88, places=2)
 
     @patch("transformers.AutoProcessor.from_pretrained")
-    @patch("transformers.AutoModelForCausalLM.from_pretrained")
+    @patch("transformers.AutoModelForImageTextToText.from_pretrained")
     def test_florence2_contract(self, mock_model_cls, mock_proc_cls):
         mock_proc = MagicMock()
         mock_model = MagicMock()
@@ -147,7 +147,7 @@ class TestAblationAdapters(unittest.TestCase):
             }
         }
 
-        detector = Florence2Detector(model_name_or_path="microsoft/Florence-2-large", device="cpu")
+        detector = Florence2Detector(model_name_or_path="florence-community/Florence-2-large", device="cpu")
         backbone_out, processed_results, text_id = detector.batch_inference(
             self.dummy_img, ["car", "person"]
         )

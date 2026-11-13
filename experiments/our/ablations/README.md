@@ -19,7 +19,7 @@ In the default architecture (Row 2: Rigid quadtree + Top-k retention), the detec
 | :--- | :--- | :--- | :--- |
 | `sam3` | `sam3_inference` | `${MODEL_DIR}/sam3/sam3.pt` | Unified promptable segmentation/detection baseline |
 | `grounding_dino` | `GroundingDinoDetector` | `IDEA-Research/grounding-dino-base` | Text-grounded open-set object detection |
-| `florence2` | `Florence2Detector` | `microsoft/Florence-2-large` | Open-vocabulary phrase grounding (<CAPTION_TO_PHRASE_GROUNDING>) |
+| `florence2` | `Florence2Detector` | `florence-community/Florence-2-large` | Open-vocabulary phrase grounding (<CAPTION_TO_PHRASE_GROUNDING>) |
 | `dinov3` | `DINOv3Detector` | `facebook/dinov3-vitl16-pretrain-lvd1689m` | Dense ViT-L/16 patch features & energy proposals (gated) |
 | `none` | `None` | N/A | Bypasses detector entirely (Rigid Top-k default) |
 
