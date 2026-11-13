@@ -45,7 +45,7 @@ case "${MODE}" in
     detector|detectors)
         MODEL="${ARGS[0]:-Qwen/Qwen3-VL-8B-Instruct}"
         POOL="${ARGS[1]:-N_5}"
-        DETECTORS=("sam3" "grounding_dino" "florence2" "dinov3")
+        DETECTORS=("sam3" "grounding_dino" "florence2")
         for det in "${DETECTORS[@]}"; do
             run_job --detector "${det}" --scorer "siglip" --model "${MODEL}" --pool-mode "${POOL}"
         done

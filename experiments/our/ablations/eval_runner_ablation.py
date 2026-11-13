@@ -1,6 +1,6 @@
 """
 Evaluation runner for MSSearch ablation studies.
-Ablates Detection Backbone (SAM3 vs Grounding DINO vs Florence-2 vs DINOv3),
+Ablates Detection Backbone (SAM3 vs Grounding DINO vs Florence-2),
 Screening Scorer (SigLIP vs SigLIP2 vs CLIP-B/32 vs CLIP-L/14 vs EVA-02-L/14),
 Gating Threshold (0.3 vs 0.5 vs 0.7), and Component Increments (Qwen -> Fast Path -> Rigid -> SGAP -> ASP -> Aggregation).
 """
@@ -72,7 +72,7 @@ def parse_args():
 
     # Detector & Scorer Backbones
     parser.add_argument("--detector", type=str, default=os.environ.get("DETECTOR_TYPE", "none"),
-                        choices=["sam3", "grounding_dino", "florence2", "dinov3", "none"],
+                        choices=["sam3", "grounding_dino", "florence2", "none"],
                         help="Visual expert / detector backbone (or 'none' for pure top-k).")
     parser.add_argument("--detector_path", type=str, default=os.environ.get("DETECTOR_PATH", os.environ.get("SAM3_PATH", None)))
     parser.add_argument("--scorer", type=str, default=os.environ.get("SCORER_TYPE", "siglip"),

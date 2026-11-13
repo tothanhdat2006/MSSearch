@@ -1,7 +1,7 @@
 # MSSearch Ablation Study Suite
 
 Ablation evaluation framework for dissecting the perceptual backbones and decision thresholds of the MSSearch pipeline across three independent axes:
-1. **Visual Expert / Detection Backbone** (evaluating **SAM3**, **Grounding DINO**, **Florence-2**, or **DINOv3** with feature grouping on top of Rigid partitioning vs. the Rigid Top-k baseline).
+1. **Visual Expert / Detection Backbone** (evaluating **SAM3**, **Grounding DINO**, or **Florence-2** without feature grouping under SGAP / Rigid partitioning vs. the Rigid Top-k baseline).
 2. **Low-Resolution Zero-Shot Screening Scorer** (evaluating **SigLIP**, **SigLIP2-384**, **SigLIP2-512**, **CLIP-ViT-B/32**, **CLIP-ViT-L/14**, or **EVA-02-L/14** under the default Rigid Top-k architecture).
 3. **Candidate Retention Budget Top-K** (sweeping base patches per image $k \in \{1, 5, 10, 20, 40\}$, replacing the obsolete gating threshold).
 
@@ -21,7 +21,6 @@ In the default architecture (Row 2: Rigid quadtree + Top-k retention), the detec
 | `sam3` | `sam3_inference` | `${MODEL_DIR}/sam3/sam3.pt` | Unified promptable segmentation/detection baseline |
 | `grounding_dino` | `GroundingDinoDetector` | `IDEA-Research/grounding-dino-base` | Text-grounded open-set object detection |
 | `florence2` | `Florence2Detector` | `microsoft/Florence-2-large` | Open-vocabulary phrase grounding (<CAPTION_TO_PHRASE_GROUNDING>) |
-| `dinov3` | `DINOv3Detector` | `facebook/dinov3-vitl16-pretrain-lvd1689m` | Dense ViT-L/16 patch features & energy proposals (gated) |
 | `none` | `None` | N/A | Bypasses detector entirely (Rigid Top-k default) |
 
 ### Axis 2: Low-Resolution Visual Scorer (`--scorer`)
@@ -82,12 +81,11 @@ MSSearch/experiments/our/ablations/
 │   ├── sam3_adapter.py            # SAM3 wrapper conforming to BaseDetector
 │   ├── grounding_dino_adapter.py  # Grounding DINO adapter via HF Transformers
 │   ├── florence2_adapter.py       # Florence-2-large adapter via HF Transformers
-│   ├── dinov3_adapter.py          # DINOv3 adapter with dense patch proposals
 │   ├── clip_scorer_adapter.py     # CLIP-ViT-B/32 and CLIP-ViT-L/14 scorer
 │   └── eva02_scorer_adapter.py    # EVA-02-L/14 scorer (open_clip / timm / HF)
 ├── scripts/
 │   ├── run_ablation_component.sh  # Sweeps 11-step component increments (Qwen -> Rigid Top-k -> SGAP -> Grouping -> Full)
-│   ├── run_ablation_detector.sh   # Sweeps Visual Experts (SAM3 vs Grounding DINO vs Florence-2 vs DINOv3) on Rigid + Grouping
+│   ├── run_ablation_detector.sh   # Sweeps Visual Experts (SAM3 vs Grounding DINO vs Florence-2) without Feature Grouping
 │   ├── run_ablation_scorer.sh     # Sweeps SigLIP vs SigLIP2 vs CLIP vs EVA-02 under default Rigid Top-k architecture
 │   ├── run_ablation_topk.sh       # Sweeps Candidate Retention Budget Top-K: k in {5, 10, 20, 40}
 │   ├── run_ablation_gate_threshold.sh # Backward-compatible wrapper forwarding to run_ablation_topk.sh
@@ -115,7 +113,7 @@ MSSearch/experiments/our/ablations/
 ## 4. How to Run Ablations
 
 ### A. Run Visual Expert / Detector Ablation
-Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** vs. **DINOv3** with Feature Grouping enabled on top of Rigid partitioning on pool $N=5$:
+Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** without Feature Grouping (pure Top-k retention, matching Row 3) on pool $N=5$:
 ```bash
 cd MSSearch
 bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen3-VL-8B-Instruct N_5
@@ -185,7 +183,7 @@ Ablation experiments can be run directly on Modal cloud infrastructure (`L40S` 4
 
 ### A. Run via Modal Launcher Script (`run_modal_ablation.sh`)
 ```bash
-# Detector sweep (SAM3, Grounding DINO, Florence-2, DINOv3)
+# Detector sweep (SAM3, Grounding DINO, Florence-2)
 bash experiments/our/ablations/scripts/run_modal_ablation.sh detector Qwen/Qwen3-VL-8B-Instruct N_5 --detach
 
 # Visual scorer sweep (SigLIP, SigLIP2-384, SigLIP2-512, CLIP-B/32, CLIP-L/14, EVA-02-L/14)

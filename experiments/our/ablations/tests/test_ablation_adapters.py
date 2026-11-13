@@ -2,7 +2,6 @@
 Self-check unit tests for MSSearch ablation adapters:
 - GroundingDinoDetector
 - Florence2Detector
-- DINOv3Detector
 - SAM3Detector
 - CLIPVisualScorer
 - EVA02VisualScorer
@@ -74,7 +73,6 @@ except ImportError:
 from models.base import BaseDetector, BaseVisualScorer
 from models.grounding_dino_adapter import GroundingDinoDetector
 from models.florence2_adapter import Florence2Detector
-from models.dinov3_adapter import DINOv3Detector
 from models.clip_scorer_adapter import CLIPVisualScorer, format_clip_prompts
 from models.eva02_scorer_adapter import EVA02VisualScorer
 from models import load_detector, load_visual_scorer
@@ -158,39 +156,6 @@ class TestAblationAdapters(unittest.TestCase):
         self.assertEqual(processed_results[1]["boxes"][0], [5, 10, 50, 81])
         self.assertEqual(processed_results[1]["scores"][0], 0.95)
 
-    def test_dinov3_stub_mode(self):
-        detector = DINOv3Detector(model_name_or_path="stub", device="cpu")
-        self.assertTrue(detector.stub_mode)
-
-        backbone_out, processed_results, text_id = detector.batch_inference(
-            self.dummy_img, self.dummy_prompts
-        )
-        self.assertIsNone(backbone_out)
-        self.assertEqual(text_id, [1, 2])
-        self.assertEqual(processed_results[1]["boxes"], [])
-        self.assertEqual(processed_results[2]["scores"], [])
-
-    def test_dinov3_4d_tensor_reshape(self):
-        detector = DINOv3Detector(model_name_or_path="stub", device="cpu")
-        detector.stub_mode = False
-        mock_proc = MagicMock()
-        mock_model = MagicMock()
-        mock_proc.return_value = {"pixel_values": torch.ones(1, 3, 224, 224)}
-
-        # 197 tokens (1 CLS + 196 patches = 14x14 grid) of dim 64
-        mock_out = MagicMock()
-        mock_out.last_hidden_state = torch.ones(1, 197, 64)
-        mock_model.return_value = mock_out
-        detector.processor = mock_proc
-        detector.model = mock_model
-
-        backbone_out, proc_res, tids = detector.batch_inference(self.dummy_img, ["car"])
-        self.assertIsNotNone(backbone_out)
-        self.assertIn("vision_features", backbone_out)
-        vf = backbone_out["vision_features"]
-        # Must be 4D: [1, D=64, H=14, W=14]
-        self.assertEqual(vf.shape, (1, 64, 14, 14))
-
     def test_slice_feature_map_contracts(self):
         import numpy as np
         from mssearch.stages.utils_stage3 import slice_feature_map
@@ -260,9 +225,6 @@ class TestAblationAdapters(unittest.TestCase):
              patch("transformers.AutoModelForCausalLM.from_pretrained"):
             det_f2 = load_detector("florence2", device="cpu")
             self.assertIsInstance(det_f2, BaseDetector)
-
-        det_v3 = load_detector("dinov3", model_path_or_name="stub", device="cpu")
-        self.assertIsInstance(det_v3, BaseDetector)
 
         with patch("transformers.AutoProcessor.from_pretrained"), \
              patch("transformers.AutoModel.from_pretrained"):

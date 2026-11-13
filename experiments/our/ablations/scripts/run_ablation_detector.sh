@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # ABLATION EXPERIMENT: VISUAL EXPERT / DETECTION BACKBONE
-# (SAM3 vs Grounding DINO vs Florence-2 vs DINOv3)
-# Evaluates visual experts with Stage 4 Feature Grouping on top of Rigid Partitioning
-# against the default Rigid Top-k baseline.
+# (SAM3 vs Grounding DINO vs Florence-2)
+# Evaluates visual experts without Feature Grouping (pure Top-k retention, matching Row 3).
 # Supports optional --sgap flag to evaluate on SGAP partitioning.
 # Fixed Visual Scorer: SigLIP (google/siglip-base-patch16-384 or env default)
 # ==============================================================================
@@ -37,7 +36,7 @@ for arg in "$@"; do
     fi
 done
 
-DETECTORS=("sam3" "grounding_dino" "florence2" "dinov3")
+DETECTORS=("sam3" "grounding_dino" "florence2")
 FIXED_SCORER="siglip"
 
 for DET in "${DETECTORS[@]}"; do
@@ -52,8 +51,6 @@ for DET in "${DETECTORS[@]}"; do
         DET_PATH="${GROUNDING_DINO_PATH}"
     elif [ "${DET}" == "florence2" ]; then
         DET_PATH="${FLORENCE2_PATH}"
-    elif [ "${DET}" == "dinov3" ]; then
-        DET_PATH="${DINOV3_PATH}"
     fi
 
     "${PYTHON_BIN}" "${ABLATION_DIR}/eval_runner_ablation.py" \
@@ -62,7 +59,6 @@ for DET in "${DETECTORS[@]}"; do
         --detector_path "${DET_PATH}" \
         --scorer "${FIXED_SCORER}" \
         --scorer_path "${SIGLIP_NAME}" \
-        --enable_feature_grouping \
         --partition_mode "${PARTITION_MODE}" \
         --nlp_model "${NLP_MODEL}" \
         --dataset_path "${DATASET_PATH}" \

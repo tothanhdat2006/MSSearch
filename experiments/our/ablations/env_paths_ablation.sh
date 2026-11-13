@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # MSSEARCH ABLATION STUDY CENTRALIZED PATHS & CONFIGURATION
-# Configures Detection (SAM3, Grounding DINO, Florence-2, DINOv3) and
+# Configures Detection (SAM3, Grounding DINO, Florence-2) and
 # Screening (SigLIP, CLIP-ViT-B/32, CLIP-ViT-L/14, EVA-02-L/14) models.
 # ==============================================================================
 
 # 1. Ablation Detection Models
 export GROUNDING_DINO_PATH=".../models/grounding-dino-base"
 export FLORENCE2_PATH=".../models/Florence-2-large"
-export DINOV3_PATH=".../models/dinov3-vitl16-pretrain-lvd1689m"
 
 # 2. Ablation Visual Screening Models
 export CLIP_B32_NAME=".../models/clip-vit-base-patch32"

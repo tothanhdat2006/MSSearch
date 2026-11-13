@@ -16,7 +16,6 @@ CLIP_L14_HF_REPO = "openai/clip-vit-large-patch14"
 EVA02_L14_HF_REPO = "timm/eva02_large_patch14_clip_336.merged2b_s6b_b61k"
 SIGLIP2_384_HF_REPO = "google/siglip2-so400m-patch16-384"
 SIGLIP2_512_HF_REPO = "google/siglip2-so400m-patch16-512"
-DINOV3_HF_REPO = "facebook/dinov3-vitl16-pretrain-lvd1689m"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Download auxiliary weights (SAM3, SigLIP, spaCy, and ablation models).")
@@ -44,8 +43,6 @@ def parse_args():
                         help="HuggingFace repo ID for SigLIP2-SO400M 384px.")
     parser.add_argument("--siglip2_512_repo", type=str, default=SIGLIP2_512_HF_REPO,
                         help="HuggingFace repo ID for SigLIP2-SO400M 512px.")
-    parser.add_argument("--dinov3_repo", type=str, default=DINOV3_HF_REPO,
-                        help="HuggingFace repo ID for DINOv3-ViT-L/16.")
     parser.add_argument("--hf_token", type=str, default=os.environ.get("HF_TOKEN", None),
                         help="Optional HuggingFace access token.")
     return parser.parse_args()
@@ -118,7 +115,6 @@ def main():
         ablation_targets = [
             ("grounding-dino-base", args.grounding_dino_repo, "Grounding DINO"),
             ("Florence-2-large", args.florence2_repo, "Florence-2"),
-            ("dinov3-vitl16-pretrain-lvd1689m", args.dinov3_repo, "DINOv3-ViT-L/16"),
             ("clip-vit-base-patch32", args.clip_b32_repo, "CLIP-ViT-B/32"),
             ("clip-vit-large-patch14", args.clip_l14_repo, "CLIP-ViT-L/14"),
             ("eva02_large_patch14_clip_336", args.eva02_repo, "EVA-02-L/14"),

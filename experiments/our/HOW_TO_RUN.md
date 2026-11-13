@@ -299,7 +299,7 @@ done
 The ablation suite dissects components along three independent axes on candidate pool $N=5$:
 
 ### 4.1 Visual Expert / Detector Backbone Ablation (`run_ablation_detector.sh`)
-Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** vs. **DINOv3** with Stage 4 Feature Grouping enabled on top of Rigid partitioning against the default Rigid Top-k baseline (supports optional `--sgap` flag):
+Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** without Feature Grouping (pure Top-k retention, matching Row 3) against the default Rigid Top-k baseline (supports optional `--sgap` flag):
 ```bash
 bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```

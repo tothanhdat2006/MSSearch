@@ -35,7 +35,7 @@ def parse_args():
     p.add_argument("--output_jsonl", type=str, default=None, help="Path to output repaired JSONL.")
     p.add_argument("--component", type=str, default=None, help="Target component to execute.")
     p.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen3-VL-8B-Instruct"))
-    p.add_argument("--detector", type=str, default=os.environ.get("DETECTOR_TYPE", "sam3"), choices=["sam3", "grounding_dino", "florence2", "dinov3"])
+    p.add_argument("--detector", type=str, default=os.environ.get("DETECTOR_TYPE", "sam3"), choices=["sam3", "grounding_dino", "florence2"])
     p.add_argument("--detector_path", type=str, default=os.environ.get("DETECTOR_PATH", os.environ.get("SAM3_PATH", None)))
     p.add_argument("--scorer", type=str, default=os.environ.get("SCORER_TYPE", "siglip"), choices=["siglip", "siglip2_384", "siglip2_512", "clip_b32", "clip_l14", "eva02_l14"])
     p.add_argument("--scorer_path", type=str, default=os.environ.get("SCORER_PATH", None))
