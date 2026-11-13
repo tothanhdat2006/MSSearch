@@ -31,6 +31,9 @@ def load_ablation_engines(
     gate_threshold: Optional[float] = None,
     component: Optional[str] = None,
     device: str = "cuda:0",
+    top_k: Optional[int] = None,
+    enable_feature_grouping: Optional[bool] = None,
+    partition_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Initializes VLM, perception detector, visual screening scorer,
@@ -43,52 +46,7 @@ def load_ablation_engines(
     except ImportError:
         spacy = None
 
-    # 1. Load VLM
-    m_str = str(model_path).lower()
-    print(f"[Ablation Setup] Loading primary VLM: '{model_path}'...")
-    if "internvl" in m_str:
-        from mssearch.models import ModelInternvl
-        zoom_model = ModelInternvl(model_path=model_path, device=device)
-    elif "llava" in m_str:
-        from mssearch.models import ModelGlobalLocal
-        zoom_model = ModelGlobalLocal(model_path=model_path, device=device)
-    else:
-        zoom_model = ModelQwenVL(model_path=model_path, device=device)
-
-    # 2. Load Detector (injected into sam_model slot)
-    detector = None
-    if component != "qwen":
-        print(f"[Ablation Setup] Loading detector: '{detector_type}'...")
-        detector = load_detector(
-            detector_type=detector_type,
-            model_path_or_name=detector_path,
-            device=device,
-        )
-
-    # 3. Load Scorer (injected into siglip_model slot)
-    scorer = None
-    if component != "qwen":
-        scorer = load_visual_scorer(
-            scorer_type=scorer_type,
-            model_name_or_path=scorer_name,
-            device=device,
-        )
-
-    # 4. Load spaCy NLP Pipeline
-    nlp_parser = None
-    if component not in ("qwen",):
-        print(f"[Ablation Setup] Loading spaCy NLP pipeline from '{nlp_model}'...")
-        if spacy is None:
-            raise RuntimeError("[Ablation Setup Error] spaCy package is not installed.")
-        try:
-            nlp_parser = spacy.load(nlp_model)
-        except Exception as e:
-            raise RuntimeError(
-                f"[Ablation Setup Error] Failed to load spaCy model from NLP_MODEL='{nlp_model}': {e}. "
-                "NLP_MODEL must point to a valid spaCy model folder. Continuing without spaCy is strictly disabled."
-            )
-
-    # 5. Build Configuration
+    # 1. Build Configuration First
     cfg_file = config_path or os.path.join(os.path.dirname(__file__), "..", "config_default.json")
     cfg_dict = {}
     if os.path.exists(cfg_file):
@@ -97,12 +55,23 @@ def load_ablation_engines(
     if gate_threshold is not None:
         cfg_dict["gate_threshold"] = float(gate_threshold)
 
-    # Apply Default Configuration Guardrails (Fast Path & Sub-canvas Aggregation Disabled)
+    # Apply Default Configuration Guardrails (Rigid quadtree + Top-k baseline)
     cfg_dict["enable_fast_path"] = False
     cfg_dict["enable_relational_parsing"] = False
     cfg_dict["enable_continuous_enclosure_subcanvas"] = False
     cfg_dict["enable_spatial_compressed_canvas"] = False
     cfg_dict["spatial_canvas_relational_only"] = False
+    cfg_dict.setdefault("partition_mode", "quadrant_only")
+    cfg_dict.setdefault("enable_feature_grouping", False)
+    cfg_dict.setdefault("max_retained_patches", 20)
+
+    if top_k is not None:
+        cfg_dict["max_retained_patches"] = int(top_k)
+    if enable_feature_grouping is not None:
+        cfg_dict["enable_feature_grouping"] = bool(enable_feature_grouping)
+    if partition_mode is not None:
+        cfg_dict["partition_mode"] = str(partition_mode)
+
     # Apply Paired Component Increments (Rigid vs SGAP)
     if component in ("qwen_rigid_topk",):
         cfg_dict["partition_mode"] = "quadrant_only"
@@ -160,6 +129,60 @@ def load_ablation_engines(
         cfg_dict["enable_existence_scanning"] = True
         cfg_dict["enable_latent_repartition"] = True
         cfg_dict["retain_absent_groups_naive"] = False
+
+    # 2. Load VLM
+    m_str = str(model_path).lower()
+    print(f"[Ablation Setup] Loading primary VLM: '{model_path}'...")
+    if "internvl" in m_str:
+        from mssearch.models import ModelInternvl
+        zoom_model = ModelInternvl(model_path=model_path, device=device)
+    elif "llava" in m_str:
+        from mssearch.models import ModelGlobalLocal
+        zoom_model = ModelGlobalLocal(model_path=model_path, device=device)
+    else:
+        zoom_model = ModelQwenVL(model_path=model_path, device=device)
+
+    # 3. Load Detector (only if needed by grouping/SGAP or explicitly requested)
+    detector = None
+    is_none_det = str(detector_type).lower().strip() in ("none", "null", "false", "")
+    needs_det = (
+        cfg_dict.get("enable_feature_grouping", False) or
+        cfg_dict.get("partition_mode") in ("sgap_only", "hybrid") or
+        (component is not None and component not in ("qwen", "qwen_rigid_topk"))
+    )
+    if not is_none_det and needs_det and component != "qwen":
+        print(f"[Ablation Setup] Loading detector: '{detector_type}'...")
+        detector = load_detector(
+            detector_type=detector_type,
+            model_path_or_name=detector_path,
+            device=device,
+        )
+    else:
+        print(f"[Ablation Setup] Detector '{detector_type}' skipped (not required for current configuration).")
+
+    # 4. Load Scorer (injected into siglip_model slot)
+    scorer = None
+    if component != "qwen":
+        print(f"[Ablation Setup] Loading visual screening scorer: '{scorer_type}'...")
+        scorer = load_visual_scorer(
+            scorer_type=scorer_type,
+            model_name_or_path=scorer_name,
+            device=device,
+        )
+
+    # 5. Load spaCy NLP Pipeline
+    nlp_parser = None
+    if component not in ("qwen",):
+        print(f"[Ablation Setup] Loading spaCy NLP pipeline from '{nlp_model}'...")
+        if spacy is None:
+            raise RuntimeError("[Ablation Setup Error] spaCy package is not installed.")
+        try:
+            nlp_parser = spacy.load(nlp_model)
+        except Exception as e:
+            raise RuntimeError(
+                f"[Ablation Setup Error] Failed to load spaCy model from NLP_MODEL='{nlp_model}': {e}. "
+                "NLP_MODEL must point to a valid spaCy model folder. Continuing without spaCy is strictly disabled."
+            )
     config = MSSearchConfig.from_dict(cfg_dict)
     return {
         "zoom_model": zoom_model,

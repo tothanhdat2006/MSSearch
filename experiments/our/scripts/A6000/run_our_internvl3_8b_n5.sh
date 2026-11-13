@@ -42,4 +42,13 @@ echo "Output Dir : ${OUTPUT_DIR}"
 echo "=========================================================================="
 
 mkdir -p "${OUTPUT_DIR}"
-exec "${PYTHON_BIN}" "${OUR_DIR}/eval_runner.py"     --model_path "${MODEL_PATH}"     --sam3_path "${SAM3_PATH}"     --siglip_name "${SIGLIP_NAME}"     --nlp_model "${NLP_MODEL}"     --dataset_path "${DATASET_PATH}"     --image_dir "${IMAGE_DIR}"     --output_dir "${OUTPUT_DIR}"     --config "${CONFIG_PATH}"     --pool_mode "${POOL_MODE}"     "$@"
+exec "${PYTHON_BIN}" "${OUR_DIR}/eval_runner.py" \
+    --model_path "${MODEL_PATH}" \
+    --siglip_name "${SIGLIP_NAME}" \
+    --nlp_model "${NLP_MODEL}" \
+    --dataset_path "${DATASET_PATH}" \
+    --image_dir "${IMAGE_DIR}" \
+    --output_dir "${OUTPUT_DIR}" \
+    --config "${CONFIG_PATH}" \
+    --pool_mode "${POOL_MODE}" \
+    "$@"

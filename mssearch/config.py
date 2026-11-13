@@ -37,7 +37,7 @@ class MSSearchConfig:
     entropy_threshold: float = 0.35              # H < 0.35 -> Quadrants, H >= 0.35 -> SAM3-SGAP
     min_patch_entropy: float = 0.35              # Minimum entropy required to retain patch (H < min_patch_entropy -> pruned; 0.35 preserves smooth painted walls/signs)
     entropy_weights: Tuple[float, float, float] = (0.35, 0.35, 0.30)  # Shannon, Sobel, Laplacian
-    partition_mode: str = "sgap_only"            # "sgap_only" (default for main method), "quadrant_only", "hybrid"
+    partition_mode: str = "quadrant_only"       # "quadrant_only" (default baseline per ablation findings), "sgap_only", "hybrid"
     sgap_min_splits: int = 4                     # Default 4 splits (aligned with CVSearch)
     sgap_max_splits: int = 8                     # Default 8 splits (aligned with CVSearch)
     sgap_n_atoms: int = 100
@@ -58,7 +58,7 @@ class MSSearchConfig:
     # -------------------------------------------------------------------------
     # Stage 4: SAM3 Feature Grouping & Open-Vocabulary Gating
     # -------------------------------------------------------------------------
-    enable_feature_grouping: bool = True         # Master toggle for semantic cosine clustering of patches
+    enable_feature_grouping: bool = False        # Master toggle for semantic cosine clustering of patches (Default False per ablation findings -> pure top-k retention)
     enable_existence_scanning: bool = True       # Reorganized Module 3: verify detected groups via VLM
     retain_absent_groups_naive: bool = False     # Ablation Variant B: retain centroid patch of absent groups without VLM latent probe
     grouping_sim_threshold: float = 0.80         # Cosine similarity threshold for grouping patches

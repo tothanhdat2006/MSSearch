@@ -8,19 +8,29 @@ Image.MAX_IMAGE_PIXELS = None
 
 def load_our_engines(
     model_path: str = "Qwen/Qwen3-VL-8B-Instruct",
-    sam3_path: str = "/data/shared/cvpr/dat/models/sam3/sam3.pt",
+    sam3_path: str = None,
     siglip_name: str = "/data/shared/cvpr/dat/models/siglip2-so400m-patch16-512",
     nlp_model: str = "/data/shared/cvpr/dat/models/spacy/en_core_web_sm-3.8.0",
     config_path: str = None,
     gate_threshold: float = None,
     device: str = "cuda:0"
 ) -> Dict[str, Any]:
-    """Initializes VLM, SAM3, SigLIP, and spaCy engines for MSSearch V2."""
+    """Initializes VLM, SAM3 (if needed), SigLIP, and spaCy engines for MSSearch V2."""
     from mssearch.config import MSSearchConfig
     from mssearch.models import ModelQwenVL, ModelInternvl, sam3_inference, SigLIPScorer
     import spacy
 
-    # 1. Load VLM
+    # 1. Build MSSearchConfig
+    cfg_file = config_path or os.path.join(os.path.dirname(__file__), "config_default.json")
+    cfg_dict = {}
+    if os.path.exists(cfg_file):
+        with open(cfg_file, "r", encoding="utf-8") as f:
+            cfg_dict = json.load(f)
+    if gate_threshold is not None:
+        cfg_dict["gate_threshold"] = float(gate_threshold)
+    config = MSSearchConfig.from_dict(cfg_dict)
+
+    # 2. Load VLM
     m_str = str(model_path).lower()
     print(f"[Engine Setup] Loading primary VLM: '{model_path}'...")
     if "internvl" in m_str:
@@ -31,11 +41,21 @@ def load_our_engines(
     else:
         zoom_model = ModelQwenVL(model_path=model_path, device=device)
 
-    # 2. Load SAM3
-    print(f"[Engine Setup] Loading SAM3 from '{sam3_path}'...")
-    sam_model = sam3_inference(model_path=sam3_path, device=None)
+    # 3. Load SAM3 conditionally (skipped in default rigid top-k configuration)
+    needs_detector = (
+        config.enable_fast_path or
+        config.enable_feature_grouping or
+        config.partition_mode in ("sgap_only", "hybrid")
+    )
+    sam_model = None
+    if needs_detector:
+        s_path = sam3_path or os.environ.get("SAM3_PATH", "/data/shared/cvpr/dat/models/sam3/sam3.pt")
+        print(f"[Engine Setup] Loading SAM3 from '{s_path}'...")
+        sam_model = sam3_inference(model_path=s_path, device=None)
+    else:
+        print("[Engine Setup] Feature grouping disabled with rigid partitioning; skipping SAM3 detector initialization.")
 
-    # 3. Load SigLIP
+    # 4. Load SigLIP
     print(f"[Engine Setup] Loading SigLIP from '{siglip_name}'...")
     siglip_model = SigLIPScorer(
         model_name=siglip_name,
@@ -43,7 +63,7 @@ def load_our_engines(
         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
     )
 
-    # 4. Load spaCy
+    # 5. Load spaCy
     print(f"[Engine Setup] Loading spaCy NLP pipeline from '{nlp_model}'...")
     try:
         nlp_parser = spacy.load(nlp_model)
@@ -52,16 +72,6 @@ def load_our_engines(
             f"[Engine Setup Error] Failed to load spaCy model from NLP_MODEL='{nlp_model}': {e}. "
             "NLP_MODEL must point to a valid spaCy model folder. Continuing without spaCy is strictly disabled."
         )
-
-    # 5. Build MSSearchConfig
-    cfg_file = config_path or os.path.join(os.path.dirname(__file__), "config_default.json")
-    cfg_dict = {}
-    if os.path.exists(cfg_file):
-        with open(cfg_file, "r", encoding="utf-8") as f:
-            cfg_dict = json.load(f)
-    if gate_threshold is not None:
-        cfg_dict["gate_threshold"] = float(gate_threshold)
-    config = MSSearchConfig.from_dict(cfg_dict)
 
     return {
         "zoom_model": zoom_model,

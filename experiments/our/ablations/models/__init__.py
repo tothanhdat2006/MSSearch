@@ -45,7 +45,9 @@ def load_detector(
     - 'dinov3': DINOv3-ViT-L/16 (HF: facebook/dinov3-vitl16-pretrain-lvd1689m)
     """
     det_lower = str(detector_type).lower().strip().replace("-", "_")
-    if det_lower in ("sam3", "sam_3"):
+    if det_lower in ("none", "null", "no", "false", ""):
+        return None
+    elif det_lower in ("sam3", "sam_3"):
         path = model_path_or_name or "/data/shared/cvpr/dat/models/sam3/sam3.pt"
         return SAM3Detector(model_path=path, device=device, **kwargs)
     elif det_lower in ("grounding_dino", "groundingdino", "gdino"):

@@ -48,8 +48,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="MSSearch V2 Evaluation Runner.")
     parser.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen3-VL-8B-Instruct"),
                         help="Path or HuggingFace ID of VLM checkpoint.")
-    parser.add_argument("--sam3_path", type=str, default=os.environ.get("SAM3_PATH", "/data/shared/cvpr/dat/models/sam3/sam3.pt"),
-                        help="Path to sam3.pt.")
+    parser.add_argument("--sam3_path", type=str, default=os.environ.get("SAM3_PATH", None),
+                        help="Path to sam3.pt (optional; only loaded when grouping or SGAP is enabled).")
     parser.add_argument("--siglip_name", type=str, default=os.environ.get("SIGLIP_NAME", "/data/shared/cvpr/dat/models/siglip2-so400m-patch16-512"),
                         help="Path or HF ID for SigLIP.")
     parser.add_argument("--nlp_model", type=str, default=os.environ.get("NLP_MODEL", "/data/shared/cvpr/dat/models/spacy/en_core_web_sm-3.8.0"),

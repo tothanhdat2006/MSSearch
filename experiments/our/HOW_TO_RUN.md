@@ -151,11 +151,11 @@ Choose your execution target:
 
 #### A. Run an Individual Model & Pool Size
 ```bash
-# Qwen2.5-VL-7B
-bash experiments/our/scripts/A6000/run_our_qwen2.5_vl_7b_n1.sh
-bash experiments/our/scripts/A6000/run_our_qwen2.5_vl_7b_n5.sh
-bash experiments/our/scripts/A6000/run_our_qwen2.5_vl_7b_n10.sh
-bash experiments/our/scripts/A6000/run_our_qwen2.5_vl_7b_n20.sh
+# Qwen3-VL-8B
+bash experiments/our/scripts/A6000/run_our_qwen3_vl_8b_n1.sh
+bash experiments/our/scripts/A6000/run_our_qwen3_vl_8b_n5.sh
+bash experiments/our/scripts/A6000/run_our_qwen3_vl_8b_n10.sh
+bash experiments/our/scripts/A6000/run_our_qwen3_vl_8b_n20.sh
 
 # LLaVA-OneVision-7B
 bash experiments/our/scripts/A6000/run_our_llava_ov_7b_n1.sh
@@ -188,10 +188,10 @@ bash experiments/our/scripts/A6000/run_our_sweep.sh
 Append CLI flags to any `.sh` script:
 ```bash
 # Resume an interrupted run from existing JSONL output:
-bash experiments/our/scripts/A6000/run_our_qwen2.5_vl_7b_n5.sh --resume
+bash experiments/our/scripts/A6000/run_our_qwen3_vl_8b_n5.sh --resume
 
 # Run a quick test slice (e.g. first 10 samples):
-bash experiments/our/scripts/A6000/run_our_qwen2.5_vl_7b_n5.sh --start_idx 0 --end_idx 10
+bash experiments/our/scripts/A6000/run_our_qwen3_vl_8b_n5.sh --start_idx 0 --end_idx 10
 ```
 
 ---
@@ -298,21 +298,25 @@ done
 
 The ablation suite dissects components along three independent axes on candidate pool $N=5$:
 
-### 4.1 Detector Backbone Ablation (`run_ablation_detector.sh`)
-Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** vs. **DINOv3** (with fixed SigLIP scorer):
+### 4.1 Visual Expert / Detector Backbone Ablation (`run_ablation_detector.sh`)
+Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** vs. **DINOv3** with Stage 4 Feature Grouping enabled on top of Rigid partitioning against the default Rigid Top-k baseline (supports optional `--sgap` flag):
 ```bash
 bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 
 ### 4.2 Visual Screening Scorer Ablation (`run_ablation_scorer.sh`)
-Compares **SigLIP** vs. **SigLIP2** (384px, 512px) vs. **CLIP-ViT-B/32** vs. **CLIP-ViT-L/14** vs. **EVA-02-L/14** (with fixed SAM3 detector):
+Compares **SigLIP** vs. **SigLIP2** (384px, 512px) vs. **CLIP-ViT-B/32** vs. **CLIP-ViT-L/14** vs. **EVA-02-L/14** under the default Rigid quadtree + Top-k architecture (detector bypassed):
 ```bash
 bash experiments/our/ablations/scripts/run_ablation_scorer.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 
-### 4.3 VLM Gating Threshold Ablation (`run_ablation_gate_threshold.sh`)
-Sweeps probability thresholds **0.3** (high recall), **0.7** (high precision), and **0.5** (balanced baseline):
+### 4.3 Candidate Retention Budget Top-K Ablation (`run_ablation_topk.sh` / `run_ablation_gate_threshold.sh`)
+Sweeps base retention budgets $k \in \{1, 5, 10, 20, 40\}$ patches per image ($k=20$ default, dynamically scaled by pool size $N$), replacing the obsolete gating threshold sweep:
 ```bash
+# Direct Top-K budget sweep:
+bash experiments/our/ablations/scripts/run_ablation_topk.sh Qwen/Qwen3-VL-8B-Instruct N_5
+
+# Or via backward-compatible wrapper:
 bash experiments/our/ablations/scripts/run_ablation_gate_threshold.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 ### 4.4 Search Component Increment Sweep (`run_ablation_component.sh`)

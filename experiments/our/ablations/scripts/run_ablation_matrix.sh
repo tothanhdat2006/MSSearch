@@ -16,5 +16,5 @@ bash "${SCRIPT_DIR}/run_ablation_detector.sh" "${TARGET_MODEL}" "N_5" "$@"
 # 2. Run Scorer Ablations (SigLIP vs SigLIP2 vs CLIP-B/32 vs CLIP-L/14 vs EVA-02-L/14)
 bash "${SCRIPT_DIR}/run_ablation_scorer.sh" "${TARGET_MODEL}" "N_5" "$@"
 
-# 3. Run Gate Threshold Ablations (0.3 vs 0.7 vs 0.5)
-bash "${SCRIPT_DIR}/run_ablation_gate_threshold.sh" "${TARGET_MODEL}" "N_5" "$@"
+# 3. Run Top-K Retention Budget Ablations (k in {1, 5, 10, 20, 40})
+bash "${SCRIPT_DIR}/run_ablation_topk.sh" "${TARGET_MODEL}" "N_5" "$@"

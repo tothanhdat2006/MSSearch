@@ -80,9 +80,9 @@ export OUTPUT_BASE_DIR=""
 
 - **`eval_dataset.py`** (<250 lines): Loads STASHBench annotations, slices dataset ranges (`--start_idx`, `--end_idx`, `--max_samples`), and resolves pool images deterministically using `gallery_order_seed42.json`. Requires `gallery_order_seed42.json` to be located in the same folder as the annotations file; without it, an explicit error is raised so candidates are not silently ordered by image id. Enforces `ImageOps.exif_transpose` and `MAX_IMAGE_PIXELS = None`.
 - **`eval_metrics.py`** (<250 lines): Computes text answer metrics (accuracy, token precision, recall, F1) and tracks Stage 1-6 telemetry: target retention, background rejection, visual token budget, and crop sizes.
-- **`eval_models.py`** (<250 lines): Loads perception engines (`ModelQwenVL`, `ModelGlobalLocal`, `ModelInternvl`, `sam3_inference`, `SigLIPScorer`, spaCy). Fails loudly if dependencies or weights are missing (including `NLP_MODEL`, which must point to the spaCy folder; runners do not continue without spaCy).
-- **`eval_runner.py`** (<250 lines): Orchestrates benchmark evaluation over candidate images, auto-saves timestamped config snapshots, and atomically flushes results line-by-line (`flush()` + `os.fsync()`) to prevent data loss. Requires `PYTHONPATH` set to the repository root.
-- **`config_default.json`**: Master configuration setting `partition_mode: "sgap_only"`, `enable_fast_path: false`, `enable_relational_parsing: false`, `max_retained_patches: 20`, `max_patches_per_detected_group: 8`, and clean native single-crop reading (`<image>\n<question>`).
+- **`eval_models.py`** (<250 lines): Loads perception engines (`ModelQwenVL`, `ModelGlobalLocal`, `ModelInternvl`, `SigLIPScorer`, spaCy, and conditionally `sam3_inference`). In the default architecture (Rigid quadtree + Top-k retention), SAM3 loading is bypassed, saving ~3.5 GB VRAM and eliminating detector latency. Fails loudly if required dependencies or weights are missing (including `NLP_MODEL`, which must point to the spaCy folder).
+- **`eval_runner.py`** (<250 lines): Orchestrates benchmark evaluation over candidate images, auto-saves timestamped config snapshots, and atomically flushes results line-by-line (`flush()` + `os.fsync()`) to prevent data loss. `--sam3_path` is optional and only utilized when feature grouping or SGAP is explicitly enabled. Requires `PYTHONPATH` set to the repository root.
+- **`config_default.json`**: Master configuration setting `partition_mode: "quadrant_only"` (rigid 4-way recursive quadrants), `enable_feature_grouping: false` (pure Top-k patch retention ranked by SigLIP similarity), `max_retained_patches: 20` (dynamically scaled by pool size N), `enable_fast_path: false`, `enable_relational_parsing: false`, and clean native single-crop reading (`<image>\n<question>`).
 
 ---
 
@@ -104,8 +104,8 @@ All scripts automatically resolve paths relative to the repository, detect local
 
 Execute individual model and pool scripts:
 ```bash
-# Run Qwen2.5-VL-7B on N=5
-bash scripts/A6000/run_our_qwen2.5_vl_7b_n5.sh
+# Run Qwen3-VL-8B on N=5
+bash scripts/A6000/run_our_qwen3_vl_8b_n5.sh
 
 # Run LLaVA-OneVision on N=20
 bash scripts/A6000/run_our_llava_ov_7b_n20.sh
@@ -114,8 +114,8 @@ bash scripts/A6000/run_our_llava_ov_7b_n20.sh
 bash scripts/A6000/run_our_internvl3_8b_n1.sh
 
 # Pass additional CLI arguments (e.g. resume or index slicing)
-bash scripts/A6000/run_our_qwen2.5_vl_7b_n5.sh --resume
-bash scripts/A6000/run_our_qwen2.5_vl_7b_n5.sh --start_idx 0 --end_idx 50
+bash scripts/A6000/run_our_qwen3_vl_8b_n5.sh --resume
+bash scripts/A6000/run_our_qwen3_vl_8b_n5.sh --start_idx 0 --end_idx 50
 
 # Run all 3 models sequentially on a given pool
 bash scripts/A6000/run_our_all_n5.sh

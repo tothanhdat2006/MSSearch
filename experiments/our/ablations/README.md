@@ -1,19 +1,19 @@
 # MSSearch Ablation Study Suite
 
 Ablation evaluation framework for dissecting the perceptual backbones and decision thresholds of the MSSearch pipeline across three independent axes:
-1. **Open-Vocabulary Detection Backbone** (replacing **SAM3** with **Grounding DINO**, **Florence-2**, or **DINOv3**).
-2. **Low-Resolution Zero-Shot Screening Scorer** (replacing **SigLIP** with **SigLIP2**, **CLIP-ViT-B/32**, **CLIP-ViT-L/14**, or **EVA-02-L/14**).
-3. **VLM Gating Confidence Threshold** (evaluating **0.3**, **0.5** [default], and **0.7**).
+1. **Visual Expert / Detection Backbone** (evaluating **SAM3**, **Grounding DINO**, **Florence-2**, or **DINOv3** with feature grouping on top of Rigid partitioning vs. the Rigid Top-k baseline).
+2. **Low-Resolution Zero-Shot Screening Scorer** (evaluating **SigLIP**, **SigLIP2-384**, **SigLIP2-512**, **CLIP-ViT-B/32**, **CLIP-ViT-L/14**, or **EVA-02-L/14** under the default Rigid Top-k architecture).
+3. **Candidate Retention Budget Top-K** (sweeping base patches per image $k \in \{1, 5, 10, 20, 40\}$, replacing the obsolete gating threshold).
 
 ---
 
 ## 1. Ablation Dimensions
 
-### Axis 1: Open-Vocabulary Detector (`--detector`)
-Controls tool fast path (Stage 2) and candidate crop open-vocabulary object gating (Stage 4, Stage 5 recursive zoom):
+### Axis 1: Visual Expert / Detector Backbone (`--detector`)
+In the default architecture (Row 2: Rigid quadtree + Top-k retention), the detector is bypassed to save ~3.5 GB VRAM and avoid unnecessary detection inference. This axis evaluates whether re-enabling Stage 4 Feature Grouping with different visual experts improves over the Rigid Top-k baseline:
 
 > [!NOTE]
-> For the default SAM3 detector, the ablation runner automatically falls back to `SAM3_PATH` from `env_paths.sh` when `DETECTOR_PATH` is unset. Alternative backbones (Grounding DINO, Florence-2, DINOv3) can be specified via `DETECTOR_PATH` or `--detector_path`.
+> For the default SAM3 detector, the ablation runner automatically falls back to `SAM3_PATH` from `env_paths.sh` when `DETECTOR_PATH` is unset. Alternative backbones (Grounding DINO, Florence-2, DINOv3) can be specified via `DETECTOR_PATH` or `--detector_path`. To evaluate with SGAP partitioning instead of Rigid, pass `--sgap`.
 
 | Key | Model Identifier / Class | Default Source / Weight Path | Role |
 | :--- | :--- | :--- | :--- |
@@ -21,9 +21,10 @@ Controls tool fast path (Stage 2) and candidate crop open-vocabulary object gati
 | `grounding_dino` | `GroundingDinoDetector` | `IDEA-Research/grounding-dino-base` | Text-grounded open-set object detection |
 | `florence2` | `Florence2Detector` | `microsoft/Florence-2-large` | Open-vocabulary phrase grounding (<CAPTION_TO_PHRASE_GROUNDING>) |
 | `dinov3` | `DINOv3Detector` | `facebook/dinov3-vitl16-pretrain-lvd1689m` | Dense ViT-L/16 patch features & energy proposals (gated) |
+| `none` | `None` | N/A | Bypasses detector entirely (Rigid Top-k default) |
 
 ### Axis 2: Low-Resolution Visual Scorer (`--scorer`)
-Controls saliency-guided quadtree budget allocation (Stage 3), preliminary patch gating (Stage 4), and candidate crop spatial filtering (Stage 5):
+Controls saliency-guided quadtree budget allocation (Stage 3) and candidate crop ranking for pure Top-k retention (Stage 4). Evaluated with detector bypassed (`--detector none`):
 
 | Key | Model Identifier | HuggingFace / OpenCLIP ID | Resolution / Patch |
 | :--- | :--- | :--- | :--- |
@@ -34,14 +35,16 @@ Controls saliency-guided quadtree budget allocation (Stage 3), preliminary patch
 | `clip_l14` | `CLIPVisualScorer` | `openai/clip-vit-large-patch14` | 224x224, Patch 14 (Calibrated Cosine) |
 | `eva02_l14` | `EVA02VisualScorer` | `timm/eva02_large_patch14_clip_336.merged2b_s6b_b61k` | 336x336, Patch 14 (MIM + CLIP) |
 
-### Axis 3: VLM Gating Confidence Threshold (`--gate_threshold`)
-Controls candidate patch gating in Stage 4 (existence probe and speculative latent zoom probing):
+### Axis 3: Candidate Retention Budget Top-K (`--top_k`)
+Controls the base number of candidate patches retained per image (ranked by visual scorer similarity), superseding the legacy VLM gating confidence threshold. Budgets scale dynamically with gallery size $N$ when `scale_budgets_by_num_images = True`:
 
-| Key | Probability $P(\text{Yes})$ | Internal Score $[-1, 1]$ | Behavior |
-| :--- | :--- | :--- | :--- |
-| `0.3` | $0.30$ | $-0.40$ | High Recall: retains speculative and ambiguous patches for Stage 6 reading |
-| `0.5` | $0.50$ (default) | $0.00$ | Balanced Baseline: standard majority softmax decision boundary |
-| `0.7` | $0.70$ | $+0.40$ | High Precision: prunes aggressively, only passing high-certainty evidence |
+| Key ($k$) | Runtime Cap ($N=1$) | Runtime Cap ($N=5$) | Behavior |
+| :--- | :---: | :---: | :--- |
+| `1` | 1 patch | 5 patches | Extreme Minimalist: single top-scoring patch per image |
+| `5` | 5 patches | 25 patches | Ultra-Lean: minimal reading budget, fastest inference |
+| `10` | 10 patches | 50 patches | Compact: balanced speed and context coverage |
+| `20` | 20 patches | 100 patches | **Default Baseline**: optimal empirical accuracy/cost trade-off |
+| `40` | 40 patches | 200 patches | High Recall: generous budget preserving subtle background targets |
 
 ### Axis 4: Search Component Increment (`--component`)
 Controls the cumulative progression of the 4 core search modules (Table 1 & Table 2) evaluated as paired Rigid vs. SGAP increments:
@@ -82,10 +85,11 @@ MSSearch/experiments/our/ablations/
 │   ├── clip_scorer_adapter.py     # CLIP-ViT-B/32 and CLIP-ViT-L/14 scorer
 │   └── eva02_scorer_adapter.py    # EVA-02-L/14 scorer (open_clip / timm / HF)
 ├── scripts/
-│   ├── run_ablation_component.sh  # Sweeps 6-step component increments (Qwen -> Fast Path -> Rigid -> SGAP -> ASP -> Aggregation)
-│   ├── run_ablation_detector.sh   # Sweeps SAM3 vs Grounding DINO vs Florence-2 vs DINOv3 (fixed SigLIP)
-│   ├── run_ablation_scorer.sh     # Sweeps SigLIP vs SigLIP2 vs CLIP vs EVA-02 (fixed SAM3)
-│   ├── run_ablation_gate_threshold.sh # Sweeps Gating Threshold: 0.3 vs 0.7 vs 0.5
+│   ├── run_ablation_component.sh  # Sweeps 11-step component increments (Qwen -> Rigid Top-k -> SGAP -> Grouping -> Full)
+│   ├── run_ablation_detector.sh   # Sweeps Visual Experts (SAM3 vs Grounding DINO vs Florence-2 vs DINOv3) on Rigid + Grouping
+│   ├── run_ablation_scorer.sh     # Sweeps SigLIP vs SigLIP2 vs CLIP vs EVA-02 under default Rigid Top-k architecture
+│   ├── run_ablation_topk.sh       # Sweeps Candidate Retention Budget Top-K: k in {5, 10, 20, 40}
+│   ├── run_ablation_gate_threshold.sh # Backward-compatible wrapper forwarding to run_ablation_topk.sh
 │   ├── run_ablation_matrix.sh     # Full cross-ablation sweep
 │   └── run_ablation_slurm.slurm   # HPC Slurm batch runner
 └── tests/
@@ -109,24 +113,31 @@ MSSearch/experiments/our/ablations/
 
 ## 4. How to Run Ablations
 
-### A. Run Detector Ablation (Fixed SigLIP)
-Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** vs. **DINOv3** on pool $N=5$:
+### A. Run Visual Expert / Detector Ablation
+Compares **SAM3** vs. **Grounding DINO** vs. **Florence-2** vs. **DINOv3** with Feature Grouping enabled on top of Rigid partitioning on pool $N=5$:
 ```bash
 cd MSSearch
 bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen3-VL-8B-Instruct N_5
+
+# Optional: test on SGAP partitioning
+bash experiments/our/ablations/scripts/run_ablation_detector.sh Qwen/Qwen3-VL-8B-Instruct N_5 --sgap
 ```
 
-### B. Run Visual Scorer Ablation (Fixed SAM3)
-Compares **SigLIP** vs. **SigLIP2** vs. **CLIP-ViT-B/32** vs. **CLIP-ViT-L/14** vs. **EVA-02-L/14** on pool $N=5$:
+### B. Run Visual Scorer Ablation (Default Rigid Top-k)
+Compares **SigLIP** vs. **SigLIP2** vs. **CLIP-ViT-B/32** vs. **CLIP-ViT-L/14** vs. **EVA-02-L/14** under the default Rigid quadtree + Top-k architecture (detector bypassed) on pool $N=5$:
 ```bash
 cd MSSearch
 bash experiments/our/ablations/scripts/run_ablation_scorer.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 
-### C. Run Gate Threshold Ablation (0.3 vs 0.7 vs 0.5)
-Evaluates gating probability thresholds **0.3**, **0.7**, and **0.5** (default) on pool $N=5$:
+### C. Run Candidate Retention Top-K Budget Ablation
+Evaluates base retention budgets $k \in \{1, 5, 10, 20, 40\}$ patches per image ($k=20$ default, scaled dynamically by pool size $N$) on pool $N=5$:
 ```bash
 cd MSSearch
+# Run directly:
+bash experiments/our/ablations/scripts/run_ablation_topk.sh Qwen/Qwen3-VL-8B-Instruct N_5
+
+# Or via backward-compatible wrapper:
 bash experiments/our/ablations/scripts/run_ablation_gate_threshold.sh Qwen/Qwen3-VL-8B-Instruct N_5
 ```
 

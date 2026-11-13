@@ -2,7 +2,8 @@
 # ==============================================================================
 # ABLATION EXPERIMENT: VISUAL SCREENING SCORER
 # (SigLIP vs SigLIP2-384 vs SigLIP2-512 vs CLIP-B/32 vs CLIP-L/14 vs EVA-02-L/14)
-# Fixed Detector: SAM3
+# Evaluates visual scorers under the default Rigid quadtree + Top-k architecture.
+# Detector is bypassed (--detector none) as pure top-k screening relies on the visual scorer.
 # ==============================================================================
 set -euo pipefail
 
@@ -24,12 +25,11 @@ elif [ "$#" -eq 1 ]; then
     shift 1
 fi
 
-FIXED_DETECTOR="sam3"
 SCORERS=("siglip" "siglip2_384" "siglip2_512" "clip_b32" "clip_l14" "eva02_l14")
 
 for SC in "${SCORERS[@]}"; do
     echo "=========================================================================="
-    echo "RUNNING SCORER ABLATION: Scorer=${SC} | Detector=${FIXED_DETECTOR} | Pool=${POOL_MODE}"
+    echo "RUNNING SCORER ABLATION (Rigid Top-k): Scorer=${SC} | Model=${TARGET_MODEL} | Pool=${POOL_MODE}"
     echo "=========================================================================="
 
     SC_PATH=""
@@ -49,8 +49,7 @@ for SC in "${SCORERS[@]}"; do
 
     "${PYTHON_BIN}" "${ABLATION_DIR}/eval_runner_ablation.py" \
         --model_path "${TARGET_MODEL}" \
-        --detector "${FIXED_DETECTOR}" \
-        --detector_path "${SAM3_PATH}" \
+        --detector "none" \
         --scorer "${SC}" \
         --scorer_path "${SC_PATH}" \
         --nlp_model "${NLP_MODEL}" \

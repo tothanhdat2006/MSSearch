@@ -71,13 +71,21 @@ def parse_args():
                         help="Component increment ablation variant.")
 
     # Detector & Scorer Backbones
-    parser.add_argument("--detector", type=str, default=os.environ.get("DETECTOR_TYPE", "sam3"),
-                        choices=["sam3", "grounding_dino", "florence2", "dinov3"])
+    parser.add_argument("--detector", type=str, default=os.environ.get("DETECTOR_TYPE", "none"),
+                        choices=["sam3", "grounding_dino", "florence2", "dinov3", "none"],
+                        help="Visual expert / detector backbone (or 'none' for pure top-k).")
     parser.add_argument("--detector_path", type=str, default=os.environ.get("DETECTOR_PATH", os.environ.get("SAM3_PATH", None)))
     parser.add_argument("--scorer", type=str, default=os.environ.get("SCORER_TYPE", "siglip"),
                         choices=["siglip", "siglip2_384", "siglip2_512", "clip_b32", "clip_l14", "eva02_l14"])
     parser.add_argument("--scorer_path", type=str, default=os.environ.get("SCORER_PATH", None))
     parser.add_argument("--gate_threshold", type=float, default=None)
+    parser.add_argument("--top_k", type=int, default=None,
+                        help="Candidate patches retention budget k per image (default: 20).")
+    parser.add_argument("--enable_feature_grouping", action="store_true", default=False,
+                        help="Enable Stage 4 feature grouping and gating (for visual expert ablation).")
+    parser.add_argument("--partition_mode", type=str, default=None,
+                        choices=["quadrant_only", "sgap_only", "hybrid"],
+                        help="Override Stage 3 partition mode (default: quadrant_only).")
 
     # Base Pipeline Settings
     parser.add_argument("--model_path", type=str, default=os.environ.get("MODEL_PATH", "Qwen/Qwen3-VL-8B-Instruct"))
@@ -107,8 +115,18 @@ def main():
     if args.component:
         prefix = f"results_ablation_component_{args.component}_{m_name}_{args.pool_mode}"
     else:
-        gate_tag = f"_gate{args.gate_threshold}" if args.gate_threshold is not None else ""
-        prefix = f"results_ablation_{args.detector}_{args.scorer}{gate_tag}_{m_name}_{args.pool_mode}"
+        parts = ["results_ablation"]
+        if args.detector and args.detector != "none":
+            parts.append(args.detector)
+        parts.append(args.scorer)
+        if args.top_k is not None:
+            parts.append(f"topk{args.top_k}")
+        if args.gate_threshold is not None:
+            parts.append(f"gate{args.gate_threshold}")
+        if args.partition_mode:
+            parts.append(args.partition_mode)
+        parts.extend([m_name, args.pool_mode])
+        prefix = "_".join(parts)
 
     cands = sorted(glob.glob(os.path.join(args.output_dir, f"{prefix}_*.jsonl")))
     results_file = args.resume_from or (cands[-1] if (args.resume and cands) else os.path.join(args.output_dir, f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"))
@@ -123,12 +141,14 @@ def main():
         print(f"[Auto-Resume] Found {len(completed_keys)} completed tasks in '{results_file}'.")
 
     remaining_tasks = [t for t in eval_tasks if f"{t[1].get('sample_id')}_{t[2]}" not in completed_keys]
-    print(f"[Ablation Queue] Component: {args.component or 'N/A'} | Detector: {args.detector} | Scorer: {args.scorer} | Gate: {args.gate_threshold or 0.5} | Tasks: {len(remaining_tasks)}/{len(eval_tasks)}")
+    print(f"[Ablation Queue] Component: {args.component or 'N/A'} | Detector: {args.detector} | Scorer: {args.scorer} | Top-K: {args.top_k or 20} | Gate: {args.gate_threshold or 'N/A'} | Tasks: {len(remaining_tasks)}/{len(eval_tasks)}")
 
     engines = load_ablation_engines(
         model_path=args.model_path, detector_type=args.detector, detector_path=args.detector_path,
         scorer_type=args.scorer, scorer_name=args.scorer_path, nlp_model=args.nlp_model,
         config_path=args.config, gate_threshold=args.gate_threshold, component=args.component, device=args.device,
+        top_k=args.top_k, enable_feature_grouping=args.enable_feature_grouping if args.enable_feature_grouping else None,
+        partition_mode=args.partition_mode,
     )
     engines["config"].save_json(config_file)
     print(f"[Config Saved] Ablation config snapshot saved to '{config_file}'.")

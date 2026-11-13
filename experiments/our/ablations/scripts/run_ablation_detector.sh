@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# ABLATION EXPERIMENT: DETECTION BACKBONE
+# ABLATION EXPERIMENT: VISUAL EXPERT / DETECTION BACKBONE
 # (SAM3 vs Grounding DINO vs Florence-2 vs DINOv3)
-# Fixed Visual Scorer: SigLIP (google/siglip-base-patch16-384)
+# Evaluates visual experts with Stage 4 Feature Grouping on top of Rigid Partitioning
+# against the default Rigid Top-k baseline.
+# Supports optional --sgap flag to evaluate on SGAP partitioning.
+# Fixed Visual Scorer: SigLIP (google/siglip-base-patch16-384 or env default)
 # ==============================================================================
 set -euo pipefail
 
@@ -24,12 +27,22 @@ elif [ "$#" -eq 1 ]; then
     shift 1
 fi
 
+PARTITION_MODE="quadrant_only"
+EXTRA_ARGS=()
+for arg in "$@"; do
+    if [ "${arg}" == "--sgap" ]; then
+        PARTITION_MODE="sgap_only"
+    else
+        EXTRA_ARGS+=("${arg}")
+    fi
+done
+
 DETECTORS=("sam3" "grounding_dino" "florence2" "dinov3")
 FIXED_SCORER="siglip"
 
 for DET in "${DETECTORS[@]}"; do
     echo "=========================================================================="
-    echo "RUNNING DETECTION ABLATION: Detector=${DET} | Scorer=${FIXED_SCORER} | Pool=${POOL_MODE}"
+    echo "RUNNING VISUAL EXPERT ABLATION: Detector=${DET} | Partition=${PARTITION_MODE} | Scorer=${FIXED_SCORER} | Pool=${POOL_MODE}"
     echo "=========================================================================="
 
     DET_PATH=""
@@ -49,10 +62,12 @@ for DET in "${DETECTORS[@]}"; do
         --detector_path "${DET_PATH}" \
         --scorer "${FIXED_SCORER}" \
         --scorer_path "${SIGLIP_NAME}" \
+        --enable_feature_grouping \
+        --partition_mode "${PARTITION_MODE}" \
         --nlp_model "${NLP_MODEL}" \
         --dataset_path "${DATASET_PATH}" \
         --image_dir "${IMAGE_DIR}" \
         --output_dir "${ABLATION_OUTPUT_DIR}/detector_ablation" \
         --pool_mode "${POOL_MODE}" \
-        "$@"
+        ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 done

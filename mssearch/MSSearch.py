@@ -433,7 +433,12 @@ class MultiSourceSearchEngine:
             detected_boxes_by_image = getattr(fast_path_result, "boxes_by_image", {})
 
         # Autonomous vision feature extraction when fast path is disabled or cache empty
-        if not feature_cache and self.sam_model is not None and candidate_images:
+        # Only needed when SGAP partitioning or Stage 4 feature grouping is enabled
+        needs_sam3_features = (
+            sub_config.partition_mode in ("sgap_only", "hybrid") or
+            getattr(sub_config, "enable_feature_grouping", False)
+        )
+        if not feature_cache and self.sam_model is not None and candidate_images and needs_sam3_features:
             import torch
             t_feat = time.perf_counter()
             target_indices = unresolved_images if unresolved_images else list(range(len(candidate_images)))

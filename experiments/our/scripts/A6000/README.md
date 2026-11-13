@@ -33,12 +33,11 @@ export TRANSFORMERS_OFFLINE=1
 ```
 
 Common paths on the A6000 server:
-- **SAM3**: `${SAM3_PATH:-/data/shared/cvpr/dat/models/sam3/sam3.pt}`
 - **SigLIP-2**: `${SIGLIP_NAME:-/data/shared/cvpr/dat/models/siglip2-so400m-patch16-512}`
 - **spaCy**: `${NLP_MODEL:-/data/shared/cvpr/dat/models/en_core_web_sm-3.8.0}`
 - **Dataset**: `${DATASET_PATH:-/data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json}`
 - **Image Dir**: `${IMAGE_DIR:-/data/shared/cvpr/dat/simple/data/STASHBench/pool}`
-- **Config**: `experiments/our/config_default.json`
+- **Config**: `experiments/our/config_default.json` (Rigid quadtree + Top-k SigLIP ranking; SAM3 optional/bypassed)
 
 ---
 
@@ -50,7 +49,6 @@ Common paths on the A6000 server:
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/Qwen3-VL-8B \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -64,7 +62,6 @@ python experiments/our/eval_runner.py \
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/Qwen3-VL-8B \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -78,7 +75,6 @@ python experiments/our/eval_runner.py \
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/Qwen3-VL-8B \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -92,7 +88,6 @@ python experiments/our/eval_runner.py \
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/Qwen3-VL-8B \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -110,7 +105,6 @@ python experiments/our/eval_runner.py \
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/llava-onevision-qwen2-7b-ov \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -124,7 +118,6 @@ python experiments/our/eval_runner.py \
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/llava-onevision-qwen2-7b-ov \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -138,7 +131,6 @@ python experiments/our/eval_runner.py \
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/llava-onevision-qwen2-7b-ov \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -152,7 +144,6 @@ python experiments/our/eval_runner.py \
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/llava-onevision-qwen2-7b-ov \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -170,7 +161,6 @@ python experiments/our/eval_runner.py \
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/InternVL3-8B \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -184,7 +174,6 @@ python experiments/our/eval_runner.py \
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/InternVL3-8B \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -198,7 +187,6 @@ python experiments/our/eval_runner.py \
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/InternVL3-8B \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -212,7 +200,6 @@ python experiments/our/eval_runner.py \
 ```bash
 python experiments/our/eval_runner.py \
     --model_path /data/shared/cvpr/dat/models/InternVL3-8B \
-    --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
     --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
     --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
     --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
@@ -239,8 +226,7 @@ echo "Running N_1 with PID: ${FIRST_PID}"
 nohup bash experiments/our/scripts/A6000/wait_pid.sh "${FIRST_PID}" \
     python experiments/our/eval_runner.py \
         --model_path /data/shared/cvpr/dat/models/Qwen3-VL-8B \
-        --sam3_path /data/shared/cvpr/dat/models/sam3/sam3.pt \
-        --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
+            --siglip_name /data/shared/cvpr/dat/models/siglip2-so400m-patch16-512 \
         --nlp_model /data/shared/cvpr/dat/models/en_core_web_sm-3.8.0 \
         --dataset_path /data/shared/cvpr/dat/simple/data/STASHBench/annotations_part1234_merged.json \
         --image_dir /data/shared/cvpr/dat/simple/data/STASHBench/pool \

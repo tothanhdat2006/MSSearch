@@ -59,24 +59,7 @@ def run_feature_grouping_and_gating(
     if not bounded_patches:
         return ([], []) if return_debug else []
 
-    if sam_model is None:
-        raise RuntimeError(
-            "[Stage 4 Error] sam_model (SAM3) is None. Stage 4 Feature Grouping & Gating requires a loaded SAM3 model; fallback execution is strictly disabled."
-        )
-    if zoom_model is None:
-        raise RuntimeError(
-            "[Stage 4 Error] zoom_model (Qwen2.5-VL) is None. Stage 4 Feature Grouping & Gating requires a loaded VLM model; fallback execution is strictly disabled."
-        )
-
-    # Flattened Stage-2 anchors lack source provenance and cannot be used on galleries.
-    if detected_boxes_by_image is None:
-        detected_boxes_by_image = {}
-    if detected_boxes and not detected_boxes_by_image:
-        if len(candidate_images) != 1:
-            raise ValueError("Unindexed Stage-2 detection boxes are unsafe for multi-image gating")
-        detected_boxes_by_image = {0: list(detected_boxes)}
-
-    # If grouping is ablated by config, keep all bounded patches directly
+    # If grouping is ablated by config (e.g. rigid top-k baseline), retain top-k patches directly
     if not config.enable_feature_grouping:
         k_unclustered = getattr(config, "max_retained_patches", 20)
         sorted_bp = sorted(
@@ -109,6 +92,23 @@ def run_feature_grouping_and_gating(
                     "is_latent_repartition_candidate": False,
                 })
         return (retained, group_records) if return_debug else retained
+
+    if sam_model is None:
+        raise RuntimeError(
+            "[Stage 4 Error] sam_model (SAM3) is None. Stage 4 Feature Grouping & Gating requires a loaded SAM3 model; fallback execution is strictly disabled."
+        )
+    if zoom_model is None:
+        raise RuntimeError(
+            "[Stage 4 Error] zoom_model (Qwen2.5-VL) is None. Stage 4 Feature Grouping & Gating requires a loaded VLM model; fallback execution is strictly disabled."
+        )
+
+    # Flattened Stage-2 anchors lack source provenance and cannot be used on galleries.
+    if detected_boxes_by_image is None:
+        detected_boxes_by_image = {}
+    if detected_boxes and not detected_boxes_by_image:
+        if len(candidate_images) != 1:
+            raise ValueError("Unindexed Stage-2 detection boxes are unsafe for multi-image gating")
+        detected_boxes_by_image = {0: list(detected_boxes)}
 
     # 1. Group patches using cached Stage 3 feature vectors
     groups, sim_mat = group_patches_by_cosine_similarity(
