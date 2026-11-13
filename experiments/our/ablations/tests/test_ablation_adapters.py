@@ -116,7 +116,7 @@ class TestAblationAdapters(unittest.TestCase):
             self.dummy_img, self.dummy_prompts
         )
 
-        self.assertIsNone(backbone_out)
+        self.assertIn("vision_features", backbone_out)
         self.assertEqual(text_id, [1, 2])
         self.assertIn(1, processed_results)
         self.assertIn(2, processed_results)
@@ -187,7 +187,7 @@ class TestAblationAdapters(unittest.TestCase):
 
         self.assertIsNotNone(backbone_out)
         self.assertIn("vision_features", backbone_out)
-        self.assertEqual(backbone_out["vision_features"].shape, (1, 32, 4, 4))
+        self.assertEqual(backbone_out["vision_features"].shape, (1, 32, 3, 4))  # 200x150 image: bottom padding row dropped
         self.assertEqual(text_id, [1, 2])
         self.assertIn(1, processed_results)
         self.assertEqual(processed_results[1]["boxes"][0], [10, 20, 60, 80])

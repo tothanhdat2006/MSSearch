@@ -103,7 +103,10 @@ class OWLv2Detector(BaseDetector):
                 grid_size = int(math.isqrt(N_tok))
                 if grid_size > 0:
                     feat = patch_tokens[:, :grid_size * grid_size, :].permute(0, 2, 1).reshape(B_tok, C_tok, grid_size, grid_size)
-                    backbone_out = {"vision_features": feat}
+                    # The processor pads to a square at the bottom/right; keep only the image region
+                    valid_h = max(1, round(grid_size * h / max(w, h)))
+                    valid_w = max(1, round(grid_size * w / max(w, h)))
+                    backbone_out = {"vision_features": feat[:, :, :valid_h, :valid_w]}
             except Exception as e:
                 backbone_out = None
 
