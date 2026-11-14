@@ -28,7 +28,8 @@ class GroundingDinoDetector(BaseDetector):
         self.device = device if torch.cuda.is_available() else "cpu"
         self.box_threshold = box_threshold
         self.text_threshold = text_threshold
-        self.dtype = torch_dtype or (torch.float16 if torch.cuda.is_available() else torch.float32)
+        # fp16 breaks the detection forward (Float and Half mix) in transformers 4.57 and 5.x
+        self.dtype = torch_dtype or torch.float32
 
         self.model = None
         self.processor = None
