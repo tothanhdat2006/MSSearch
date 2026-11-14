@@ -29,7 +29,7 @@ DEFAULT_ANNOTATION_PATHS = [
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Summarize MSSearch components and telemetry statistics.")
-    parser.add_argument("input_file", nargs="?", default="results/results.jsonl",
+    parser.add_argument("input_file", nargs="?", default=r"D:\Project\VisualSearch\experiments\multisource\MSSearch\results\N5\results_N_5_83fe5fb.jsonl",
                         help="Path to results.jsonl file. Defaults to 'results/results.jsonl'.")
     parser.add_argument("--annotation", type=str, default=None,
                         help="Path to STASHBench annotations_part1234_merged.json for category and bbox breakdown.")

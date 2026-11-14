@@ -497,7 +497,7 @@ class MultiSourceSearchEngine:
         lat_s3 = round(time.perf_counter() - t0, 3)
         telemetry["timings_sec"]["stage3_partitioning"] = lat_s3
         telemetry["num_bounded_patches"] = len(bounded_patches)
-        telemetry["stage3_boxes"] = [{"img_idx": p.img_idx, "box": list(map(int, p.box))} for p in bounded_patches]
+        telemetry["stage3_boxes"] = [{"img_idx": p.img_idx, "box": list(map(int, p.box)), "score": getattr(p, "siglip_score", None)} for p in bounded_patches]
         telemetry["stages_executed"].append("stage3_partitioning")
         if not is_quiet:
             print(f"[Stage 3: Partitioning] Decision: Partitioned {len(candidate_images)} images into {len(bounded_patches)} bounded patches (Mode: {self.config.partition_mode}) (Latency: {lat_s3}s)")
