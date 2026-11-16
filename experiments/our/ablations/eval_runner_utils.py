@@ -180,6 +180,91 @@ def run_qwen_direct_multi_image(
     return pred_ans, pred_0based, pred_indices
 
 
+def run_joint_crop_reading(
+    unified_pool: List[Any],
+    candidate_images: List[Image.Image],
+    question: str,
+    zoom_model: Any,
+    config: Any,
+    question_type: Optional[str] = None,
+    **kwargs,
+):
+    """
+    Ablation "w/o Source-Attributed Consensus" (paper Sec. 4.4). Drop-in replacement for the Stage 6
+    `run_foveated_vlm_reading`: prepares the same 1.25x-expanded native-resolution crops as Stage 6, but feeds
+    ALL of them to the MLLM in ONE multi-image call (same JSON prompt as the `qwen` direct baseline) instead of
+    reading each crop independently and voting. The MLLM's answer is the final answer and the source image of the
+    first crop it selects is I*; no answer clustering / voting is applied. If the MLLM gives an informative answer
+    but selects no crop, the highest-scoring crop is used for I* (recorded as `selection_fallback`).
+    """
+    from mssearch.stages.utils_stage6 import (
+        EvidenceExtraction, FinalSearchResult, expand_bounding_box,
+        extract_final_answer, is_negative_or_unanswerable,
+    )
+    crops, metas = [], []
+    for c_idx, item in enumerate(unified_pool):
+        img_pil = candidate_images[item.img_idx]
+        img_w, img_h = img_pil.size
+        if getattr(item, "is_already_expanded", False):
+            exp_box = tuple(int(v) for v in item.box)
+            crop = item.crop_image if item.crop_image is not None else img_pil.crop(exp_box)
+        else:
+            exp_box = expand_bounding_box(item.box, img_w, img_h, expansion_factor=config.bbox_expansion_factor)
+            crop = img_pil.crop(exp_box)
+        if crop.size[0] < 8 or crop.size[1] < 8:
+            continue
+        crops.append(crop)
+        metas.append({"crop_idx": c_idx, "item": item, "img_idx": int(item.img_idx), "exp_box": exp_box})
+    if not crops:
+        return FinalSearchResult(answers=[], evidence_image_indices=[])
+
+    clean_q = question[len("<image>\n"):].strip() if question.startswith("<image>\n") else question.strip()
+    pred_ans, sel, _ = run_qwen_direct_multi_image(
+        zoom_model, crops, clean_q, max_new_tokens=getattr(config, "max_vlm_tokens", 512)
+    )
+    sel = list(dict.fromkeys(i for i in sel if 0 <= i < len(metas)))
+    final_ans = extract_final_answer(pred_ans)
+    informative = bool(final_ans) and not is_negative_or_unanswerable(final_ans)
+    fallback = informative and not sel
+    if fallback:
+        sel = [max(range(len(metas)), key=lambda i: float(getattr(metas[i]["item"], "score", 0.0) or 0.0))]
+    sel_set = set(sel) if informative else set()
+
+    crop_records = []
+    for i, m in enumerate(metas):
+        chosen = i in sel_set
+        crop_records.append({
+            "crop_idx": m["crop_idx"], "img_idx": m["img_idx"],
+            "box": list(m["item"].box), "expanded_box": list(m["exp_box"]),
+            "raw_answer": pred_ans if chosen else "", "final_answer": final_ans if chosen else "",
+            "is_evidence": chosen, "source_branch": m["item"].source_branch,
+            "joint_reading": True, "selected_by_mllm": chosen and not fallback,
+            "selection_fallback": chosen and fallback, "question_type": question_type,
+        })
+
+    extractions, evidence = [], []
+    if informative:
+        for i in sel:
+            if metas[i]["img_idx"] not in evidence:
+                evidence.append(metas[i]["img_idx"])
+        top = metas[sel[0]]
+        extractions.append(EvidenceExtraction(
+            img_idx=top["img_idx"], box=tuple(int(v) for v in top["item"].box), expanded_box=tuple(top["exp_box"]),
+            raw_answer=pred_ans, source_branch="JointReading(no-consensus)", final_answer=final_ans,
+            crop_score=float(getattr(top["item"], "score", 0.0) or 0.0),
+        ))
+    if getattr(config, "verbose", False):
+        print(f"[Stage 6 (no consensus)] Joint reading of {len(crops)} crops -> answer '{final_ans}' | "
+              f"selected crops {sel if informative else []}{' (fallback: top-score crop)' if fallback else ''} | evidence images {evidence}")
+    return FinalSearchResult(
+        answers=[final_ans] if informative else [],
+        evidence_image_indices=evidence,
+        extractions=extractions,
+        crop_records=crop_records,
+        voting_scores=[],
+    )
+
+
 try:
     from eval_metrics import format_stage6_answers, format_voting_scores
 except ImportError:

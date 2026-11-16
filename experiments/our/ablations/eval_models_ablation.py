@@ -14,10 +14,10 @@ from PIL import Image
 
 try:
     from .models import load_detector, load_visual_scorer
-    from .eval_runner_utils import run_qwen_direct_multi_image
+    from .eval_runner_utils import run_qwen_direct_multi_image, run_joint_crop_reading
 except (ImportError, ValueError):
     from experiments.our.ablations.models import load_detector, load_visual_scorer
-    from experiments.our.ablations.eval_runner_utils import run_qwen_direct_multi_image
+    from experiments.our.ablations.eval_runner_utils import run_qwen_direct_multi_image, run_joint_crop_reading
 
 
 def load_ablation_engines(
@@ -34,6 +34,7 @@ def load_ablation_engines(
     top_k: Optional[int] = None,
     enable_feature_grouping: Optional[bool] = None,
     partition_mode: Optional[str] = None,
+    disable_consensus: bool = False,
 ) -> Dict[str, Any]:
     """
     Initializes VLM, perception detector, visual screening scorer,
@@ -193,6 +194,7 @@ def load_ablation_engines(
         "detector_type": detector_type,
         "scorer_type": scorer_type,
         "component": component,
+        "disable_consensus": bool(disable_consensus),
     }
 
 
@@ -232,6 +234,15 @@ def run_ablation_pipeline(
 
     # Standard MSSearch pipeline (including steps 3, 4, 5, 6 with config overrides)
     from mssearch.MSSearch import get_mssearch_response
+    # Ablation w/o Source-Attributed Consensus (Sec. 4.4): replace the Stage 6 per-crop reading + voting
+    # with one joint multi-image MLLM call over all Stage 5 crops (see run_joint_crop_reading).
+    import mssearch.MSSearch as _mss_module
+    if engines.get("disable_consensus"):
+        if getattr(_mss_module, "_orig_run_foveated_vlm_reading", None) is None:
+            _mss_module._orig_run_foveated_vlm_reading = _mss_module.run_foveated_vlm_reading
+        _mss_module.run_foveated_vlm_reading = run_joint_crop_reading
+    elif getattr(_mss_module, "_orig_run_foveated_vlm_reading", None) is not None:
+        _mss_module.run_foveated_vlm_reading = _mss_module._orig_run_foveated_vlm_reading
     query_info = sample_data.get("query") or {
         "question": question, "question_type": sample_data.get("question_type", "Attribute"),
         "target_object": sample_data.get("target_object", ""),

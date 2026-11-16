@@ -103,6 +103,8 @@ def parse_args():
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--resume", action="store_true", default=False)
     parser.add_argument("--resume_from", type=str, default=None)
+    parser.add_argument("--disable_consensus", action="store_true", default=False,
+                        help="Ablation w/o Source-Attributed Consensus (Sec. 4.4): feed all Stage 5 crops to the MLLM in one call, no voting")
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
 
@@ -115,7 +117,8 @@ def main():
     if args.component:
         det_tag = f"_{args.detector}" if args.detector != "sam3" else ""
         sc_tag = f"_{args.scorer}" if args.scorer != "siglip" else ""
-        prefix = f"results_ablation_comp_{args.component}{det_tag}{sc_tag}_{m_name}_{args.pool_mode}"
+        nc_tag = "_noconsensus" if args.disable_consensus else ""
+        prefix = f"results_ablation_comp_{args.component}{det_tag}{sc_tag}{nc_tag}_{m_name}_{args.pool_mode}"
     else:
         parts = ["results_ablation"]
         if args.detector and args.detector != "none":
@@ -127,6 +130,8 @@ def main():
             parts.append(f"gate{args.gate_threshold}")
         if args.partition_mode:
             parts.append(args.partition_mode)
+        if args.disable_consensus:
+            parts.append("noconsensus")
         parts.extend([m_name, args.pool_mode])
         prefix = "_".join(parts)
 
@@ -150,7 +155,7 @@ def main():
         scorer_type=args.scorer, scorer_name=args.scorer_path, nlp_model=args.nlp_model,
         config_path=args.config, gate_threshold=args.gate_threshold, component=args.component, device=args.device,
         top_k=args.top_k, enable_feature_grouping=args.enable_feature_grouping if args.enable_feature_grouping else None,
-        partition_mode=args.partition_mode,
+        partition_mode=args.partition_mode, disable_consensus=args.disable_consensus,
     )
     engines["config"].save_json(config_file)
     print(f"[Config Saved] Ablation config snapshot saved to '{config_file}'.")
@@ -195,7 +200,7 @@ def main():
 
             record = {
                 "sample_id": sample_id, "sample_index": s_idx, "pool_name": pool_name, "pool_N": len(candidate_meta),
-                "model_name": m_name, "component": args.component, "detector_type": args.detector, "scorer_type": args.scorer,
+                "model_name": m_name, "component": args.component, "disable_consensus": args.disable_consensus, "detector_type": args.detector, "scorer_type": args.scorer,
                 "gate_threshold": getattr(engines["config"], "gate_threshold", args.gate_threshold or 0.5),
                 "question": question, "ground_truth_list": gt_list, "gt_image_id": gt_img_id, "gt_image_idx": gt_img_idx,
                 "primary_pred_image_id": prim_img_id, "primary_pred_image_idx": prim_img_idx, "is_primary_image_correct": is_prim_img_correct,
