@@ -72,15 +72,6 @@ def load_stash_bench(
 
     all_samples = raw_data.get("samples", []) if isinstance(raw_data, dict) else raw_data
 
-    # Load gallery order
-    order_file = gallery_order_path
-    if not order_file:
-        order_file = os.path.join(os.path.dirname(os.path.abspath(dataset_path)), "gallery_order_seed42.json")
-    gallery_data = {}
-    if os.path.isfile(order_file):
-        with open(order_file, "r", encoding="utf-8") as gf:
-            gallery_data = json.load(gf).get("samples", {})
-
     canonical_pool = "N_5"
     if pool_mode.upper() in ["N_1", "N1", "1"]:
         canonical_pool = "N_1"
@@ -92,6 +83,22 @@ def load_stash_bench(
         canonical_pool = "N_20"
     elif pool_mode.lower() in ["crop", "n_crop"]:
         canonical_pool = "crop"
+
+    is_multi_image = canonical_pool not in ["N_1", "1", "crop"]
+
+    # Load gallery order
+    order_file = gallery_order_path
+    if not order_file:
+        order_file = os.path.join(os.path.dirname(os.path.abspath(dataset_path)), "gallery_order_seed42.json")
+    gallery_data = {}
+    if os.path.isfile(order_file):
+        with open(order_file, "r", encoding="utf-8") as gf:
+            gallery_data = json.load(gf).get("samples", {})
+    elif is_multi_image:
+        raise FileNotFoundError(
+            f"[FATAL ERROR] 'gallery_order_seed42.json' must be in the same folder as the annotations file: '{order_file}'. "
+            "Without it, the candidates are silently ordered by image id."
+        )
 
     bench_samples: List[BenchmarkSample] = []
 
@@ -113,20 +120,24 @@ def load_stash_bench(
             cand_paths = [resolve_image_file(gt_img, image_dir)] if gt_img else []
             gt_idx = 0
         else:
-            k = canonical_pool
-            if g_entry and k in g_entry and "image_ids" in g_entry[k]:
-                ordered_ids = g_entry[k]["image_ids"]
+            # Multi-image gallery lookup: remove underscore for "N5", "N10", "N20" in gallery_order_seed42
+            k = canonical_pool if canonical_pool in s.get("other_images", {}) else canonical_pool.replace("_", "")
+            pool_entry = None
+            if g_entry:
+                pool_entry = g_entry.get(k) or g_entry.get(canonical_pool) or g_entry.get(f"N_{k[1:]}" if k.startswith("N") else k)
+
+            if pool_entry and "image_ids" in pool_entry:
+                ordered_ids = pool_entry["image_ids"]
                 cand_paths = [resolve_image_file(iid, image_dir) for iid in ordered_ids]
-                gt_idx = g_entry[k].get("gt_index", 0)
-                # Ensure 0-indexed internal index
+                gt_idx = pool_entry.get("gt_index", 1)
+                # Ensure 0-indexed internal index (gt_index in gallery_order_seed42 is 1-based)
                 if gt_idx is not None and gt_idx >= 1:
                     gt_idx = gt_idx - 1
             else:
-                # Fallback if gallery_order_seed42 is missing
-                distractors = s.get("other_images", {}).get(k, [])
-                pool_raw = [gt_img] + distractors if gt_img else distractors
-                cand_paths = [resolve_image_file(img, image_dir) for img in pool_raw]
-                gt_idx = 0
+                raise RuntimeError(
+                    f"[FATAL ERROR] Sample '{sample_id}' pool '{k}' is missing from '{order_file}'. "
+                    "Without it, candidates are silently ordered by image id."
+                )
 
         bench_samples.append(BenchmarkSample(
             sample_id=sample_id,

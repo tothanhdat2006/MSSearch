@@ -9,7 +9,7 @@ import argparse
 import json
 import time
 from typing import List, Dict, Any
-from PIL import Image
+from PIL import Image, ImageOps
 
 # Ensure repository root is in python path
 root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -66,7 +66,7 @@ def run_single(engine: STASHSearchEngine, image_paths: List[str], question: str)
     print(f"\n--- Running STASH-Search on {len(image_paths)} images ---")
     print(f"Question: \"{question}\"")
 
-    images = [Image.open(p).convert("RGB") for p in image_paths]
+    images = [ImageOps.exif_transpose(Image.open(p)).convert("RGB") for p in image_paths]
     result = engine.search(candidate_images=images, question=question)
 
     print("\n=== Search Results ===")
@@ -104,7 +104,7 @@ def run_batch(engine: STASHSearchEngine, dataset_path: str, image_dir: str, outp
             for item in img_list:
                 rel_path = item if isinstance(item, str) else item.get("path", "")
                 full_path = os.path.join(image_dir, rel_path) if not os.path.isabs(rel_path) else rel_path
-                pil_images.append(Image.open(full_path).convert("RGB"))
+                pil_images.append(ImageOps.exif_transpose(Image.open(full_path)).convert("RGB"))
 
             t0 = time.perf_counter()
             res = engine.search(candidate_images=pil_images, question=q)

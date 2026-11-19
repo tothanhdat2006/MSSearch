@@ -13,7 +13,7 @@ import re
 import argparse
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from PIL import Image
+from PIL import Image, ImageOps
 
 # Ensure repository root is in python path
 root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -285,11 +285,11 @@ def main():
             if str(sample.sample_id) in completed_ids:
                 continue
 
-            # Load candidate PIL images
+            # Load candidate PIL images with EXIF orientation correction
             pil_images: List[Image.Image] = []
             for img_path in sample.candidate_image_paths:
                 if os.path.isfile(img_path):
-                    pil_images.append(Image.open(img_path).convert("RGB"))
+                    pil_images.append(ImageOps.exif_transpose(Image.open(img_path)).convert("RGB"))
                 else:
                     print(f"[Warning] Image file not found: '{img_path}'")
 

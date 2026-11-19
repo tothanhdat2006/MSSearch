@@ -117,6 +117,68 @@ class TestDatasetLoaders(unittest.TestCase):
             self.assertEqual(s.category, "single")
             self.assertIn("A. 27B", s.options_str)
 
+    def test_stash_bench_gallery_keys_and_ordering(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create synthetic annotation and gallery order
+            anno_data = {
+                "samples": [
+                    {
+                        "sample_id": "000",
+                        "question": "What is the registration number of the boat?",
+                        "gt_image": "boat_gt.jpg",
+                        "other_images": {
+                            "N5": ["distractor1.jpg", "distractor2.jpg", "distractor3.jpg", "distractor4.jpg"]
+                        },
+                        "reference_answer": "NY-1234",
+                        "category": "Attribute"
+                    }
+                ]
+            }
+            order_data = {
+                "samples": {
+                    "000": {
+                        "N5": {
+                            "image_ids": ["distractor1.jpg", "distractor2.jpg", "boat_gt.jpg", "distractor3.jpg", "distractor4.jpg"],
+                            "gt_index": 3
+                        }
+                    }
+                }
+            }
+
+            anno_path = os.path.join(tmpdir, "annotations_part1234_merged.json")
+            order_path = os.path.join(tmpdir, "gallery_order_seed42.json")
+            with open(anno_path, "w", encoding="utf-8") as f:
+                json.dump(anno_data, f)
+            with open(order_path, "w", encoding="utf-8") as f:
+                json.dump(order_data, f)
+
+            # Load with pool_mode="N_5" (should normalize "N_5" to "N5" and look up seed42 order)
+            samples = load_benchmark_dataset(
+                benchmark="stash",
+                dataset_dir_or_path=anno_path,
+                image_dir=tmpdir,
+                pool_mode="N_5",
+                gallery_order_path=order_path
+            )
+
+            self.assertEqual(len(samples), 1)
+            s = samples[0]
+            # Must load all 5 candidate images in the exact seed42 order
+            self.assertEqual(len(s.candidate_image_paths), 5)
+            self.assertTrue(s.candidate_image_paths[2].endswith("boat_gt.jpg"))
+            # gt_image_idx must be 0-indexed: 3 - 1 = 2
+            self.assertEqual(s.gt_image_idx, 2)
+
+            # Test that missing order entry raises RuntimeError
+            with self.assertRaises(RuntimeError):
+                load_benchmark_dataset(
+                    benchmark="stash",
+                    dataset_dir_or_path=anno_path,
+                    image_dir=tmpdir,
+                    pool_mode="N_10",  # N10 is not in order_data
+                    gallery_order_path=order_path
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
