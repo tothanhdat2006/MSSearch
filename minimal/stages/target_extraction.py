@@ -1,0 +1,161 @@
+"""
+Stage 1: Target Extraction via MLLM Language Backbone.
+Extracts active visual search targets O_Q = {o_1, ..., o_m} using 3-shot in-context prompting.
+"""
+
+import json
+import re
+from typing import List, Dict, Any, Optional
+from ..models.base import BaseMLLM
+
+# Canonical closed-class English pronouns to filter out
+ENGLISH_PRONOUNS = {
+    "it", "its", "they", "them", "their", "theirs", "this", "that", "these", "those",
+    "he", "him", "his", "she", "her", "hers", "we", "us", "our", "ours", "you", "your",
+    "yours", "i", "me", "my", "mine", "who", "whom", "whose", "which", "what"
+}
+
+# Stop words to exclude during naive fallback parsing
+QUESTION_STOP_WORDS = {
+    "where", "when", "what", "which", "who", "whom", "whose", "why", "how",
+    "is", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "have", "has", "had",
+    "can", "could", "will", "would", "shall", "should", "may", "might", "must",
+    "located", "found", "seen", "visible", "showing", "depicted", "picture", "image",
+    "photo", "count", "number", "many", "much", "total", "tell", "describe", "find"
+}
+
+
+def build_target_extraction_messages(question: str) -> List[Dict[str, Any]]:
+    """Constructs the canonical 3-shot chat messages for target extraction."""
+    return [
+        {
+            "role": "system",
+            "content": [{
+                "type": "text",
+                "text": (
+                    "You are an expert visual search parser. Given a question, extract search targets and return a JSON object with:\n"
+                    "- \"active_objects\": list of key visual search entities or text needed to answer the question\n"
+                    "- \"question_type\": one of ['single_object_attribute', 'counting', 'text_reading', 'general']\n"
+                    "Return ONLY valid JSON."
+                )
+            }]
+        },
+        {"role": "user", "content": [{"type": "text", "text": "Question: \"What is the registration number of the boat?\""}]},
+        {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["boat"], "question_type": "single_object_attribute"}'}]},
+        {"role": "user", "content": [{"type": "text", "text": "Question: \"What is the color of the mailbox?\""}]},
+        {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["mailbox"], "question_type": "single_object_attribute"}'}]},
+        {"role": "user", "content": [{"type": "text", "text": "Question: \"How many windows are on the brick building?\""}]},
+        {"role": "assistant", "content": [{"type": "text", "text": '{"active_objects": ["brick building", "window"], "question_type": "counting"}'}]},
+        {"role": "user", "content": [{"type": "text", "text": f"Question: \"{question}\""}]}
+    ]
+
+
+def parse_mllm_json(raw_text: str) -> List[str]:
+    """Extracts raw candidate targets from JSON, bracket list, or bullet output."""
+    raw_targets: List[str] = []
+
+    # 1. JSON dict match
+    dict_match = re.search(r'\{[\s\S]*?\}', raw_text)
+    if dict_match:
+        try:
+            data = json.loads(dict_match.group(0))
+            if isinstance(data, dict):
+                objs = data.get("active_objects", [])
+                if isinstance(objs, list):
+                    raw_targets = [str(o).strip() for o in objs if str(o).strip()]
+        except Exception:
+            pass
+
+    # 2. JSON list match [ ... ]
+    if not raw_targets:
+        list_match = re.search(r'\[[\s\S]*?\]', raw_text)
+        if list_match:
+            try:
+                data = json.loads(list_match.group(0))
+                if isinstance(data, list):
+                    raw_targets = [str(o).strip() for o in data if str(o).strip()]
+            except Exception:
+                pass
+
+    # 3. Bullet list fallback
+    if not raw_targets:
+        bullets = re.findall(r'(?:^|\n)\s*(?:[-*•]|\d+\.)\s*([^\n]+)', raw_text)
+        if bullets:
+            raw_targets = [b.strip().strip('"\'') for b in bullets if b.strip()]
+
+    return raw_targets
+
+
+def normalize_target(target: str) -> str:
+    """Strips punctuation, normalizes case, and singularizes simple plural nouns."""
+    t = target.lower().strip()
+    # Remove leading articles
+    t = re.sub(r'^(?:a|an|the)\s+', '', t)
+    # Remove quotes, brackets, and punctuation
+    t = re.sub(r'[^\w\s]', ' ', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+
+    # Simple singularization
+    if t.endswith("ies") and len(t) > 4:
+        t = t[:-3] + "y"
+    elif t.endswith("es") and len(t) > 3 and t[-3] in "shxoz":
+        t = t[:-2]
+    elif t.endswith("s") and len(t) > 3 and not t.endswith(("ss", "us", "is")):
+        t = t[:-1]
+
+    return t
+
+
+def extract_visual_targets(
+    question: str,
+    mllm: BaseMLLM,
+    nlp_model: Optional[Any] = None,
+    max_new_tokens: int = 96,
+    verbose: bool = True
+) -> List[str]:
+    """
+    Parses natural language question Q into structured visual targets O_Q.
+
+    Args:
+        question: Input user question.
+        mllm: Multimodal LLM providing pure-text chat generation.
+        nlp_model: Optional loaded spaCy model for linguistic filtering.
+        max_new_tokens: Token generation ceiling.
+        verbose: Verbose logging flag.
+
+    Returns:
+        List of cleaned, deduplicated visual target strings O_Q.
+    """
+    messages = build_target_extraction_messages(question)
+    raw_response = mllm.generate_text(messages, max_new_tokens=max_new_tokens)
+
+    raw_targets = parse_mllm_json(raw_response)
+
+    # Post-process: clean, strip pronouns, and deduplicate
+    clean_targets: List[str] = []
+    for raw in raw_targets:
+        norm = normalize_target(raw)
+        if not norm or norm in ENGLISH_PRONOUNS:
+            continue
+
+        # spaCy pronoun check if available
+        if nlp_model is not None:
+            doc = nlp_model(norm)
+            if any(tok.pos_ == "PRON" for tok in doc):
+                continue
+
+        if norm not in clean_targets:
+            clean_targets.append(norm)
+
+    # Safety fallback: if no targets were extracted, fallback to naive keyword extraction
+    if not clean_targets:
+        q_norm = normalize_target(question)
+        stop_words = ENGLISH_PRONOUNS | QUESTION_STOP_WORDS
+        words = [w for w in q_norm.split() if w not in stop_words and len(w) > 2]
+        clean_targets = [words[-1]] if words else ["object"]
+
+    if verbose:
+        print(f"[Stage 1: Target Extraction] Targets: {clean_targets} (from: '{question}')")
+
+    return clean_targets
