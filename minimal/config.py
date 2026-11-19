@@ -27,6 +27,7 @@ class STASHConfig:
     # Stage 3: Gallery-Level Visual Screening & Native-Resolution Inspection
     k: int = 20                                      # Base retention budget per image (B_{retain} = k * N)
     seam_overlap_threshold: float = 0.10             # \tau_{seam}: overlap threshold for atomic sibling re-fusion
+    spatial_continuity_threshold_px: int = 2         # Seam contact tolerance in pixels
     bbox_expansion_factor: float = 1.25              # \alpha_{expand}: contextual margin expansion factor
     vlm_batch_size: int = 4                          # B_{reader}: parallel reading batch size
     max_vlm_tokens: int = 512                        # T_{max}: maximum generated tokens per crop inspection

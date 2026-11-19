@@ -17,7 +17,7 @@ class BoundedPatch:
     img_idx: int
     box: Tuple[int, int, int, int]
     depth: int
-    alignment_score: float = 0.0
+    alignment_score: Optional[float] = None
     parent_box: Optional[Tuple[int, int, int, int]] = None
 
     @property
@@ -139,8 +139,10 @@ def partition_single_image(
 
             delta_s = s_max_child - s_parent
 
-            # Plateau condition: marginal alignment gain <= threshold
-            if delta_s <= config.saliency_plateau_gain_threshold:
+            # Plateau condition: marginal alignment gain <= threshold (Delta S <= 0.04)
+            is_plateau = (delta_s <= config.saliency_plateau_gain_threshold)
+
+            if is_plateau:
                 should_split = False
             else:
                 should_split = True
@@ -164,21 +166,27 @@ def partition_single_image(
                     img_idx=img_idx,
                     box=box,
                     depth=depth,
-                    alignment_score=s_parent if s_parent is not None else 0.0,
+                    alignment_score=s_parent,
                     parent_box=parent_box
                 )
             )
 
     # Score any leaf patches whose alignment scores were not evaluated during plateau checks
-    unscored = [p for p in leaf_patches if p.alignment_score == 0.0]
+    unscored = [p for p in leaf_patches if p.alignment_score is None]
     if unscored:
         unscored_crops = [image.crop(p.box) for p in unscored]
         scores = dual_encoder.score_crops(unscored_crops, active_objects)
         for p, s in zip(unscored, scores):
             p.alignment_score = float(s)
 
-    # Rank by visual alignment score descending and cap at max_patches_per_image
-    leaf_patches.sort(key=lambda p: p.alignment_score, reverse=True)
+    # Rank by visual alignment score descending (with 1.0 / area tie-breaker preferring deeper/smaller patches)
+    leaf_patches.sort(
+        key=lambda p: (
+            p.alignment_score if p.alignment_score is not None else 0.0,
+            1.0 / max(1, p.area)
+        ),
+        reverse=True
+    )
     return leaf_patches[:config.max_patches_per_image]
 
 

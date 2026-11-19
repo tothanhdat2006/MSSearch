@@ -71,7 +71,7 @@ def are_seam_adjacent_siblings(
 def perform_atomic_sibling_refusion(
     patches: List[BoundedPatch],
     seam_threshold: float = 0.10,
-    tolerance_px: int = 4
+    tolerance_px: int = 2
 ) -> List[BoundedPatch]:
     """
     Heals macro-scale visual context by atomically fusing sibling quadrants
@@ -192,8 +192,15 @@ def screen_and_inspect_crops(
     num_images = len(gallery_images)
     b_retain = config.k * num_images
 
-    # 1. Global ranking and retention
-    sorted_patches = sorted(candidate_patches, key=lambda p: p.alignment_score, reverse=True)
+    # 1. Global ranking and retention (with tie-breaker favoring smaller/deeper patches)
+    sorted_patches = sorted(
+        candidate_patches,
+        key=lambda p: (
+            p.alignment_score if p.alignment_score is not None else 0.0,
+            1.0 / max(1, p.area)
+        ),
+        reverse=True
+    )
     retained_patches = sorted_patches[:b_retain]
 
     # 2. Per-image atomic sibling re-fusion and crop preparation
@@ -203,6 +210,7 @@ def screen_and_inspect_crops(
 
     crop_metadata: List[Dict[str, Any]] = []
     crops_to_read: List[Image.Image] = []
+    seam_tol = getattr(config, "spatial_continuity_threshold_px", 2)
 
     for img_idx, img_patches in by_img.items():
         img = gallery_images[img_idx]
@@ -210,7 +218,7 @@ def screen_and_inspect_crops(
 
         # Atomic sibling re-fusion
         healed = perform_atomic_sibling_refusion(
-            img_patches, seam_threshold=config.seam_overlap_threshold
+            img_patches, seam_threshold=config.seam_overlap_threshold, tolerance_px=seam_tol
         )
 
         for p in healed:
@@ -218,7 +226,7 @@ def screen_and_inspect_crops(
                 p.box, img_w, img_h, expansion_factor=config.bbox_expansion_factor
             )
             crop = img.crop(exp_box)
-            if crop.width < 4 or crop.height < 4:
+            if crop.width < 8 or crop.height < 8:
                 continue
 
             area = (exp_box[2] - exp_box[0]) * (exp_box[3] - exp_box[1])
@@ -227,9 +235,22 @@ def screen_and_inspect_crops(
                 "img_idx": img_idx,
                 "box": p.box,
                 "expanded_box": exp_box,
-                "alignment_score": p.alignment_score,
+                "alignment_score": p.alignment_score if p.alignment_score is not None else 0.0,
                 "crop_area": area,
             })
+
+    # Sort crops descending by visual alignment score before batched reading
+    if crop_metadata:
+        paired = list(zip(crop_metadata, crops_to_read))
+        paired.sort(
+            key=lambda pair: (
+                pair[0]["alignment_score"],
+                pair[0]["crop_area"]
+            ),
+            reverse=True
+        )
+        crop_metadata = [p[0] for p in paired]
+        crops_to_read = [p[1] for p in paired]
 
     if config.verbose:
         print(f"[Stage 3: Screening & Inspection] Screened {len(retained_patches)} patches -> Prepared {len(crops_to_read)} native crops for reading.")

@@ -5,7 +5,7 @@ Extracts active visual search targets O_Q = {o_1, ..., o_m} using 3-shot in-cont
 
 import json
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from ..models.base import BaseMLLM
 
 # Canonical closed-class English pronouns to filter out
@@ -107,6 +107,28 @@ def normalize_target(target: str) -> str:
     return t
 
 
+def parse_visual_query_structure(question: str) -> Tuple[str, str, str]:
+    """
+    Regex fallback for syntactic visual query templates:
+    'What patterns are brown chairs?' -> ('pattern', 'brown', 'chair')
+    """
+    q_clean = question.strip()
+    m = re.search(
+        r"what\s+(patterns?|materials?|colors?|colours?|shapes?)\s+(?:are|is)\s+(?:the\s+)?(?:([\w\-]+)\s+)?([\w\-\s]+)\??",
+        q_clean,
+        re.IGNORECASE
+    )
+    if m:
+        attr_raw = m.group(1).lower().rstrip("s")
+        if attr_raw == "colour":
+            attr_raw = "color"
+        cond_raw = (m.group(2) or "").lower().strip()
+        obj_raw = (m.group(3) or "").lower().strip()
+        obj_clean = re.sub(r"s$", "", obj_raw) if len(obj_raw) > 3 and not obj_raw.endswith("ss") else obj_raw
+        return attr_raw, cond_raw, obj_clean
+    return "", "", ""
+
+
 def extract_visual_targets(
     question: str,
     mllm: BaseMLLM,
@@ -148,8 +170,14 @@ def extract_visual_targets(
         if norm not in clean_targets:
             clean_targets.append(norm)
 
-    # Safety fallback: if no targets were extracted, fallback to naive keyword extraction
-    if not clean_targets:
+    # Safety fallback 1: Question Structure Syntax Regex Parser
+    if not clean_targets or clean_targets == ["object"]:
+        _, _, str_obj = parse_visual_query_structure(question)
+        if str_obj:
+            clean_targets = [str_obj]
+
+    # Safety fallback 2: Naive keyword extraction excluding stop words
+    if not clean_targets or clean_targets == ["object"]:
         q_norm = normalize_target(question)
         stop_words = ENGLISH_PRONOUNS | QUESTION_STOP_WORDS
         words = [w for w in q_norm.split() if w not in stop_words and len(w) > 2]

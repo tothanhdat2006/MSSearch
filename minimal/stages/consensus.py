@@ -62,9 +62,17 @@ NEGATIVE_REGEX_PATTERNS = [
     r"not visible in the (?:image|frame|crop|picture|photo)\b",
     r"image (?:you provided )?does not show\b",
     r"image (?:you provided )?does not contain\b",
+    r"image does not show\b",
+    r"image does not contain\b",
+    r"not visible in this (?:image|frame|crop|picture|photo)\b",
     r"\bnone visible\b",
     r"\bnot found\b",
     r"no (?:\w+\s+){0,5}(?:found|detected|seen|present)\b",
+    r"no (?:\w+\s+){0,5}(?:or \w+\s+){0,3}present\b",
+    r"\bare the borders around\b",
+    r"\bare lines at the\b",
+    r"\bare the lines at the\b",
+    r"\bindicate areas of concern\b",
 ]
 
 
@@ -171,7 +179,7 @@ def resolve_source_attributed_consensus(
     winning = clusters[0]
     best_extraction: CandidateExtraction = winning["best_extraction"]
 
-    predicted_answer = best_extraction.final_answer
+    predicted_answer = winning["rep"]
     evidence_img_idx = best_extraction.img_idx
 
     if config.verbose:

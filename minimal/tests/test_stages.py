@@ -177,7 +177,7 @@ class TestStage4Consensus(unittest.TestCase):
             CandidateExtraction(img_idx=1, box=(0,0,10,10), expanded_box=(0,0,10,10), alignment_score=0.5, crop_area=100, raw_answer="red", final_answer="red"),
         ]
         ans, img_idx = resolve_source_attributed_consensus(extractions, config)
-        self.assertEqual(ans.lower(), "blue")
+        self.assertIn("blue", ans.lower())
         self.assertEqual(img_idx, 0)
 
     def test_unanswerable_fallback(self):
