@@ -137,7 +137,8 @@ class ModelQwenVL(BaseMLLM):
         self,
         images: List[Image.Image],
         question: str,
-        max_new_tokens: int = 512
+        max_new_tokens: int = 512,
+        **kwargs
     ) -> List[str]:
         """
         Batch evaluation of candidate native-resolution image crops.
@@ -151,45 +152,131 @@ class ModelQwenVL(BaseMLLM):
             clean_q = clean_q[len("<image>\n"):] if clean_q.startswith("<image>\n") else clean_q[len("<image>"):]
         clean_q = clean_q.strip()
 
-        responses: List[str] = []
-        for img in images:
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": img},
-                        {"type": "text", "text": clean_q}
+        tokenizer = getattr(self.processor, "tokenizer", self.processor)
+        results: List[str] = []
+        batch_size = kwargs.get("batch_size", 4)
+
+        for i in range(0, len(images), max(1, batch_size)):
+            chunk_imgs = images[i : i + max(1, batch_size)]
+
+            if len(chunk_imgs) == 1 or batch_size <= 1:
+                # Single-item path
+                img = chunk_imgs[0]
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": img},
+                            {"type": "text", "text": clean_q}
+                        ]
+                    }
+                ]
+                if hasattr(self.processor, "apply_chat_template"):
+                    prompt = self.processor.apply_chat_template(
+                        messages, tokenize=False, add_generation_prompt=True
+                    )
+                else:
+                    prompt = f"<image>\n{clean_q}"
+
+                inputs = self.processor(
+                    text=[prompt],
+                    images=[img],
+                    padding=True,
+                    return_tensors="pt"
+                ).to(self.device)
+
+                with torch.inference_mode():
+                    output_ids = self.model.generate(
+                        **inputs,
+                        max_new_tokens=max_new_tokens,
+                        do_sample=False
+                    )
+                input_len = inputs.input_ids.shape[1]
+                gen_ids = output_ids[0, input_len:]
+                resp = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+                results.append(resp)
+                continue
+
+            try:
+                prompts = []
+                for img in chunk_imgs:
+                    messages = [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image", "image": img},
+                                {"type": "text", "text": clean_q}
+                            ]
+                        }
                     ]
-                }
-            ]
-            if hasattr(self.processor, "apply_chat_template"):
-                prompt = self.processor.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
-            else:
-                prompt = f"<image>\n{clean_q}"
+                    if hasattr(self.processor, "apply_chat_template"):
+                        p = self.processor.apply_chat_template(
+                            messages, tokenize=False, add_generation_prompt=True
+                        )
+                    else:
+                        p = f"<image>\n{clean_q}"
+                    prompts.append(p)
 
-            inputs = self.processor(
-                text=[prompt],
-                images=[img],
-                padding=True,
-                return_tensors="pt"
-            ).to(self.device)
+                model_inputs = self.processor(
+                    text=prompts,
+                    images=chunk_imgs,
+                    padding=True,
+                    padding_side="left",
+                    return_tensors="pt"
+                ).to(self.device)
 
-            with torch.inference_mode():
-                output_ids = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=False
-                )
+                with torch.inference_mode():
+                    generated_ids = self.model.generate(
+                        **model_inputs,
+                        use_cache=True,
+                        max_new_tokens=max_new_tokens,
+                        do_sample=False
+                    )
 
-            input_len = inputs.input_ids.shape[1]
-            gen_ids = output_ids[0, input_len:]
-            tokenizer = getattr(self.processor, "tokenizer", self.processor)
-            resp = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
-            responses.append(resp)
+                trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
+                if hasattr(self.processor, "batch_decode"):
+                    decoded = self.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                else:
+                    decoded = tokenizer.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                results.extend([d.strip() for d in decoded])
+            except Exception:
+                # Safe fallback to single-item generation
+                for img in chunk_imgs:
+                    messages = [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image", "image": img},
+                                {"type": "text", "text": clean_q}
+                            ]
+                        }
+                    ]
+                    if hasattr(self.processor, "apply_chat_template"):
+                        prompt = self.processor.apply_chat_template(
+                            messages, tokenize=False, add_generation_prompt=True
+                        )
+                    else:
+                        prompt = f"<image>\n{clean_q}"
 
-        return responses
+                    inputs = self.processor(
+                        text=[prompt],
+                        images=[img],
+                        padding=True,
+                        return_tensors="pt"
+                    ).to(self.device)
+
+                    with torch.inference_mode():
+                        output_ids = self.model.generate(
+                            **inputs,
+                            max_new_tokens=max_new_tokens,
+                            do_sample=False
+                        )
+                    input_len = inputs.input_ids.shape[1]
+                    gen_ids = output_ids[0, input_len:]
+                    resp = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+                    results.append(resp)
+
+        return results
 
 
 # Alias for backward compatibility

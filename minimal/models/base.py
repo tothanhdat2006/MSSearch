@@ -46,7 +46,8 @@ class BaseMLLM(ABC):
         self,
         images: List[Image.Image],
         question: str,
-        max_new_tokens: int = 512
+        max_new_tokens: int = 512,
+        **kwargs
     ) -> List[str]:
         """
         Batch evaluation of candidate native-resolution image crops.

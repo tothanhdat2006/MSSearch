@@ -17,11 +17,16 @@ from minimal.stages.target_extraction import (
 from minimal.stages.quadtree_partitioning import (
     get_quadtree_splits,
     split_box_into_quadrants,
+    compute_spatial_entropy,
     BoundedPatch,
     partition_single_image,
     partition_gallery,
 )
 from minimal.stages.visual_screening import (
+    compute_box_ios,
+    compute_box_iou,
+    merge_nested_containment_boxes,
+    apply_spatial_nms,
     are_seam_adjacent_siblings,
     perform_atomic_sibling_refusion,
     expand_box,
@@ -68,15 +73,19 @@ class TestStage1TargetExtraction(unittest.TestCase):
         self.assertEqual(targets, ["mailbox", "person", "car"])
 
     def test_target_normalization(self):
-        self.assertEqual(normalize_target("The Windows"), "window")
+        # Edge trimming only, internal hyphens and plurals preserved matching 85d3edb
+        self.assertEqual(normalize_target("The Windows"), "windows")
         self.assertEqual(normalize_target("a red mailbox!"), "red mailbox")
-        self.assertEqual(normalize_target("berries"), "berry")
+        self.assertEqual(normalize_target("!open-front bar?"), "open-front bar")
+        self.assertEqual(normalize_target("pants"), "pants")
+        self.assertEqual(normalize_target("shoes"), "shoes")
+        self.assertEqual(normalize_target("all shoes"), "shoe")
 
     def test_extraction_pipeline(self):
         mock_mllm = MockMLLM(parse_output='{"active_objects": ["it", "boats", "that"]}')
         targets = extract_visual_targets("What is the boat registration?", mock_mllm, verbose=False)
-        # Pronouns 'it' and 'that' should be stripped, 'boats' normalized to 'boat'
-        self.assertEqual(targets, ["boat"])
+        # Pronouns 'it' and 'that' should be stripped, 'boats' preserved without singularization
+        self.assertEqual(targets, ["boats"])
 
     def test_fallback_when_empty(self):
         mock_mllm = MockMLLM(parse_output='{}')
@@ -122,6 +131,40 @@ class TestStage2QuadtreePartitioning(unittest.TestCase):
         for p in patches:
             self.assertTrue(max(p.width, p.height) <= 1536 * 1.2)
 
+    def test_spatial_entropy_calculation(self):
+        # Uniform image has low entropy near 0.0
+        uniform_img = Image.new("RGB", (256, 256), color="black")
+        ent_low = compute_spatial_entropy(uniform_img)
+        self.assertLess(ent_low, 0.35)
+
+        # High-contrast checkerboard image has high entropy
+        import numpy as np
+        arr = np.zeros((256, 256, 3), dtype=np.uint8)
+        arr[::16, :] = 255
+        arr[:, ::16] = 255
+        textured_img = Image.fromarray(arr)
+        ent_high = compute_spatial_entropy(textured_img)
+        self.assertGreater(ent_high, 0.35)
+
+    def test_entropy_leaf_pruning(self):
+        # Uniform image: entropy < 0.35
+        img = Image.new("RGB", (1024, 1024), color="black")
+        # With alignment_score < saliency_target_threshold (0.35), leaves are pruned
+        config = STASHConfig(
+            min_patch_entropy=0.35,
+            saliency_target_threshold=0.35,
+            min_plateau_size=512,
+            verbose=False
+        )
+        mock_low_encoder = MockDualEncoder(fixed_score=0.20)
+        patches_pruned = partition_single_image(img, 0, ["target"], mock_low_encoder, config)
+        self.assertEqual(len(patches_pruned), 0)
+
+        # With alignment_score >= saliency_target_threshold (0.35), leaves are kept despite low entropy
+        mock_high_encoder = MockDualEncoder(fixed_score=0.40)
+        patches_kept = partition_single_image(img, 0, ["target"], mock_high_encoder, config)
+        self.assertGreater(len(patches_kept), 0)
+
 
 class TestStage3VisualScreening(unittest.TestCase):
     def test_seam_overlap(self):
@@ -158,6 +201,35 @@ class TestStage3VisualScreening(unittest.TestCase):
     def test_clean_mllm_answer(self):
         self.assertEqual(clean_mllm_answer("<answer> 42 </answer>"), "42")
         self.assertEqual(clean_mllm_answer('**"red"**'), "red")
+
+    def test_ios_and_iou_computation(self):
+        # Child box completely inside parent box
+        child = (100, 100, 200, 200)  # Area = 10000
+        parent = (50, 50, 300, 300)    # Area = 62500
+        ios = compute_box_ios(child, parent)
+        self.assertAlmostEqual(ios, 1.0)
+
+        iou = compute_box_iou(child, parent)
+        # Intersection = 10000, Union = 62500 -> IoU = 10000/62500 = 0.16
+        self.assertAlmostEqual(iou, 10000.0 / 62500.0)
+
+    def test_merge_nested_containment_boxes(self):
+        # Child box is 100% contained in parent box (IoS = 1.0 >= 0.95)
+        parent_p = BoundedPatch(img_idx=0, box=(50, 50, 500, 500), depth=1, alignment_score=0.4)
+        child_p = BoundedPatch(img_idx=0, box=(100, 100, 200, 200), depth=2, alignment_score=0.8)
+        surviving = merge_nested_containment_boxes([parent_p, child_p], containment_threshold=0.95)
+        # Should drop coarse parent in favor of fine child, transferring parent score
+        self.assertEqual(len(surviving), 1)
+        self.assertEqual(surviving[0].box, child_p.box)
+        self.assertEqual(surviving[0].alignment_score, 0.8)
+
+    def test_apply_spatial_nms(self):
+        # Two patches with IoU > 0.60 on the same image
+        p1 = BoundedPatch(img_idx=0, box=(100, 100, 300, 300), depth=1, alignment_score=0.9)
+        p2 = BoundedPatch(img_idx=0, box=(120, 100, 300, 300), depth=1, alignment_score=0.6)
+        surviving = apply_spatial_nms([p1, p2], iou_threshold=0.60)
+        self.assertEqual(len(surviving), 1)
+        self.assertEqual(surviving[0].alignment_score, 0.9)
 
 
 class TestStage4Consensus(unittest.TestCase):

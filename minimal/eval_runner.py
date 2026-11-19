@@ -361,6 +361,8 @@ def main():
                 "is_correct_overall": is_correct_overall,
                 "category": cat,
                 "latency_sec": lat,
+                "entropy_pruned_leaves": res.get("entropy_pruned_leaves", 0),
+                "dedup_affected_crops": res.get("dedup_affected_crops", {}),
                 "telemetry": res.get("telemetry", {}),
             }
             out_f.write(json.dumps(record) + "\n")
@@ -368,8 +370,12 @@ def main():
 
             # Live CLI progress log
             status_tag = "PASS" if is_correct_overall else "FAIL"
+            dedup_info = res.get("dedup_affected_crops", {})
+            total_dedup = dedup_info.get("total_affected", 0) if isinstance(dedup_info, dict) else 0
+            entropy_pruned = res.get("entropy_pruned_leaves", 0)
             print(f"[{idx + 1}/{len(samples)}] [{status_tag}] Sample {sample.sample_id} | "
-                  f"Pred: '{pred_ans}' (GT: '{sample.gt_answer}') | Img: {pred_img} (GT: {sample.gt_image_idx}) | {lat}s")
+                  f"Pred: '{pred_ans}' (GT: '{sample.gt_answer}') | Img: {pred_img} (GT: {sample.gt_image_idx}) | "
+                  f"Dedup (a): {total_dedup} | Pruned (b): {entropy_pruned} | {lat}s")
 
             # Periodic memory management
             if (idx + 1) % 10 == 0:

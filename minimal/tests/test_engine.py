@@ -56,6 +56,8 @@ class TestSTASHSearchEngine(unittest.TestCase):
         self.assertIn("primary_answer", result)
         self.assertIn("primary_evidence_image", result)
         self.assertIn("active_objects", result)
+        self.assertIn("entropy_pruned_leaves", result)
+        self.assertIn("dedup_affected_crops", result)
         self.assertIn("telemetry", result)
 
         self.assertEqual(result["primary_answer"], "beside the trees")
@@ -63,6 +65,13 @@ class TestSTASHSearchEngine(unittest.TestCase):
         self.assertEqual(result["active_objects"], ["waterfall"])
         self.assertTrue(result["num_candidate_patches"] > 0)
         self.assertTrue(result["num_inspected_crops"] > 0)
+
+        # Telemetry & ablation tracking check
+        self.assertIn("entropy_pruned_leaves", result["telemetry"])
+        self.assertIn("dedup_affected_crops", result["telemetry"])
+        self.assertIn("total_affected", result["dedup_affected_crops"])
+        self.assertIn("ios_merged", result["dedup_affected_crops"])
+        self.assertIn("nms_suppressed", result["dedup_affected_crops"])
 
         # Timings check
         timings = result["telemetry"]["timings_sec"]

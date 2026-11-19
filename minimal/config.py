@@ -23,9 +23,16 @@ class STASHConfig:
     max_plateau_size: int = 1536                     # S_{ceil}: mandatory split scale ceiling (px)
     max_partition_depth: int = 4                     # D_{max}: maximum quadtree depth
     max_patches_per_image: int = 64                  # K_{partition}: retained candidate patches per image
+    min_patch_entropy: float = 0.35                  # Minimum Shannon spatial entropy for leaf retention
+    saliency_target_threshold: float = 0.35          # Saliency threshold overriding low entropy
+    entropy_weights: tuple = (0.35, 0.35, 0.30)      # Shannon, Sobel, Laplacian weights
 
     # Stage 3: Gallery-Level Visual Screening & Native-Resolution Inspection
     k: int = 20                                      # Base retention budget per image (B_{retain} = k * N)
+    enable_ios_containment_merging: bool = True      # Enable IoS containment merging before reading
+    ios_containment_threshold: float = 0.95          # IoS threshold to drop coarse parent boxes
+    enable_stage5_spatial_nms: bool = True           # Enable spatial NMS deduplication per image
+    stage5_nms_iou_threshold: float = 0.60           # IoU threshold for spatial NMS
     seam_overlap_threshold: float = 0.10             # \tau_{seam}: overlap threshold for atomic sibling re-fusion
     spatial_continuity_threshold_px: int = 2         # Seam contact tolerance in pixels
     bbox_expansion_factor: float = 1.25              # \alpha_{expand}: contextual margin expansion factor

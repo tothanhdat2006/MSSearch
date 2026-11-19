@@ -69,12 +69,18 @@ def run_single(engine: STASHSearchEngine, image_paths: List[str], question: str)
     images = [ImageOps.exif_transpose(Image.open(p)).convert("RGB") for p in image_paths]
     result = engine.search(candidate_images=images, question=question)
 
+    dedup_info = result.get("dedup_affected_crops", {})
+    total_dedup = dedup_info.get("total_affected", 0) if isinstance(dedup_info, dict) else 0
+    entropy_pruned = result.get("entropy_pruned_leaves", 0)
+
     print("\n=== Search Results ===")
     print(f"Predicted Answer   : {result['primary_answer']}")
     print(f"Supporting Image   : {result['primary_evidence_image']} ({image_paths[result['primary_evidence_image']] if result['primary_evidence_image'] is not None else 'None'})")
     print(f"Active Targets     : {result['active_objects']}")
     print(f"Candidate Patches  : {result['num_candidate_patches']}")
     print(f"Inspected Crops    : {result['num_inspected_crops']}")
+    print(f"Dedup Affected (a) : {total_dedup} (IoS={dedup_info.get('ios_merged', 0)}, NMS={dedup_info.get('nms_suppressed', 0)})")
+    print(f"Entropy Pruned (b) : {entropy_pruned}")
     print(f"Total Latency      : {result['telemetry']['timings_sec']['total_latency_sec']}s")
 
 
@@ -110,17 +116,23 @@ def run_batch(engine: STASHSearchEngine, dataset_path: str, image_dir: str, outp
             res = engine.search(candidate_images=pil_images, question=q)
             lat = round(time.perf_counter() - t0, 3)
 
+            dedup_info = res.get("dedup_affected_crops", {})
+            total_dedup = dedup_info.get("total_affected", 0) if isinstance(dedup_info, dict) else 0
+            entropy_pruned = res.get("entropy_pruned_leaves", 0)
+
             record = {
                 "sample_idx": idx,
                 "question": q,
                 "predicted_answer": res["primary_answer"],
                 "predicted_image_index": res["primary_evidence_image"],
                 "active_objects": res["active_objects"],
+                "dedup_affected_crops": dedup_info,
+                "entropy_pruned_leaves": entropy_pruned,
                 "latency_sec": lat,
             }
             out_f.write(json.dumps(record) + "\n")
             out_f.flush()
-            print(f"Sample [{idx + 1}/{len(samples)}] Ans: '{res['primary_answer']}' | Img: {res['primary_evidence_image']} ({lat}s)")
+            print(f"Sample [{idx + 1}/{len(samples)}] Ans: '{res['primary_answer']}' | Img: {res['primary_evidence_image']} | Dedup (a): {total_dedup} | Pruned (b): {entropy_pruned} ({lat}s)")
 
 
 def main():

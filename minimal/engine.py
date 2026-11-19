@@ -107,11 +107,12 @@ class STASHSearchEngine:
         # Stage 2: Query-Guided Adaptive Partitioning
         # -------------------------------------------------------------
         t0 = time.perf_counter()
-        candidate_patches = partition_gallery(
+        candidate_patches, entropy_pruned_leaves = partition_gallery(
             gallery_images=candidate_images,
             active_objects=active_objects,
             dual_encoder=self.dual_encoder,
-            config=self.config
+            config=self.config,
+            return_stats=True
         )
         timings["stage2_quadtree_partitioning"] = round(time.perf_counter() - t0, 3)
 
@@ -124,12 +125,13 @@ class STASHSearchEngine:
         else:
             inspection_question = question
 
-        extractions = screen_and_inspect_crops(
+        extractions, dedup_stats = screen_and_inspect_crops(
             candidate_patches=candidate_patches,
             gallery_images=candidate_images,
             question=inspection_question,
             mllm=self.mllm,
-            config=self.config
+            config=self.config,
+            return_stats=True
         )
         timings["stage3_visual_screening"] = round(time.perf_counter() - t0, 3)
 
@@ -146,7 +148,9 @@ class STASHSearchEngine:
 
         if self.config.verbose:
             print(f"[STASHSearchEngine Result] Final Answer: '{primary_answer}' | "
-                  f"Evidence Image: {primary_evidence_img} | Latency: {timings['total_latency_sec']}s")
+                  f"Evidence Image: {primary_evidence_img} | Latency: {timings['total_latency_sec']}s | "
+                  f"Dedup Affected Crops (a): {dedup_stats['total_affected']} (IoS={dedup_stats['ios_merged']}, NMS={dedup_stats['nms_suppressed']}) | "
+                  f"Entropy Pruned Leaves (b): {entropy_pruned_leaves}")
 
         return {
             "primary_answer": primary_answer,
@@ -154,8 +158,12 @@ class STASHSearchEngine:
             "active_objects": active_objects,
             "num_candidate_patches": len(candidate_patches),
             "num_inspected_crops": len(extractions),
+            "entropy_pruned_leaves": entropy_pruned_leaves,
+            "dedup_affected_crops": dedup_stats,
             "extractions": extractions,
             "telemetry": {
-                "timings_sec": timings
+                "timings_sec": timings,
+                "entropy_pruned_leaves": entropy_pruned_leaves,
+                "dedup_affected_crops": dedup_stats,
             }
         }

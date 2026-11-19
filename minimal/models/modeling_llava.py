@@ -236,7 +236,8 @@ class ModelGlobalLocal(BaseMLLM):
         self,
         images: List[Image.Image],
         question: str,
-        max_new_tokens: int = 512
+        max_new_tokens: int = 512,
+        **kwargs
     ) -> List[str]:
         """Stage 3 Native crop reading batch interface."""
         answers = []

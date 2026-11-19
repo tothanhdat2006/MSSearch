@@ -88,23 +88,26 @@ def parse_mllm_json(raw_text: str) -> List[str]:
 
 
 def normalize_target(target: str) -> str:
-    """Strips punctuation, normalizes case, and singularizes simple plural nouns."""
-    t = target.lower().strip()
-    # Remove leading articles
-    t = re.sub(r'^(?:a|an|the)\s+', '', t)
-    # Remove quotes, brackets, and punctuation
-    t = re.sub(r'[^\w\s]', ' ', t)
-    t = re.sub(r'\s+', ' ', t).strip()
-
-    # Simple singularization
-    if t.endswith("ies") and len(t) > 4:
-        t = t[:-3] + "y"
-    elif t.endswith("es") and len(t) > 3 and t[-3] in "shxoz":
-        t = t[:-2]
-    elif t.endswith("s") and len(t) > 3 and not t.endswith(("ss", "us", "is")):
-        t = t[:-1]
-
-    return t
+    """
+    Normalizes candidate target string matching the reference 85d3edb pipeline:
+    - Strips leading articles (a, an, the, this, that, these, those).
+    - Trims punctuation at edges only (preserves internal hyphens like 'open-front bar').
+    - Preserves nouns/plurals ('pants', 'shoes') without aggressive singularization.
+    - Handles 'all ' prefix by removing prefix and trailing 's'.
+    """
+    t = target.strip()
+    if not t:
+        return ""
+    # Strip leading articles
+    t = re.sub(r'^(?:the|a|an|this|that|these|those)\s+', '', t, flags=re.IGNORECASE).strip()
+    # Strip boundary punctuation/whitespace only
+    t = re.sub(r'^[\W_]+|[\W_]+$', '', t)
+    # Check "all " prefix
+    if t.lower().startswith("all "):
+        t = t[4:].strip()
+        if t.lower().endswith("s"):
+            t = t[:-1].strip()
+    return t.strip().lower()
 
 
 def parse_visual_query_structure(question: str) -> Tuple[str, str, str]:

@@ -3,8 +3,10 @@ Stage 2: Query-Guided Adaptive Partitioning with Saliency Plateau Stopping.
 Decomposes gallery images into aspect-ratio aware quadrants, steered by visual alignment gain.
 """
 
+import math
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Any
+from typing import List, Tuple, Optional, Any, Union
+import numpy as np
 from PIL import Image
 
 from ..config import STASHConfig
@@ -18,6 +20,7 @@ class BoundedPatch:
     box: Tuple[int, int, int, int]
     depth: int
     alignment_score: Optional[float] = None
+    entropy: float = 0.0
     parent_box: Optional[Tuple[int, int, int, int]] = None
 
     @property
@@ -45,6 +48,59 @@ def get_quadtree_splits(w: int, h: int) -> Tuple[int, int]:
     if h / max(1, w) <= 0.5:
         return (4, 1)
     return (2, 2)
+
+
+def compute_spatial_entropy(
+    crop_img: Image.Image,
+    weights: Tuple[float, float, float] = (0.35, 0.35, 0.30)
+) -> float:
+    """
+    Computes Tri-Factor Spatial Entropy H(I) = w1 * H_Shannon + w2 * G_Sobel + w3 * V_Laplacian.
+    Accelerated with bilinear downsampling (max dimension 512px) to prevent CPU bottlenecks.
+    """
+    max_dim = max(crop_img.width, crop_img.height)
+    if max_dim > 512:
+        scale = 512.0 / max_dim
+        safe_img = crop_img.resize(
+            (int(round(crop_img.width * scale)), int(round(crop_img.height * scale))),
+            Image.Resampling.BILINEAR
+        )
+    else:
+        safe_img = crop_img
+
+    gray = np.array(safe_img.convert("L"), dtype=np.uint8)
+
+    # 1. Shannon Entropy
+    hist, _ = np.histogram(gray, bins=256, range=(0, 256))
+    hist_prob = hist / (hist.sum() + 1e-12)
+    hist_nonzero = hist_prob[hist_prob > 0]
+    shannon_entropy = -np.sum(hist_nonzero * np.log2(hist_nonzero))
+    norm_shannon = shannon_entropy / 8.0  # Max entropy for 256 bins is 8.0 bits
+
+    # 2. Sobel Gradient Density & 3. Laplacian Variance
+    try:
+        import cv2
+        sobel_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        sobel_mag = np.sqrt(sobel_x ** 2 + sobel_y ** 2)
+        mean_grad = float(np.mean(sobel_mag))
+        norm_sobel = min(1.0, mean_grad / 64.0)
+
+        laplacian = cv2.Laplacian(gray, cv2.CV_32F)
+        var_lap = float(np.var(laplacian))
+        norm_lap = min(1.0, math.log1p(var_lap) / 10.0)
+    except Exception:
+        # NumPy fallback if cv2 is not installed
+        gx, gy = np.gradient(gray.astype(np.float32))
+        sobel_mag = np.sqrt(gx ** 2 + gy ** 2)
+        mean_grad = float(np.mean(sobel_mag))
+        norm_sobel = min(1.0, mean_grad / 64.0)
+        var_lap = float(np.var(gx + gy))
+        norm_lap = min(1.0, math.log1p(var_lap) / 10.0)
+
+    w1, w2, w3 = weights
+    h_total = w1 * norm_shannon + w2 * norm_sobel + w3 * norm_lap
+    return float(np.clip(h_total, 0.0, 1.0))
 
 
 def split_box_into_quadrants(
@@ -93,8 +149,9 @@ def partition_single_image(
     img_idx: int,
     active_objects: List[str],
     dual_encoder: BaseDualEncoder,
-    config: STASHConfig
-) -> List[BoundedPatch]:
+    config: STASHConfig,
+    return_stats: bool = False
+) -> Union[List[BoundedPatch], Tuple[List[BoundedPatch], int]]:
     """
     Recursively partitions a single gallery image using saliency plateau stopping.
     """
@@ -104,6 +161,7 @@ def partition_single_image(
     ]
 
     leaf_patches: List[BoundedPatch] = []
+    pruned_entropy_count = 0
 
     while work_queue:
         box, depth, parent_box = work_queue.pop(0)
@@ -161,12 +219,25 @@ def partition_single_image(
             for sb in sub_boxes:
                 work_queue.append((sb, depth + 1, box))
         else:
+            # Leaf termination: compute tri-factor spatial entropy
+            crop = image.crop(box)
+            entropy = compute_spatial_entropy(crop, weights=getattr(config, "entropy_weights", (0.35, 0.35, 0.30)))
+
+            # Entropy pruning: drop low-entropy leaves unless visual alignment score >= saliency_target_threshold (0.35)
+            min_entropy = getattr(config, "min_patch_entropy", 0.35)
+            target_thresh = getattr(config, "saliency_target_threshold", 0.35)
+            if min_entropy > 0.0 and entropy < min_entropy:
+                if s_parent is None or s_parent < target_thresh:
+                    pruned_entropy_count += 1
+                    continue
+
             leaf_patches.append(
                 BoundedPatch(
                     img_idx=img_idx,
                     box=box,
                     depth=depth,
                     alignment_score=s_parent,
+                    entropy=entropy,
                     parent_box=parent_box
                 )
             )
@@ -187,27 +258,39 @@ def partition_single_image(
         ),
         reverse=True
     )
-    return leaf_patches[:config.max_patches_per_image]
+    retained = leaf_patches[:config.max_patches_per_image]
+    if return_stats:
+        return retained, pruned_entropy_count
+    return retained
 
 
 def partition_gallery(
     gallery_images: List[Image.Image],
     active_objects: List[str],
     dual_encoder: BaseDualEncoder,
-    config: STASHConfig
-) -> List[BoundedPatch]:
+    config: STASHConfig,
+    return_stats: bool = False
+) -> Union[List[BoundedPatch], Tuple[List[BoundedPatch], int]]:
     """
     Executes Query-Guided Adaptive Partitioning across all gallery images.
 
     Returns:
-        Unified pool of candidate leaf patches P across all images.
+        Unified pool of candidate leaf patches P across all images (and optionally total leaves pruned by entropy).
     """
     pool: List[BoundedPatch] = []
+    total_pruned_entropy = 0
+
     for idx, img in enumerate(gallery_images):
-        patches = partition_single_image(img, idx, active_objects, dual_encoder, config)
+        patches, pruned = partition_single_image(
+            img, idx, active_objects, dual_encoder, config, return_stats=True
+        )
         pool.extend(patches)
+        total_pruned_entropy += pruned
 
-    if config.verbose:
-        print(f"[Stage 2: Partitioning] Partitioned {len(gallery_images)} images into {len(pool)} candidate patches.")
+    if getattr(config, "verbose", True):
+        print(f"[Stage 2: Partitioning] Partitioned {len(gallery_images)} images into {len(pool)} candidate patches "
+              f"({total_pruned_entropy} leaves pruned by entropy H < {getattr(config, 'min_patch_entropy', 0.35):.2f}).")
 
+    if return_stats:
+        return pool, total_pruned_entropy
     return pool

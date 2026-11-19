@@ -5,7 +5,7 @@ and contextual margin expansion, and evaluates native-resolution crops via MLLM 
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, Union
 from PIL import Image
 
 from ..config import STASHConfig
@@ -23,6 +23,180 @@ class CandidateExtraction:
     crop_area: int
     raw_answer: str
     final_answer: str
+
+
+def compute_box_ios(
+    child_box: Tuple[int, int, int, int],
+    parent_box: Tuple[int, int, int, int]
+) -> float:
+    """
+    Computes Intersection-over-Self (IoS) / Containment ratio of child_box inside parent_box:
+    IoS = Area(child_box cap parent_box) / Area(child_box)
+    """
+    ix1 = max(child_box[0], parent_box[0])
+    iy1 = max(child_box[1], parent_box[1])
+    ix2 = min(child_box[2], parent_box[2])
+    iy2 = min(child_box[3], parent_box[3])
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    inter_area = float((ix2 - ix1) * (iy2 - iy1))
+    child_area = float(max(1, (child_box[2] - child_box[0]) * (child_box[3] - child_box[1])))
+    return inter_area / child_area
+
+
+def compute_box_iou(
+    box1: Tuple[int, int, int, int],
+    box2: Tuple[int, int, int, int]
+) -> float:
+    """Computes Intersection-over-Union (IoU) between two bounding boxes (x1, y1, x2, y2)."""
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    inter_w = max(0, x2 - x1)
+    inter_h = max(0, y2 - y1)
+    inter_area = inter_w * inter_h
+    if inter_area == 0:
+        return 0.0
+    area1 = max(0, box1[2] - box1[0]) * max(0, box1[3] - box1[1])
+    area2 = max(0, box2[2] - box2[0]) * max(0, box2[3] - box2[1])
+    union_area = area1 + area2 - inter_area
+    if union_area <= 0:
+        return 0.0
+    return float(inter_area) / float(union_area)
+
+
+def merge_nested_containment_boxes(
+    patches: List[BoundedPatch],
+    containment_threshold: float = 0.95,
+    verbose: bool = False,
+    return_count: bool = False
+) -> Union[List[BoundedPatch], Tuple[List[BoundedPatch], int]]:
+    """
+    Prunes nested parent/child redundancies where Box A is >= 95% contained in Box B.
+    Favors fine-grained resolution:
+    - Drops coarse Parent B in favor of fine Child A while transferring parent context score to Child A.
+    """
+    if not patches or len(patches) <= 1:
+        if return_count:
+            return list(patches), 0
+        return list(patches)
+
+    by_img: Dict[int, List[BoundedPatch]] = {}
+    for p in patches:
+        by_img.setdefault(p.img_idx, []).append(p)
+
+    surviving: List[BoundedPatch] = []
+    total_suppressed = 0
+
+    for img_idx, img_patches in by_img.items():
+        if len(img_patches) <= 1:
+            surviving.extend(img_patches)
+            continue
+
+        def _area(b):
+            return max(1, (b[2] - b[0]) * (b[3] - b[1]))
+
+        sorted_by_area = sorted(img_patches, key=lambda p: _area(p.box))
+        suppressed = set()
+
+        for i in range(len(sorted_by_area)):
+            if i in suppressed:
+                continue
+            child_p = sorted_by_area[i]
+            child_box = child_p.box
+            child_is_fine = getattr(child_p, "is_fine_grain", False) or getattr(child_p, "is_recursive_child", False) or (child_p.alignment_score or 0.0) >= 2.0
+
+            for j in range(i + 1, len(sorted_by_area)):
+                if j in suppressed:
+                    continue
+                parent_p = sorted_by_area[j]
+                parent_box = parent_p.box
+
+                ios = compute_box_ios(child_box, parent_box)
+                if ios >= containment_threshold:
+                    parent_is_fine = getattr(parent_p, "is_fine_grain", False) or getattr(parent_p, "is_recursive_child", False)
+
+                    if child_is_fine or not parent_is_fine:
+                        suppressed.add(j)
+                        if parent_p.alignment_score is not None:
+                            child_p.alignment_score = max(child_p.alignment_score or 0.0, parent_p.alignment_score)
+                        total_suppressed += 1
+                        if verbose:
+                            print(f"[Stage 3][IoS Merging] Dropped coarse parent patch {parent_box} in favor of fine child {child_box} (IoS={ios:.2f}).")
+                    else:
+                        suppressed.add(i)
+                        total_suppressed += 1
+                        break
+
+        surviving.extend([p for idx, p in enumerate(sorted_by_area) if idx not in suppressed])
+
+    if verbose and total_suppressed > 0:
+        print(f"[Stage 3][IoS Merging] Suppressed {total_suppressed} nested containment patches (IoS >= {containment_threshold:.2f}); {len(surviving)} patches retained.")
+
+    if return_count:
+        return surviving, total_suppressed
+    return surviving
+
+
+def apply_spatial_nms(
+    patches: List[BoundedPatch],
+    iou_threshold: float = 0.60,
+    verbose: bool = False,
+    return_count: bool = False
+) -> Union[List[BoundedPatch], Tuple[List[BoundedPatch], int]]:
+    """
+    Suppresses highly overlapping candidate patches on the same image (IoU >= iou_threshold).
+    Ranks patches by alignment_score / inverse area / entropy to preserve the most informative view.
+    """
+    if not patches or len(patches) <= 1:
+        if return_count:
+            return list(patches), 0
+        return list(patches)
+
+    by_img: Dict[int, List[BoundedPatch]] = {}
+    for p in patches:
+        by_img.setdefault(p.img_idx, []).append(p)
+
+    surviving: List[BoundedPatch] = []
+    total_suppressed = 0
+
+    for img_idx, img_patches in by_img.items():
+        if len(img_patches) <= 1:
+            surviving.extend(img_patches)
+            continue
+
+        sorted_p = sorted(
+            img_patches,
+            key=lambda p: (
+                p.alignment_score if p.alignment_score is not None else 0.0,
+                1.0 / float(max(1, (p.box[2] - p.box[0]) * (p.box[3] - p.box[1]))),
+                getattr(p, "entropy", 0.0)
+            ),
+            reverse=True
+        )
+
+        kept: List[BoundedPatch] = []
+        for p in sorted_p:
+            discard = False
+            for k in kept:
+                iou = compute_box_iou(p.box, k.box)
+                if iou >= iou_threshold:
+                    discard = True
+                    break
+            if not discard:
+                kept.append(p)
+            else:
+                total_suppressed += 1
+
+        surviving.extend(kept)
+
+    if verbose and total_suppressed > 0:
+        print(f"[Stage 3][Spatial NMS] Suppressed {total_suppressed} overlapping patches (IoU >= {iou_threshold:.2f}); {len(surviving)} crops retained.")
+
+    if return_count:
+        return surviving, total_suppressed
+    return surviving
 
 
 def are_seam_adjacent_siblings(
@@ -120,12 +294,15 @@ def perform_atomic_sibling_refusion(
             min_depth = min(p.depth for p in comp_patches)
             parent = comp_patches[0].parent_box
 
+            max_entropy = max(getattr(p, "entropy", 0.0) for p in comp_patches)
+
             fused_patches.append(
                 BoundedPatch(
                     img_idx=comp_patches[0].img_idx,
                     box=fused_box,
                     depth=min_depth,
                     alignment_score=best_score,
+                    entropy=max_entropy,
                     parent_box=parent
                 )
             )
@@ -177,8 +354,9 @@ def screen_and_inspect_crops(
     gallery_images: List[Image.Image],
     question: str,
     mllm: BaseMLLM,
-    config: STASHConfig
-) -> List[CandidateExtraction]:
+    config: STASHConfig,
+    return_stats: bool = False
+) -> Union[List[CandidateExtraction], Tuple[List[CandidateExtraction], Dict[str, int]]]:
     """
     Executes Gallery-Level Visual Screening and Native-Resolution Inspection:
     1. Retains top B_retain = k * N candidates globally ranked by alignment score.
@@ -187,7 +365,7 @@ def screen_and_inspect_crops(
     4. Evaluates native-resolution crops via MLLM batch inference.
 
     Returns:
-        List of CandidateExtraction records E.
+        List of CandidateExtraction records E (and optionally deduplication statistics).
     """
     num_images = len(gallery_images)
     b_retain = config.k * num_images
@@ -203,7 +381,27 @@ def screen_and_inspect_crops(
     )
     retained_patches = sorted_patches[:b_retain]
 
-    # 2. Per-image atomic sibling re-fusion and crop preparation
+    # 2. Stage 5 deduplication: IoS containment merging (>= 0.95) and spatial IoU NMS (>= 0.60)
+    num_ios_merged = 0
+    num_nms_suppressed = 0
+
+    enable_ios = getattr(config, "enable_ios_containment_merging", True)
+    if enable_ios:
+        ios_thresh = getattr(config, "ios_containment_threshold", 0.95)
+        retained_patches, num_ios_merged = merge_nested_containment_boxes(
+            retained_patches, containment_threshold=ios_thresh, verbose=config.verbose, return_count=True
+        )
+
+    enable_nms = getattr(config, "enable_stage5_spatial_nms", True)
+    if enable_nms:
+        iou_thresh = getattr(config, "stage5_nms_iou_threshold", 0.60)
+        retained_patches, num_nms_suppressed = apply_spatial_nms(
+            retained_patches, iou_threshold=iou_thresh, verbose=config.verbose, return_count=True
+        )
+
+    total_dedup_affected = num_ios_merged + num_nms_suppressed
+
+    # 3. Per-image atomic sibling re-fusion and crop preparation
     by_img: Dict[int, List[BoundedPatch]] = {}
     for p in retained_patches:
         by_img.setdefault(p.img_idx, []).append(p)
@@ -253,7 +451,9 @@ def screen_and_inspect_crops(
         crops_to_read = [p[1] for p in paired]
 
     if config.verbose:
-        print(f"[Stage 3: Screening & Inspection] Screened {len(retained_patches)} patches -> Prepared {len(crops_to_read)} native crops for reading.")
+        print(f"[Stage 3: Screening & Inspection] Screened {len(sorted_patches[:b_retain])} patches "
+              f"(Deduplication affected {total_dedup_affected} crops: {num_ios_merged} merged via IoS, "
+              f"{num_nms_suppressed} suppressed via spatial NMS) -> Prepared {len(crops_to_read)} native crops for reading.")
 
     # 3. Parallel native-resolution crop inspection
     extractions: List[CandidateExtraction] = []
@@ -283,4 +483,11 @@ def screen_and_inspect_crops(
                 )
             )
 
+    dedup_stats = {
+        "ios_merged": num_ios_merged,
+        "nms_suppressed": num_nms_suppressed,
+        "total_affected": total_dedup_affected,
+    }
+    if return_stats:
+        return extractions, dedup_stats
     return extractions
