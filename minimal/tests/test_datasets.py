@@ -309,6 +309,34 @@ class TestDatasetLoaders(unittest.TestCase):
             self.assertTrue(os.path.exists(s.candidate_image_paths[0]))
             self.assertIn(s.gt_answer, ["A", "B", "C", "D", "E"])
 
+    def test_download_data_registry_and_urls(self):
+        from minimal.datasets.download_data import (
+            DATASET_REGISTRY,
+            canonicalize_dataset_key,
+            resolve_direct_download_url,
+            format_bytes
+        )
+
+        expected_datasets = ["mme_realworld_lite", "treebench", "vstar", "hrbench8k", "hrbench4k"]
+        for d in expected_datasets:
+            self.assertIn(d, DATASET_REGISTRY)
+            info = DATASET_REGISTRY[d]
+            self.assertTrue(info["filename"].endswith(".tar.gz"))
+            direct_url = resolve_direct_download_url(info)
+            self.assertIn("modelscope.cn", direct_url)
+            self.assertIn(info["filename"], direct_url)
+
+        # Canonical key resolution
+        self.assertEqual(canonicalize_dataset_key("vstar"), "vstar")
+        self.assertEqual(canonicalize_dataset_key("mme"), "mme_realworld_lite")
+        self.assertEqual(canonicalize_dataset_key("tree"), "treebench")
+        self.assertEqual(canonicalize_dataset_key("hr-bench_8k"), "hrbench8k")
+        self.assertEqual(canonicalize_dataset_key("hr4k"), "hrbench4k")
+
+        # Byte formatting
+        self.assertEqual(format_bytes(1024), "1.00 KB")
+        self.assertEqual(format_bytes(1024 * 1024), "1.00 MB")
+
 
 if __name__ == "__main__":
     unittest.main()
