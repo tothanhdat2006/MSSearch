@@ -1,6 +1,6 @@
 """
 Benchmark dataset loaders for STASH-Search Minimal.
-Supports STASH-Bench, V*Bench (Vstar), and HR-Bench 4K/8K.
+Supports STASH-Bench, V*Bench (Vstar), HR-Bench 4K/8K, TreeBench, and MME-RealWorld-Lite.
 """
 
 from typing import List, Optional
@@ -8,6 +8,8 @@ from .base import BenchmarkSample
 from .stash_bench import load_stash_bench
 from .vstar import load_vstar
 from .hr_bench import load_hr_bench
+from .treebench import load_treebench
+from .mme_realworld import load_mme_realworld
 
 __all__ = [
     "BenchmarkSample",
@@ -15,6 +17,8 @@ __all__ = [
     "load_stash_bench",
     "load_vstar",
     "load_hr_bench",
+    "load_treebench",
+    "load_mme_realworld",
 ]
 
 
@@ -30,7 +34,7 @@ def load_benchmark_dataset(
     Unified entrypoint to load benchmark datasets.
 
     Args:
-        benchmark: Name of the benchmark ('stash', 'vstar', 'hrbench4k', 'hrbench8k').
+        benchmark: Name of the benchmark ('stash', 'vstar', 'hrbench4k', 'hrbench8k', 'treebench', 'mme_realworld_lite').
         dataset_dir_or_path: Root folder of the dataset or path to annotation JSON.
         image_dir: Directory containing images (for STASH-Bench).
         pool_mode: Multi-image pool size ('N_1', 'N_5', 'N_10', 'N_20') for STASH-Bench.
@@ -69,7 +73,17 @@ def load_benchmark_dataset(
             resolution="8k",
             cycle_idx=kwargs.get("cycle_idx", 0)
         )
+    elif "treebench" in b_clean or "treenbench" in b_clean:
+        return load_treebench(
+            dataset_dir=dataset_dir_or_path,
+            annotation_path=kwargs.get("annotation_path")
+        )
+    elif "mme" in b_clean:
+        return load_mme_realworld(
+            dataset_dir=dataset_dir_or_path,
+            annotation_path=kwargs.get("annotation_path")
+        )
     else:
         raise ValueError(
-            f"Unknown benchmark '{benchmark}'. Supported: 'stash', 'vstar', 'hrbench4k', 'hrbench8k'."
+            f"Unknown benchmark '{benchmark}'. Supported: 'stash', 'vstar', 'hrbench4k', 'hrbench8k', 'treebench', 'mme_realworld_lite'."
         )

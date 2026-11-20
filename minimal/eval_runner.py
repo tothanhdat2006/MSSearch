@@ -43,7 +43,7 @@ def load_env_defaults():
 
 
 def extract_predicted_option(pred_str: Any) -> Optional[str]:
-    """Extracts chosen option letter (A, B, C, D) from free-form model prediction."""
+    """Extracts chosen option letter (A through K) from free-form model prediction."""
     if not pred_str or not isinstance(pred_str, str):
         return None
     clean = pred_str.strip()
@@ -51,21 +51,21 @@ def extract_predicted_option(pred_str: Any) -> Optional[str]:
         return None
 
     # 1. Direct letter at start e.g. "A. 27B", "(A)", "A: "
-    m = re.match(r"^[\(\[\"']*([A-Da-d])[\)\]\.\:\s]", clean)
+    m = re.match(r"^[\(\[\"']*([A-Ka-k])[\)\]\.\:\s]", clean)
     if m:
         return m.group(1).upper()
 
     # 2. Exact single letter
-    if clean.upper() in ("A", "B", "C", "D"):
+    if clean.upper() in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"):
         return clean.upper()
 
     # 3. Final Answer / Option phrase anywhere in text
-    m = re.search(r"\b(?:final answer|answer|choice|option)\b[^\w\n\r]*([A-Da-d])\b", clean, re.IGNORECASE)
+    m = re.search(r"\b(?:final answer|answer|choice|option)\b[^\w\n\r]*([A-Ka-k])\b", clean, re.IGNORECASE)
     if m:
         return m.group(1).upper()
 
-    # 4. First occurrence of A, B, C, D as isolated word
-    m = re.search(r"\b([A-D])\b", clean)
+    # 4. First occurrence of A-K as isolated word
+    m = re.search(r"\b([A-K])\b", clean)
     if m:
         return m.group(1).upper()
 
@@ -85,7 +85,7 @@ def parse_args():
 
     # Benchmark selection
     parser.add_argument("--benchmark", type=str, default="stash",
-                        choices=["stash", "vstar", "hrbench4k", "hrbench8k"],
+                        choices=["stash", "vstar", "hrbench4k", "hrbench8k", "treebench", "mme_realworld_lite", "mmerealworldlite", "mme"],
                         help="Benchmark dataset to evaluate.")
 
     # Paths
@@ -169,6 +169,20 @@ def resolve_dataset_args(args) -> Dict[str, Any]:
         a_path = args.dataset_path or os.environ.get(f"{env_var}_ANNOTATION")
         return {
             "dataset_dir_or_path": h_dir,
+            "annotation_path": a_path
+        }
+    elif b in ("treebench", "treenbench"):
+        t_dir = args.dataset_dir or os.environ.get("TREEBENCH_DIR", "D:\\MachineLearning\\Datasets\\treebench" if os.path.isdir("D:\\MachineLearning\\Datasets\\treebench") else "")
+        a_path = args.dataset_path or os.environ.get("TREEBENCH_ANNOTATION")
+        return {
+            "dataset_dir_or_path": t_dir,
+            "annotation_path": a_path
+        }
+    elif b in ("mme_realworld_lite", "mmerealworldlite", "mme"):
+        m_dir = args.dataset_dir or os.environ.get("MME_REALWORLD_DIR", "D:\\MachineLearning\\Datasets\\mme-realworld-lite" if os.path.isdir("D:\\MachineLearning\\Datasets\\mme-realworld-lite") else "")
+        a_path = args.dataset_path or os.environ.get("MME_REALWORLD_ANNOTATION")
+        return {
+            "dataset_dir_or_path": m_dir,
             "annotation_path": a_path
         }
     return {}

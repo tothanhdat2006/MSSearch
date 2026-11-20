@@ -31,5 +31,15 @@ export HRBENCH_4K_ANNOTATION="${HRBENCH_4K_ANNOTATION:-${HRBENCH_4K_DIR}/annotat
 export HRBENCH_8K_DIR="${HRBENCH_8K_DIR:-/data/HRBench8K}"
 export HRBENCH_8K_ANNOTATION="${HRBENCH_8K_ANNOTATION:-${HRBENCH_8K_DIR}/annotation_hr-bench_8k.json}"
 
+# TreeBench: contains 'images/' and 'annotation_treebench.json'
+export TREEBENCH_DIR="${TREEBENCH_DIR:-D:/MachineLearning/Datasets/treebench}"
+[ ! -d "${TREEBENCH_DIR}" ] && export TREEBENCH_DIR="/data/TreeBench"
+export TREEBENCH_ANNOTATION="${TREEBENCH_ANNOTATION:-${TREEBENCH_DIR}/annotation_treebench.json}"
+
+# MME-RealWorld-Lite: contains 'imgs/' and 'annotation_mme-realworld-lite.json'
+export MME_REALWORLD_DIR="${MME_REALWORLD_DIR:-D:/MachineLearning/Datasets/mme-realworld-lite}"
+[ ! -d "${MME_REALWORLD_DIR}" ] && export MME_REALWORLD_DIR="/data/mme-realworld-lite"
+export MME_REALWORLD_ANNOTATION="${MME_REALWORLD_ANNOTATION:-${MME_REALWORLD_DIR}/annotation_mme-realworld-lite.json}"
+
 # 5. Base Output Directory
 export OUTPUT_BASE_DIR="${OUTPUT_BASE_DIR:-./results}"
