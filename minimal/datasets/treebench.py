@@ -143,7 +143,6 @@ def load_treebench(
             gt_image_idx=0,
             options_str=options_str if options_str else None,
             category=category,
-            target_hint=None,
             metadata={
                 "benchmark": "treebench",
                 "index": item_idx,

@@ -129,7 +129,6 @@ def load_hr_bench(
                 gt_image_idx=0,
                 options_str=options_str,
                 category=category,
-                target_hint=None,
                 metadata={
                     "benchmark": f"hrbench_{resolution}",
                     "index": item_idx,

@@ -446,7 +446,6 @@ def main():
                 candidate_images=pil_images,
                 question=sample.question,
                 options_str=sample.options_str,
-                target_hint=sample.target_hint,
                 inspection_prompt=sample.inspection_prompt
             )
             lat = round(time.perf_counter() - t0, 3)

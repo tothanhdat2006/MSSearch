@@ -117,7 +117,6 @@ def load_mme_realworld(
             gt_image_idx=0,
             options_str=options_str,
             category=category,
-            target_hint=None,
             metadata={
                 "benchmark": "mme-realworld-lite",
                 "question_id": q_id,
