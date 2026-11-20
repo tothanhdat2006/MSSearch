@@ -55,8 +55,8 @@ minimal/
 │   ├── __init__.py
 │   ├── test_stages.py               # Unit tests for individual stages & batch fallback
 │   ├── test_engine.py               # End-to-end integration tests (options & free-form)
-│   └── test_datasets.py             # Schema parsing, prompt formatting & download registry tests
-├── stashsearch_minimal.zip          # Packaged zip archive
+│   ├── test_datasets.py             # Schema parsing, prompt formatting & download registry tests
+│   └── test_eval_runner.py          # Runner argument resolution, option extraction & metrics tests
 └── README.md                        # Documentation
 ```
 
@@ -180,7 +180,7 @@ python -m minimal.eval_runner \
 ### 5. MME-RealWorld-Lite Evaluation
 ```bash
 python -m minimal.eval_runner \
-    --benchmark mme_realworld_lite \
+    --benchmark mme-realworld-lite \
     --model_path Qwen/Qwen3-VL-8B-Instruct \
     --dataset_dir /data/mme-realworld-lite \
     --output_dir ./results/qwen_mme_realworld

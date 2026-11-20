@@ -40,7 +40,7 @@ echo "Output Dir : ${OUTPUT_DIR}"
 echo "=========================================================================="
 
 exec "${PYTHON_BIN}" "${MINIMAL_DIR}/eval_runner.py" \
-    --benchmark "mme_realworld_lite" \
+    --benchmark "mme-realworld-lite" \
     --model_path "${MODEL_PATH}" \
     --dual_encoder_name "${SIGLIP_NAME}" \
     --nlp_model "${NLP_MODEL}" \

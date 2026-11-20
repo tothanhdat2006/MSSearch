@@ -1,6 +1,7 @@
 """
 Batch Benchmark Evaluation Runner for STASH-Search Minimal.
-Evaluates STASH-Bench (N in {1, 5, 10, 20}), V*Bench (Vstar), and HR-Bench 4K/8K.
+Evaluates STASH-Bench (N in {1, 5, 10, 20}), V*Bench (Vstar), HR-Bench 4K/8K,
+TreeBench, and MME-RealWorld-Lite.
 Outputs streaming JSONL predictions and computes online summary metrics.
 """
 
@@ -25,11 +26,34 @@ from minimal.engine import STASHSearchEngine
 from minimal.datasets import load_benchmark_dataset, BenchmarkSample
 
 
+def _expand_bash_val(val: str, env_map: Dict[str, str]) -> str:
+    """Expands bash-style parameter substitutions like ${VAR:-default} and ${VAR}, supporting nesting."""
+    s = str(val).strip()
+    pattern = re.compile(r"\$\{([^{}]+)\}")
+    # Expand innermost ${...} iteratively up to 10 passes
+    for _ in range(10):
+        if not pattern.search(s):
+            break
+
+        def repl(match):
+            content = match.group(1).strip()
+            if ":-" in content:
+                k, default_val = content.split(":-", 1)
+                k = k.strip()
+                default_val = default_val.strip()
+                return env_map.get(k) or os.environ.get(k) or default_val
+            return env_map.get(content) or os.environ.get(content) or ""
+
+        s = pattern.sub(repl, s)
+    return s
+
+
 def load_env_defaults():
     """Loads environment configuration if present in environment or env_paths.sh."""
     script_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
     env_file = os.path.join(script_dir, "env_paths.sh")
     if os.path.isfile(env_file):
+        parsed_env: Dict[str, str] = {}
         with open(env_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -37,12 +61,15 @@ def load_env_defaults():
                     line = line[7:].strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
-                    k, v = k.strip(), v.strip().strip("'\"")
-                    if k not in os.environ and v:
-                        os.environ[k] = v
+                    k = k.strip()
+                    v = v.strip().strip("'\"")
+                    expanded_v = _expand_bash_val(v, parsed_env)
+                    parsed_env[k] = expanded_v
+                    if k not in os.environ and expanded_v:
+                        os.environ[k] = expanded_v
 
 
-def extract_predicted_option(pred_str: Any) -> Optional[str]:
+def extract_predicted_option(pred_str: Any, options_str: Optional[str] = None) -> Optional[str]:
     """Extracts chosen option letter (A through K) from free-form model prediction."""
     if not pred_str or not isinstance(pred_str, str):
         return None
@@ -50,24 +77,57 @@ def extract_predicted_option(pred_str: Any) -> Optional[str]:
     if clean.lower() in ("no answer found", "none", "n/a", "[error: image not found]"):
         return None
 
-    # 1. Direct letter at start e.g. "A. 27B", "(A)", "A: "
-    m = re.match(r"^[\(\[\"']*([A-Ka-k])[\)\]\.\:\s]", clean)
+    # Strip wrapping markdown bolding or backticks e.g. **A** -> A, `B` -> B
+    clean = re.sub(r"^\*+([A-Ka-k])\*+$", r"\1", clean).strip()
+    clean = re.sub(r"^`+([A-Ka-k])`+$", r"\1", clean).strip()
+
+    # 1. Exact single letter (with optional period/bracket/quotes) e.g. "A", "B.", "(C)", "[D]"
+    m = re.match(r"^[\s\*\(\[\"']*([A-Ka-k])[\s\*\)\]\.\:\'\"]*$", clean)
     if m:
         return m.group(1).upper()
 
-    # 2. Exact single letter
-    if clean.upper() in ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"):
-        return clean.upper()
-
-    # 3. Final Answer / Option phrase anywhere in text
-    m = re.search(r"\b(?:final answer|answer|choice|option)\b[^\w\n\r]*([A-Ka-k])\b", clean, re.IGNORECASE)
+    # 2. Explicit answer phrases anywhere in text (e.g. 'The best answer is: B', 'Answer is **C**',
+    #    'I believe the answer is D', 'The correct choice is (A)', 'Final answer: B')
+    m = re.search(
+        r"\b(?:final answer|best answer|correct answer|answer|choice|option)\b"
+        r"(?:\s+(?:is|to|be|would be|must be|of|should be|selected is))?"
+        r"[\s\:\*\(\[\"\']*([A-Ka-k])\b",
+        clean,
+        re.IGNORECASE
+    )
     if m:
         return m.group(1).upper()
 
-    # 4. First occurrence of A-K as isolated word
-    m = re.search(r"\b([A-K])\b", clean)
+    # 3. Direct letter at start formatted as option label e.g. "A. 27B", "(A) Blue", "A: ", "B - text", "B\nBecause..."
+    m = re.match(r"^[\s\*\(\[\"']*([A-Ka-k])(?:[\)\]\.\:\-]|(?:\s*\n))\s*", clean)
     if m:
         return m.group(1).upper()
+
+    # 4. Trailing answer at end of text e.g. "... is therefore: D." or "... is B."
+    m = re.search(r"\b(?:is|as)\s+[\*\(\[\"\']*([A-Ka-k])[\*\)\]\.\:\'\"]*$", clean, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+
+    # 5. Standalone letters B-K (skips 'I' and 'A' to prevent false matches with English pronoun 'I' or article 'A')
+    matches = re.findall(r"\b([B-HJ-Kb-hj-k])\b", clean)
+    if matches:
+        return matches[-1].upper()
+
+    # 6. Content matching against options_str if available (in case model repeated option text)
+    if options_str:
+        for line in options_str.splitlines():
+            line = line.strip()
+            opt_m = re.match(r"^[\(\[]?([A-Ka-k])[\)\]\.\:\s]+(.*)", line)
+            if opt_m:
+                opt_letter = opt_m.group(1).upper()
+                opt_content = opt_m.group(2).strip().lower()
+                if opt_content and len(opt_content) > 3 and opt_content in clean.lower():
+                    return opt_letter
+
+    # 7. Fallback for isolated 'A' if preceded by option/letter indicators
+    m = re.search(r"(?:letter|choice|option|selection)\s*[\:\=]?\s*[\*\(\[\"\']*(A)\b", clean, re.IGNORECASE)
+    if m:
+        return "A"
 
     return None
 
@@ -83,14 +143,14 @@ def parse_args():
     load_env_defaults()
     parser = argparse.ArgumentParser(description="STASH-Search Minimal Evaluation Runner")
 
-    # Benchmark selection
+    # Benchmark selection: strict benchmark names only, no aliases
     parser.add_argument("--benchmark", type=str, default="stash",
-                        choices=["stash", "vstar", "hrbench4k", "hrbench8k", "treebench", "mme_realworld_lite", "mmerealworldlite", "mme"],
-                        help="Benchmark dataset to evaluate.")
+                        choices=["stash", "vstar", "hrbench4k", "hrbench8k", "treebench", "mme-realworld-lite"],
+                        help="Benchmark dataset to evaluate: 'stash', 'vstar', 'hrbench4k', 'hrbench8k', 'treebench', 'mme-realworld-lite'.")
 
     # Paths
     parser.add_argument("--dataset_dir", type=str, default=None,
-                        help="Root directory for Vstar or HR-Bench dataset.")
+                        help="Root directory for Vstar, HR-Bench, TreeBench, or MME-RealWorld dataset.")
     parser.add_argument("--dataset_path", type=str, default=None,
                         help="Explicit annotation path (or STASH-Bench annotations JSON).")
     parser.add_argument("--image_dir", type=str, default=None,
@@ -145,10 +205,10 @@ def parse_args():
 
 
 def resolve_dataset_args(args) -> Dict[str, Any]:
-    """Resolves dataset paths using arguments or environment defaults."""
-    b = args.benchmark.lower()
+    """Resolves dataset paths using arguments or environment defaults strictly without aliases."""
+    b = args.benchmark.lower().strip()
     if b == "stash":
-        d_path = args.dataset_path or os.environ.get("STASH_DATASET_PATH") or os.environ.get("DATASET_PATH", "")
+        d_path = args.dataset_path or args.dataset_dir or os.environ.get("STASH_DATASET_PATH") or os.environ.get("DATASET_PATH", "")
         img_dir = args.image_dir or os.environ.get("STASH_IMAGE_DIR") or os.environ.get("IMAGE_DIR", "")
         return {
             "dataset_dir_or_path": d_path,
@@ -157,63 +217,87 @@ def resolve_dataset_args(args) -> Dict[str, Any]:
             "gallery_order_path": args.gallery_order_path
         }
     elif b == "vstar":
-        v_dir = args.dataset_dir or os.environ.get("VSTAR_DIR", "")
         a_path = args.dataset_path or os.environ.get("VSTAR_ANNOTATION")
+        v_dir = args.dataset_dir or os.environ.get("VSTAR_DIR", "")
+        if not v_dir and a_path and os.path.isfile(a_path):
+            v_dir = os.path.dirname(a_path)
         return {
-            "dataset_dir_or_path": v_dir,
+            "dataset_dir_or_path": v_dir or a_path or "",
             "annotation_path": a_path
         }
-    elif b in ("hrbench4k", "hrbench8k"):
-        env_var = "HRBENCH_4K_DIR" if b == "hrbench4k" else "HRBENCH_8K_DIR"
-        h_dir = args.dataset_dir or os.environ.get(env_var, "")
-        a_path = args.dataset_path or os.environ.get(f"{env_var}_ANNOTATION")
+    elif b == "hrbench4k":
+        h_dir = args.dataset_dir or os.environ.get("HRBENCH_4K_DIR", "")
+        a_path = args.dataset_path or os.environ.get("HRBENCH_4K_ANNOTATION")
+        if not h_dir and a_path and os.path.isfile(a_path):
+            h_dir = os.path.dirname(a_path)
         return {
-            "dataset_dir_or_path": h_dir,
+            "dataset_dir_or_path": h_dir or a_path or "",
             "annotation_path": a_path
         }
-    elif b in ("treebench", "treenbench"):
-        t_dir = args.dataset_dir or os.environ.get("TREEBENCH_DIR", "D:\\MachineLearning\\Datasets\\treebench" if os.path.isdir("D:\\MachineLearning\\Datasets\\treebench") else "")
+    elif b == "hrbench8k":
+        h_dir = args.dataset_dir or os.environ.get("HRBENCH_8K_DIR", "")
+        a_path = args.dataset_path or os.environ.get("HRBENCH_8K_ANNOTATION")
+        if not h_dir and a_path and os.path.isfile(a_path):
+            h_dir = os.path.dirname(a_path)
+        return {
+            "dataset_dir_or_path": h_dir or a_path or "",
+            "annotation_path": a_path
+        }
+    elif b == "treebench":
         a_path = args.dataset_path or os.environ.get("TREEBENCH_ANNOTATION")
+        t_dir = args.dataset_dir or os.environ.get("TREEBENCH_DIR", "")
+        if not t_dir and os.path.isdir(r"D:\MachineLearning\Datasets\treebench"):
+            t_dir = r"D:\MachineLearning\Datasets\treebench"
+        if not t_dir and a_path and os.path.isfile(a_path):
+            t_dir = os.path.dirname(a_path)
         return {
-            "dataset_dir_or_path": t_dir,
+            "dataset_dir_or_path": t_dir or a_path or "",
             "annotation_path": a_path
         }
-    elif b in ("mme_realworld_lite", "mmerealworldlite", "mme"):
-        m_dir = args.dataset_dir or os.environ.get("MME_REALWORLD_DIR", "D:\\MachineLearning\\Datasets\\mme-realworld-lite" if os.path.isdir("D:\\MachineLearning\\Datasets\\mme-realworld-lite") else "")
+    elif b == "mme-realworld-lite":
         a_path = args.dataset_path or os.environ.get("MME_REALWORLD_ANNOTATION")
+        m_dir = args.dataset_dir or os.environ.get("MME_REALWORLD_DIR", "")
+        if not m_dir and os.path.isdir(r"D:\MachineLearning\Datasets\mme-realworld-lite"):
+            m_dir = r"D:\MachineLearning\Datasets\mme-realworld-lite"
+        if not m_dir and a_path and os.path.isfile(a_path):
+            m_dir = os.path.dirname(a_path)
         return {
-            "dataset_dir_or_path": m_dir,
+            "dataset_dir_or_path": m_dir or a_path or "",
             "annotation_path": a_path
         }
-    return {}
+    else:
+        raise ValueError(
+            f"Unknown benchmark '{args.benchmark}'. Supported: 'stash', 'vstar', 'hrbench4k', 'hrbench8k', 'treebench', 'mme-realworld-lite'."
+        )
 
 
 def main():
     args = parse_args()
+    b = args.benchmark.lower().strip()
     os.makedirs(args.output_dir, exist_ok=True)
 
     # 1. Resolve dataset inputs
     ds_kwargs = resolve_dataset_args(args)
-    primary_path = ds_kwargs.get("dataset_dir_or_path", "")
+    primary_path = ds_kwargs.get("dataset_dir_or_path") or ds_kwargs.get("annotation_path") or ""
     if not primary_path:
-        print(f"[Error] Dataset path for benchmark '{args.benchmark}' is not configured.")
+        print(f"[Error] Dataset path for benchmark '{b}' is not configured.")
         print(f"Please provide --dataset_dir or --dataset_path, or configure env_paths.sh.")
         sys.exit(1)
 
     print(f"\n==========================================================================")
-    print(f"STASH-Search Minimal Runner | Benchmark: {args.benchmark.upper()}")
+    print(f"STASH-Search Minimal Runner | Benchmark: {b.upper()}")
     print(f"Model      : {args.model_path}")
     print(f"Dataset    : {primary_path}")
-    if args.benchmark == "stash":
+    if b == "stash":
         print(f"Pool Mode  : {args.pool_mode}")
     print(f"Output Dir : {args.output_dir}")
     print(f"==========================================================================")
 
     # 2. Load benchmark dataset
-    print(f"[DataLoader] Loading {args.benchmark.upper()} benchmark...")
+    print(f"[DataLoader] Loading {b.upper()} benchmark...")
     try:
         samples = load_benchmark_dataset(
-            benchmark=args.benchmark,
+            benchmark=b,
             **ds_kwargs
         )
     except Exception as e:
@@ -245,13 +329,21 @@ def main():
         out_jsonl = args.resume_from
     else:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        if args.benchmark == "stash":
-            out_jsonl = os.path.join(args.output_dir, f"results_{args.benchmark}_{m_base}_{args.pool_mode}_{stamp}.jsonl")
+        if b == "stash":
+            out_jsonl = os.path.join(args.output_dir, f"results_{b}_{m_base}_{args.pool_mode}_{stamp}.jsonl")
         else:
-            out_jsonl = os.path.join(args.output_dir, f"results_{args.benchmark}_{m_base}_{stamp}.jsonl")
+            out_jsonl = os.path.join(args.output_dir, f"results_{b}_{m_base}_{stamp}.jsonl")
 
     metrics_file = out_jsonl.replace(".jsonl", "_metrics.json")
     os.makedirs(os.path.dirname(os.path.abspath(out_jsonl)), exist_ok=True)
+
+    stats: Dict[str, Any] = {
+        "total": 0,
+        "correct": 0,
+        "correct_img": 0,
+        "correct_overall": 0,
+        "by_category": {}
+    }
 
     completed_ids = set()
     if (args.resume or args.resume_from) and os.path.isfile(out_jsonl):
@@ -261,10 +353,26 @@ def main():
                     try:
                         rec = json.loads(line)
                         if "sample_id" in rec:
-                            completed_ids.add(str(rec["sample_id"]))
+                            s_id = str(rec["sample_id"])
+                            completed_ids.add(s_id)
+                            # Re-populate historical cumulative stats
+                            cat = rec.get("category") or "default"
+                            if cat not in stats["by_category"]:
+                                stats["by_category"][cat] = {"total": 0, "correct": 0, "correct_img": 0, "correct_overall": 0}
+                            stats["total"] += 1
+                            stats["by_category"][cat]["total"] += 1
+                            if rec.get("is_correct_answer"):
+                                stats["correct"] += 1
+                                stats["by_category"][cat]["correct"] += 1
+                            if rec.get("is_correct_image"):
+                                stats["correct_img"] += 1
+                                stats["by_category"][cat]["correct_img"] += 1
+                            if rec.get("is_correct_overall"):
+                                stats["correct_overall"] += 1
+                                stats["by_category"][cat]["correct_overall"] += 1
                     except Exception:
                         pass
-        print(f"[Resume] Found {len(completed_ids)} completed records in '{out_jsonl}'.")
+        print(f"[Resume] Found {len(completed_ids)} completed records in '{out_jsonl}'. Restored baseline statistics.")
 
     # 5. Initialize search engine
     config = STASHConfig(
@@ -284,14 +392,6 @@ def main():
     )
 
     # 6. Run evaluation loop
-    stats: Dict[str, Any] = {
-        "total": 0,
-        "correct": 0,
-        "correct_img": 0,
-        "correct_overall": 0,
-        "by_category": {}
-    }
-
     print(f"\n[Execution] Starting inference across {len(samples)} samples -> '{out_jsonl}'...\n")
 
     with open(out_jsonl, "a", encoding="utf-8") as out_f:
@@ -303,7 +403,17 @@ def main():
             pil_images: List[Image.Image] = []
             for img_path in sample.candidate_image_paths:
                 if os.path.isfile(img_path):
-                    pil_images.append(ImageOps.exif_transpose(Image.open(img_path)).convert("RGB"))
+                    try:
+                        with Image.open(img_path) as img:
+                            pil_images.append(ImageOps.exif_transpose(img).convert("RGB"))
+                    except Exception as exif_err:
+                        print(f"[Warning] Failed to open '{img_path}' with EXIF transpose ({exif_err}). "
+                              f"Falling back to standard image open without EXIF transpose.")
+                        try:
+                            with Image.open(img_path) as img:
+                                pil_images.append(img.convert("RGB"))
+                        except Exception as read_err:
+                            print(f"[Error] Failed to load image '{img_path}': {read_err}")
                 else:
                     print(f"[Warning] Image file not found: '{img_path}'")
 
@@ -328,16 +438,18 @@ def main():
             is_correct_ans = False
             is_correct_img = False
 
-            if args.benchmark == "stash":
+            if b == "stash":
                 gt_norm = normalize_text(sample.gt_answer)
                 pred_norm = normalize_text(pred_ans)
                 is_correct_ans = (gt_norm == pred_norm) or (gt_norm in pred_norm)
                 is_correct_img = (pred_img == sample.gt_image_idx) if sample.gt_image_idx is not None else False
                 is_correct_overall = is_correct_ans and is_correct_img
+                pred_letter = None
             else:
-                # Multiple-choice benchmark (Vstar, HR-Bench)
-                pred_letter = extract_predicted_option(pred_ans)
-                gt_letter = sample.gt_answer.strip().upper()
+                # Multiple-choice benchmark (vstar, hrbench4k, hrbench8k, treebench, mme-realworld-lite)
+                pred_letter = extract_predicted_option(pred_ans, sample.options_str)
+                m_gt = re.search(r"([A-Ka-k])", str(sample.gt_answer))
+                gt_letter = m_gt.group(1).upper() if m_gt else str(sample.gt_answer).strip().upper()
                 is_correct_ans = (pred_letter == gt_letter) if pred_letter else False
                 is_correct_img = True
                 is_correct_overall = is_correct_ans
@@ -363,14 +475,15 @@ def main():
             # Log sample to JSONL
             record = {
                 "sample_id": sample.sample_id,
-                "benchmark": args.benchmark,
+                "benchmark": b,
                 "question": sample.question,
                 "inspection_prompt": sample.inspection_prompt,
                 "options_str": sample.options_str,
                 "gt_answer": sample.gt_answer,
+                "gt_letter": gt_letter if b != "stash" else None,
                 "gt_image_idx": sample.gt_image_idx,
                 "predicted_answer": pred_ans,
-                "predicted_letter": extract_predicted_option(pred_ans) if args.benchmark != "stash" else None,
+                "predicted_letter": pred_letter,
                 "predicted_image_index": pred_img,
                 "is_correct_answer": is_correct_ans,
                 "is_correct_image": is_correct_img,
@@ -389,9 +502,14 @@ def main():
             dedup_info = res.get("dedup_affected_crops", {})
             total_dedup = dedup_info.get("total_affected", 0) if isinstance(dedup_info, dict) else 0
             entropy_pruned = res.get("entropy_pruned_leaves", 0)
-            print(f"[{idx + 1}/{len(samples)}] [{status_tag}] Sample {sample.sample_id} | "
-                  f"Pred: '{pred_ans}' (GT: '{sample.gt_answer}') | Img: {pred_img} (GT: {sample.gt_image_idx}) | "
-                  f"Dedup (a): {total_dedup} | Pruned (b): {entropy_pruned} | {lat}s")
+            if b == "stash":
+                print(f"[{idx + 1}/{len(samples)}] [{status_tag}] Sample {sample.sample_id} | "
+                      f"Pred: '{pred_ans}' (GT: '{sample.gt_answer}') | Img: {pred_img} (GT: {sample.gt_image_idx}) | "
+                      f"Dedup (a): {total_dedup} | Pruned (b): {entropy_pruned} | {lat}s")
+            else:
+                print(f"[{idx + 1}/{len(samples)}] [{status_tag}] Sample {sample.sample_id} | "
+                      f"Pred: '{pred_letter}' ('{pred_ans}') (GT: '{gt_letter}') | "
+                      f"Dedup (a): {total_dedup} | Pruned (b): {entropy_pruned} | {lat}s")
 
             # Periodic memory management
             if (idx + 1) % 10 == 0:
@@ -404,10 +522,10 @@ def main():
     acc_overall = round(stats["correct_overall"] / total * 100, 2)
 
     print("\n" + "=" * 70)
-    print(f"BENCHMARK EVALUATION SUMMARY: {args.benchmark.upper()}")
+    print(f"BENCHMARK EVALUATION SUMMARY: {b.upper()}")
     print("=" * 70)
     print(f"Total Evaluated Samples : {stats['total']}")
-    if args.benchmark == "stash":
+    if b == "stash":
         print(f"Overall Accuracy (Joint): {acc_overall:.2f}%")
         print(f"Text Accuracy           : {acc_text:.2f}%")
         print(f"Image Identification    : {acc_img:.2f}%")
@@ -419,20 +537,24 @@ def main():
     for cat_name, c_data in sorted(stats["by_category"].items()):
         c_tot = max(1, c_data["total"])
         c_acc = round(c_data["correct_overall"] / c_tot * 100, 2)
-        print(f"  • {cat_name:<20}: {c_acc:6.2f}% ({c_data['correct_overall']}/{c_data['total']})")
+        c_data["accuracy"] = c_acc
+        print(f"  • {cat_name:<36}: {c_acc:6.2f}% ({c_data['correct_overall']}/{c_data['total']})")
     print("=" * 70)
 
     # Save metrics JSON
     summary_metrics = {
-        "benchmark": args.benchmark,
+        "benchmark": b,
         "model_path": args.model_path,
-        "pool_mode": args.pool_mode if args.benchmark == "stash" else "N_1",
+        "pool_mode": args.pool_mode if b == "stash" else "N_1",
         "total_samples": stats["total"],
         "acc_overall": acc_overall,
         "acc_text": acc_text,
         "acc_img": acc_img,
         "by_category": stats["by_category"]
     }
+    with open(metrics_file, "w", encoding="utf-8") as mf:
+        json.dump(summary_metrics, mf, indent=2)
+    print(f"[Done] Metrics saved to '{metrics_file}'.")
     with open(metrics_file, "w", encoding="utf-8") as mf:
         json.dump(summary_metrics, mf, indent=2)
     print(f"[Done] Metrics saved to '{metrics_file}'.")

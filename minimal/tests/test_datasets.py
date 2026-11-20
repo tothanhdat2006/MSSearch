@@ -277,7 +277,7 @@ class TestDatasetLoaders(unittest.TestCase):
                 json.dump(sample_data, f)
 
             samples = load_benchmark_dataset(
-                benchmark="mme_realworld_lite",
+                benchmark="mme-realworld-lite",
                 dataset_dir_or_path=tmpdir
             )
 
@@ -323,7 +323,7 @@ class TestDatasetLoaders(unittest.TestCase):
         # MME-RealWorld-Lite real dataset test
         mme_dir = r"D:\MachineLearning\Datasets\mme-realworld-lite"
         if os.path.isdir(mme_dir):
-            samples = load_benchmark_dataset("mme_realworld_lite", mme_dir)
+            samples = load_benchmark_dataset("mme-realworld-lite", mme_dir)
             self.assertGreater(len(samples), 0)
             s = samples[0]
             self.assertTrue(os.path.exists(s.candidate_image_paths[0]))
