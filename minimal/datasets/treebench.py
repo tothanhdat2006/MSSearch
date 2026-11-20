@@ -18,6 +18,10 @@ def clean_option_text(text: str) -> str:
     return re.sub(r"^(?:\([A-Ka-k]\)[\.\:\s]*|[A-Ka-k][\.\:]\s*)", "", str(text).strip()).strip()
 
 
+def format_question_new(question, option_str):
+    return question + " Options:\n" + option_str + "\nSelect the best answer to the above multiple-choice question based on the image. Respond with only the letter of the correct option.\nThe best answer is:"
+
+
 def format_treebench_options(item: Dict[str, Any]) -> str:
     """
     Extracts or formats multiple-choice options string for TreeBench items.
@@ -120,6 +124,11 @@ def load_treebench(
                 full_img_path = alt_path
 
         options_str = format_treebench_options(item)
+        if options_str:
+            inspection_prompt = format_question_new(question, options_str)
+        else:
+            inspection_prompt = question
+
         gt_raw = item.get("answer") or item.get("ground_truth") or item.get("Ground truth") or item.get("gt_answer") or "A"
         gt_answer = str(gt_raw).strip().upper()
         m = re.search(r"([A-Ka-k])", gt_answer)
@@ -140,7 +149,8 @@ def load_treebench(
                 "index": item_idx,
                 "l2_category": item.get("l2-category"),
                 "target_instances": item.get("target_instances"),
-            }
+            },
+            inspection_prompt=inspection_prompt
         ))
 
     return bench_samples

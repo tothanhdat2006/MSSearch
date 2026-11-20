@@ -18,3 +18,4 @@ class BenchmarkSample:
     category: str = "default"
     target_hint: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    inspection_prompt: Optional[str] = None

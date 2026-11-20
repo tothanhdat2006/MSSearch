@@ -223,6 +223,8 @@ class TestDatasetLoaders(unittest.TestCase):
             self.assertIn("A. Top left leaf", s.options_str)
             self.assertIn("E. Center stem", s.options_str)
             self.assertIn("F. None", s.options_str)
+            self.assertIn(" Options:\n", s.inspection_prompt)
+            self.assertIn("Select the best answer to the above multiple-choice question based on the image. Respond with only the letter of the correct option.\nThe best answer is:", s.inspection_prompt)
             self.assertTrue(os.path.isabs(s.candidate_image_paths[0]))
 
     def test_mme_realworld_schema_loading(self):
@@ -264,9 +266,29 @@ class TestDatasetLoaders(unittest.TestCase):
             self.assertEqual(s.sample_id, "mme_001")
             self.assertEqual(s.gt_answer, "C")
             self.assertEqual(s.category, "Reasoning/Autonomous Driving")
-            self.assertIn("A. 30 mph", s.options_str)
-            self.assertIn("E. 70 mph", s.options_str)
+            # Raw options preserved without stripping/trimming
+            self.assertIn("(A) 30 mph", s.options_str)
+            self.assertIn("(E) 70 mph", s.options_str)
+            # Inspection prompt matches MME-RealWorld specification
+            self.assertIn("Select the best answer to the above multiple-choice question based on the image. Respond with only the letter (A, B, C, D, or E) of the correct option.\nThe best answer is:", s.inspection_prompt)
             self.assertTrue(os.path.isabs(s.candidate_image_paths[0]))
+
+    def test_prompt_formatters(self):
+        from minimal.datasets import format_question_multichoice, format_question_new
+        
+        # 1. MME format_question_multichoice
+        mme_prompt = format_question_multichoice("What is this?", ["(A) Cat", "(B) Dog"])
+        self.assertEqual(
+            mme_prompt,
+            "What is this?\n(A) Cat\n(B) Dog\nSelect the best answer to the above multiple-choice question based on the image. Respond with only the letter (A, B, C, D, or E) of the correct option.\nThe best answer is:"
+        )
+
+        # 2. TreeBench format_question_new
+        tb_prompt = format_question_new("Which animal?", "A. Cat\nB. Dog")
+        self.assertEqual(
+            tb_prompt,
+            "Which animal? Options:\nA. Cat\nB. Dog\nSelect the best answer to the above multiple-choice question based on the image. Respond with only the letter of the correct option.\nThe best answer is:"
+        )
 
     def test_real_dataset_paths_if_present(self):
         # TreeBench real dataset test

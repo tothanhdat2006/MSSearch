@@ -13,37 +13,14 @@ from .base import BenchmarkSample
 OPTION_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"]
 
 
-def clean_mme_option_text(text: str) -> str:
-    """Strips leading option label like '(A) ', 'A. ', 'A: ' without stripping plain words starting with A-K."""
-    return re.sub(r"^(?:\([A-Ka-k]\)[\.\:\s]*|[A-Ka-k][\.\:]\s*)", "", str(text).strip()).strip()
-
-
-def format_mme_options(options_raw: Any) -> str:
-    """
-    Standardizes multiple-choice options for MME-RealWorld-Lite into:
-    A. text
-    B. text
-    ...
-    """
-    if isinstance(options_raw, list):
-        formatted = []
-        for i, opt in enumerate(options_raw):
-            letter = OPTION_LETTERS[i] if i < len(OPTION_LETTERS) else f"Option_{i}"
-            clean_opt = clean_mme_option_text(opt)
-            formatted.append(f"{letter}. {clean_opt}")
-        return "\n".join(formatted)
-    elif isinstance(options_raw, dict):
-        formatted = []
-        for letter in OPTION_LETTERS:
-            val = options_raw.get(letter) or options_raw.get(letter.lower())
-            if val is not None and str(val).strip():
-                clean_opt = clean_mme_option_text(val)
-                formatted.append(f"{letter}. {clean_opt}")
-        return "\n".join(formatted)
-    elif isinstance(options_raw, str) and options_raw.strip():
-        lines = [l.strip() for l in options_raw.strip().splitlines() if l.strip()]
-        return "\n".join(lines)
-    return ""
+def format_question_multichoice(question, options):
+    ret = question
+    for o in options:
+        ret += '\n'
+        ret += o
+    # This prompt is copied from the original paper of MME-RealWorld
+    ret += '\nSelect the best answer to the above multiple-choice question based on the image. Respond with only the letter (A, B, C, D, or E) of the correct option.\nThe best answer is:'
+    return ret
 
 
 def load_mme_realworld(
@@ -92,7 +69,7 @@ def load_mme_realworld(
 
         q_id = item.get("id") or item.get("Question_id") or item.get("question_id") or f"mme_{idx:04d}"
         sample_id = str(q_id)
-        question = item.get("question") or item.get("Text") or ""
+        question = item.get("question") if item.get("question") is not None else item.get("Text", "")
         
         task = item.get("Task") or item.get("task")
         subtask = item.get("Subtask") or item.get("subtask")
@@ -111,8 +88,19 @@ def load_mme_realworld(
             if os.path.isfile(alt_path):
                 full_img_path = alt_path
 
-        options_raw = item.get("options") or item.get("Answer choices")
-        options_str = format_mme_options(options_raw)
+        # Do not trim and preprocess the question and options
+        options_raw = item.get("options") if item.get("options") is not None else item.get("Answer choices")
+        if isinstance(options_raw, list):
+            options_list = [str(o) for o in options_raw]
+        elif isinstance(options_raw, dict):
+            options_list = [str(v) for v in options_raw.values()]
+        elif isinstance(options_raw, str):
+            options_list = [line for line in options_raw.splitlines() if line]
+        else:
+            options_list = []
+
+        inspection_prompt = format_question_multichoice(question, options_list)
+        options_str = "\n".join(options_list) if options_list else None
 
         gt_raw = item.get("Ground truth") or item.get("ground_truth") or item.get("answer") or item.get("gt_answer") or "A"
         gt_answer = str(gt_raw).strip().upper()
@@ -127,7 +115,7 @@ def load_mme_realworld(
             candidate_image_paths=[os.path.abspath(full_img_path)],
             gt_answer=gt_answer,
             gt_image_idx=0,
-            options_str=options_str if options_str else None,
+            options_str=options_str,
             category=category,
             target_hint=None,
             metadata={
@@ -136,7 +124,9 @@ def load_mme_realworld(
                 "task": item.get("Task"),
                 "subtask": item.get("Subtask"),
                 "question_type": item.get("Question Type"),
-            }
+                "raw_options": options_list,
+            },
+            inspection_prompt=inspection_prompt
         ))
 
     return bench_samples

@@ -73,7 +73,8 @@ class STASHSearchEngine:
         candidate_images: List[Image.Image],
         question: str,
         options_str: Optional[str] = None,
-        target_hint: Optional[str] = None
+        target_hint: Optional[str] = None,
+        inspection_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Executes end-to-end multi-image visual search across candidate images.
@@ -83,6 +84,7 @@ class STASHSearchEngine:
             question: User natural language query.
             options_str: Optional formatted multiple-choice candidate options (e.g. for Vstar or HR-Bench).
             target_hint: Optional explicit target entity/phrase to guide quadtree search.
+            inspection_prompt: Optional full prompt for Stage 3 crop inspection (e.g. for TreeBench or MME-RealWorld).
 
         Returns:
             Dictionary containing predicted answer, supporting image index, extractions, and timings.
@@ -120,7 +122,9 @@ class STASHSearchEngine:
         # Stage 3: Gallery-Level Visual Screening & Inspection
         # -------------------------------------------------------------
         t0 = time.perf_counter()
-        if options_str and options_str.strip():
+        if inspection_prompt and inspection_prompt.strip():
+            inspection_question = inspection_prompt
+        elif options_str and options_str.strip():
             inspection_question = f"{question}\n{options_str.strip()}\nAnswer the option letter directly."
         else:
             inspection_question = question

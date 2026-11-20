@@ -8,8 +8,8 @@ from .base import BenchmarkSample
 from .stash_bench import load_stash_bench
 from .vstar import load_vstar
 from .hr_bench import load_hr_bench
-from .treebench import load_treebench
-from .mme_realworld import load_mme_realworld
+from .treebench import load_treebench, format_question_new
+from .mme_realworld import load_mme_realworld, format_question_multichoice
 
 __all__ = [
     "BenchmarkSample",
@@ -19,6 +19,8 @@ __all__ = [
     "load_hr_bench",
     "load_treebench",
     "load_mme_realworld",
+    "format_question_new",
+    "format_question_multichoice",
 ]
 
 

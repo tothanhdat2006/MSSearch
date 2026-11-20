@@ -316,7 +316,8 @@ def main():
                 candidate_images=pil_images,
                 question=sample.question,
                 options_str=sample.options_str,
-                target_hint=sample.target_hint
+                target_hint=sample.target_hint,
+                inspection_prompt=sample.inspection_prompt
             )
             lat = round(time.perf_counter() - t0, 3)
 
@@ -364,6 +365,7 @@ def main():
                 "sample_id": sample.sample_id,
                 "benchmark": args.benchmark,
                 "question": sample.question,
+                "inspection_prompt": sample.inspection_prompt,
                 "options_str": sample.options_str,
                 "gt_answer": sample.gt_answer,
                 "gt_image_idx": sample.gt_image_idx,
