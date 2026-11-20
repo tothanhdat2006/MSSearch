@@ -188,6 +188,28 @@ python -m minimal.eval_runner \
 
 ---
 
+## Direct Baseline MLLM Inference (`minimal/baseline/run_inference.py`)
+
+For evaluating standard end-to-end full-image MLLM baselines without search/quadtree partitioning on V\*Bench, HR-Bench (4K/8K), TreeBench, and MME-RealWorld-Lite:
+
+```bash
+# Direct full-image baseline evaluation
+python -m minimal.baseline.run_inference \
+    --model qwen3vl_8b \
+    --benchmark vstar \
+    --out-dir ./predictions
+
+# HR-Bench with all 4 option rotations evaluated & averaged
+python -m minimal.baseline.run_inference \
+    --model qwen3vl_8b \
+    --benchmark hrbench8k \
+    --out-dir ./predictions
+```
+All standard arguments from the reference baseline are preserved (`--model`, `--benchmark`/`--setting`, `--data-dir`, `--out-dir`, `--limit`, `--max-new-tokens`, `--qwen-image-max-pixels`, `--internvl-max-patches`, `--cycle_idx`, `--dry-run`, etc.).
+
+
+---
+
 ## Workstation Shell Scripts (`minimal/scripts/`)
 
 1. Edit [`minimal/scripts/env_paths.sh`](scripts/env_paths.sh) once to point to local model weights and dataset directories:
