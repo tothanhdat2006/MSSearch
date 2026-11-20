@@ -370,12 +370,12 @@ def screen_and_inspect_crops(
     num_images = len(gallery_images)
     b_retain = config.k * num_images
 
-    # 1. Global ranking and retention (with tie-breaker favoring smaller/deeper patches)
+    # 1. Global ranking and retention (with tie-breaker matching 85d3edb stage4 top-k: alignment_score, entropy)
     sorted_patches = sorted(
         candidate_patches,
         key=lambda p: (
             p.alignment_score if p.alignment_score is not None else 0.0,
-            1.0 / max(1, p.area)
+            getattr(p, "entropy", 0.0)
         ),
         reverse=True
     )
