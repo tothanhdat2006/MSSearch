@@ -77,9 +77,39 @@ class TestDatasetLoaders(unittest.TestCase):
             self.assertEqual(s.question, "What is the color of the comb?")
             self.assertEqual(s.gt_answer, "A")
             self.assertEqual(s.category, "direct_attributes")
-            self.assertEqual(s.target_hint, "comb")
+            self.assertIsNone(s.target_hint)
             self.assertIn("A. The color of the comb is purple.", s.options_str)
             self.assertIn("B. The color of the comb is black.", s.options_str)
+
+            # Test annotation_vstar_updated.json takes priority and uses labeled ground truth
+            updated_vstar_data = [
+                {
+                    "target_object": ["comb"],
+                    "bbox": [[[10, 10, 50, 50]]],
+                    "question": "What is the color of the comb?",
+                    "options": [
+                        "The color of the comb is black.",
+                        "The color of the comb is purple.",
+                        "The color of the comb is red.",
+                        "The color of the comb is brown."
+                    ],
+                    "label": "B",
+                    "input_image": "direct_attributes/sa_7429.jpg",
+                    "test_type": "direct_attributes"
+                }
+            ]
+            updated_anno_path = os.path.join(tmpdir, "annotation_vstar_updated.json")
+            with open(updated_anno_path, "w", encoding="utf-8") as f:
+                json.dump(updated_vstar_data, f)
+
+            samples_up = load_benchmark_dataset(
+                benchmark="vstar",
+                dataset_dir_or_path=tmpdir
+            )
+            self.assertEqual(len(samples_up), 1)
+            self.assertEqual(samples_up[0].gt_answer, "B")
+            self.assertIn("A. The color of the comb is black.", samples_up[0].options_str)
+            self.assertIn("B. The color of the comb is purple.", samples_up[0].options_str)
 
     def test_hrbench_schema_loading(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -112,13 +142,29 @@ class TestDatasetLoaders(unittest.TestCase):
                 dataset_dir_or_path=tmpdir
             )
 
-            self.assertEqual(len(samples), 1)
-            s = samples[0]
-            self.assertEqual(s.sample_id, "hrbench_8k_0000")
-            self.assertEqual(s.question, "What is the number displayed above the entrance?")
-            self.assertEqual(s.gt_answer, "A")
-            self.assertEqual(s.category, "single")
-            self.assertIn("A. 27B", s.options_str)
+            # Default evaluates all 4 rotations
+            self.assertEqual(len(samples), 4)
+            self.assertEqual(samples[0].sample_id, "hrbench_8k_0000_rot0")
+            self.assertEqual(samples[0].gt_answer, "A")
+            self.assertEqual(samples[1].sample_id, "hrbench_8k_0000_rot1")
+            self.assertEqual(samples[1].gt_answer, "B")
+            self.assertEqual(samples[2].sample_id, "hrbench_8k_0000_rot2")
+            self.assertEqual(samples[2].gt_answer, "C")
+            self.assertEqual(samples[3].sample_id, "hrbench_8k_0000_rot3")
+            self.assertEqual(samples[3].gt_answer, "D")
+            self.assertEqual(samples[0].question, "What is the number displayed above the entrance?")
+            self.assertEqual(samples[0].category, "single")
+            self.assertIn("A. 27B", samples[0].options_str)
+
+            # Explicit cycle_idx evaluates only that rotation
+            samples_rot0 = load_benchmark_dataset(
+                benchmark="hrbench8k",
+                dataset_dir_or_path=tmpdir,
+                cycle_idx=0
+            )
+            self.assertEqual(len(samples_rot0), 1)
+            self.assertEqual(samples_rot0[0].sample_id, "hrbench_8k_0000_rot0")
+            self.assertEqual(samples_rot0[0].gt_answer, "A")
 
             # Strict resolution enforcement: requesting 4k must NOT fallback to 8k
             with self.assertRaises(FileNotFoundError):
@@ -136,8 +182,8 @@ class TestDatasetLoaders(unittest.TestCase):
                 benchmark="hrbench4k",
                 dataset_dir_or_path=tmpdir
             )
-            self.assertEqual(len(samples_4k), 1)
-            self.assertEqual(samples_4k[0].sample_id, "hrbench_4k_0000")
+            self.assertEqual(len(samples_4k), 4)
+            self.assertEqual(samples_4k[0].sample_id, "hrbench_4k_0000_rot0")
 
     def test_stash_bench_gallery_keys_and_ordering(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -283,7 +329,8 @@ class TestDatasetLoaders(unittest.TestCase):
 
             self.assertEqual(len(samples), 1)
             s = samples[0]
-            self.assertEqual(s.sample_id, "mme_001")
+            self.assertEqual(s.sample_id, "mme_001_0000")
+            self.assertEqual(s.metadata["question_id"], "mme_001")
             self.assertEqual(s.gt_answer, "C")
             self.assertEqual(s.category, "Reasoning/Autonomous Driving")
             # Raw options preserved without stripping/trimming
@@ -356,6 +403,60 @@ class TestDatasetLoaders(unittest.TestCase):
         # Byte formatting
         self.assertEqual(format_bytes(1024), "1.00 KB")
         self.assertEqual(format_bytes(1024 * 1024), "1.00 MB")
+
+    def test_normalize_dataset_directory_option_b(self):
+        """Tests Option B post-extraction normalization for vstar and hrbench4k/8k only."""
+        from minimal.datasets.download_data import (
+            normalize_dataset_directory,
+            DATASETS_NEEDING_NORMALIZATION
+        )
+
+        # 1. V*Bench normalization from nested zoom_eye_data
+        with tempfile.TemporaryDirectory() as tmpdir:
+            vstar_target = os.path.join(tmpdir, "vstar")
+            nested_vstar = os.path.join(vstar_target, "mnt", "sdb", "llp", "datasets", "zoom_eye_data", "zoom_eye_data")
+            os.makedirs(os.path.join(nested_vstar, "direct_attributes"), exist_ok=True)
+            os.makedirs(os.path.join(nested_vstar, "relative_position"), exist_ok=True)
+
+            with open(os.path.join(nested_vstar, "annotation_vstar_updated.json"), "w") as f:
+                f.write('{"sample": 1}')
+            with open(os.path.join(nested_vstar, "direct_attributes", "sa_01.jpg"), "w") as f:
+                f.write("fake_img")
+
+            ok = normalize_dataset_directory("vstar", vstar_target)
+            self.assertTrue(ok)
+            # Files moved to root
+            self.assertTrue(os.path.isfile(os.path.join(vstar_target, "annotation_vstar_updated.json")))
+            self.assertTrue(os.path.isfile(os.path.join(vstar_target, "direct_attributes", "sa_01.jpg")))
+            # mnt directory pruned
+            self.assertFalse(os.path.exists(os.path.join(vstar_target, "mnt")))
+
+            # Re-running on already normalized directory is a no-op returning True
+            self.assertTrue(normalize_dataset_directory("vstar", vstar_target))
+
+        # 2. HR-Bench 4K & 8K normalization
+        for hr_key, anno_name in [("hrbench4k", "annotation_hr-bench_4k.json"), ("hrbench8k", "annotation_hr-bench_8k.json")]:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                hr_target = os.path.join(tmpdir, hr_key)
+                nested_hr = os.path.join(hr_target, "mnt", "sdb", "llp", "datasets", "zoom_eye_data", "zoom_eye_data")
+                os.makedirs(os.path.join(nested_hr, "image"), exist_ok=True)
+
+                with open(os.path.join(nested_hr, anno_name), "w") as f:
+                    f.write('{"samples": []}')
+                with open(os.path.join(nested_hr, "image", "0.jpg"), "w") as f:
+                    f.write("fake_img")
+
+                ok = normalize_dataset_directory(hr_key, hr_target)
+                self.assertTrue(ok)
+                self.assertTrue(os.path.isfile(os.path.join(hr_target, anno_name)))
+                self.assertTrue(os.path.isfile(os.path.join(hr_target, "image", "0.jpg")))
+                self.assertFalse(os.path.exists(os.path.join(hr_target, "mnt")))
+
+        # 3. Non-normalized datasets (treebench, mme_realworld_lite) should skip normalization
+        self.assertNotIn("treebench", DATASETS_NEEDING_NORMALIZATION)
+        self.assertNotIn("mme_realworld_lite", DATASETS_NEEDING_NORMALIZATION)
+        self.assertTrue(normalize_dataset_directory("treebench", "/dummy/dir"))
+        self.assertTrue(normalize_dataset_directory("mme_realworld_lite", "/dummy/dir"))
 
 
 if __name__ == "__main__":

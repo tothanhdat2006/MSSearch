@@ -65,14 +65,14 @@ def load_benchmark_dataset(
             dataset_dir=dataset_dir_or_path,
             annotation_path=kwargs.get("annotation_path"),
             resolution="4k",
-            cycle_idx=kwargs.get("cycle_idx", 0)
+            cycle_idx=kwargs.get("cycle_idx", None)
         )
     elif b == "hrbench8k":
         return load_hr_bench(
             dataset_dir=dataset_dir_or_path,
             annotation_path=kwargs.get("annotation_path"),
             resolution="8k",
-            cycle_idx=kwargs.get("cycle_idx", 0)
+            cycle_idx=kwargs.get("cycle_idx", None)
         )
     elif b == "treebench":
         return load_treebench(

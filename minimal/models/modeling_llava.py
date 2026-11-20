@@ -4,6 +4,7 @@ Ported directly from mssearch/models/modeling_llava.py with ModelGlobalLocal arc
 """
 
 import os
+import re
 import torch
 from abc import ABC
 from typing import List, Dict, Optional, Union, Any
@@ -225,11 +226,8 @@ class ModelGlobalLocal(BaseMLLM):
         max_new_tokens: int = 96
     ) -> str:
         """Stage 1 Target Extraction text interface."""
-        if isinstance(prompt_or_messages, list):
-            # Extract content from chat messages
-            text = "\n".join([m.get("content", "") for m in prompt_or_messages if m.get("content")])
-        else:
-            text = str(prompt_or_messages)
+        from ..stages.target_extraction import format_prompt_for_text_completion
+        text = format_prompt_for_text_completion(prompt_or_messages)
         return self.generate_response(image_pil=None, question=text, max_new_tokens=max_new_tokens)
 
     def generate_response_batch(

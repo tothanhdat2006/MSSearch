@@ -136,7 +136,7 @@ result = engine.search(
 
 ## Batch Benchmark Evaluation (`eval_runner.py`)
 
-[`minimal/eval_runner.py`](file:///D:/Project/VisualSearch/experiments/multisource/MSSearch/minimal/eval_runner.py) manages end-to-end benchmark evaluation, EXIF rotation handling, telemetry tracking, streaming JSONL records, and online accuracy reporting.
+[`minimal/eval_runner.py`](eval_runner.py) manages end-to-end benchmark evaluation, EXIF rotation handling, telemetry tracking, streaming JSONL records, and online accuracy reporting.
 
 ### 1. STASH-Bench Evaluation
 ```bash
@@ -190,7 +190,7 @@ python -m minimal.eval_runner \
 
 ## Workstation Shell Scripts (`minimal/scripts/`)
 
-1. Edit [`minimal/scripts/env_paths.sh`](file:///D:/Project/VisualSearch/experiments/multisource/MSSearch/minimal/scripts/env_paths.sh) once to point to local model weights and dataset directories:
+1. Edit [`minimal/scripts/env_paths.sh`](scripts/env_paths.sh) once to point to local model weights and dataset directories:
    ```bash
    export MODEL_DIR="/data/models"
    export STASH_DATASET_PATH="/data/STASHBench/annotations_part1234_merged.json"

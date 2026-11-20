@@ -5,7 +5,7 @@ Extracts active visual search targets O_Q = {o_1, ..., o_m} using 3-shot in-cont
 
 import json
 import re
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
 from ..models.base import BaseMLLM
 
 # Canonical closed-class English pronouns to filter out
@@ -24,6 +24,65 @@ QUESTION_STOP_WORDS = {
     "located", "found", "seen", "visible", "showing", "depicted", "picture", "image",
     "photo", "count", "number", "many", "much", "total", "tell", "describe", "find"
 }
+
+
+def build_few_shot_prompt(question: str) -> str:
+    """Builds single text prompt for text-completion VLMs (e.g. LLaVA-OV, InternVL). Ported from utils_stage1.py line 149."""
+    return (
+        "You are an expert visual search parser. Given a question, return a JSON object with 'active_objects' and 'question_type'.\n\n"
+        "Example 1 (Single-Object Attribute):\n"
+        "Question: \"What is the registration number of the boat?\"\n"
+        "JSON: {\"active_objects\": [\"boat\"], \"question_type\": \"single_object_attribute\"}\n\n"
+        "Example 2 (Single-Object Attribute):\n"
+        "Question: \"What is the color of the mailbox?\"\n"
+        "JSON: {\"active_objects\": [\"mailbox\"], \"question_type\": \"single_object_attribute\"}\n\n"
+        "Example 3 (Counting):\n"
+        "Question: \"How many windows are on the brick building?\"\n"
+        "JSON: {\"active_objects\": [\"brick building\", \"window\"], \"question_type\": \"counting\"}\n\n"
+        f"Question: \"{question}\"\nJSON:"
+    )
+
+
+def format_prompt_for_text_completion(prompt_or_messages: Union[str, List[Dict[str, Any]]]) -> str:
+    """
+    Converts prompt or chat messages into a single text prompt suitable for
+    legacy text-completion VLMs (e.g. LLaVA-OV, InternVL).
+    Handles string prompts or message lists without raising TypeError on list contents.
+    """
+    if isinstance(prompt_or_messages, str):
+        return prompt_or_messages
+
+    if isinstance(prompt_or_messages, list):
+        # Extract question if chat messages were passed from build_target_extraction_messages
+        question_found = None
+        for m in reversed(prompt_or_messages):
+            if isinstance(m, dict) and m.get("role") == "user":
+                content = m.get("content")
+                if isinstance(content, list):
+                    c_text = "".join(item.get("text", "") if isinstance(item, dict) else str(item) for item in content)
+                else:
+                    c_text = str(content)
+                match = re.search(r'Question:\s*"([^"]+)"', c_text)
+                if match:
+                    question_found = match.group(1)
+                    break
+        if question_found is not None:
+            return build_few_shot_prompt(question_found)
+
+        # Safely extract text from content without raising TypeError
+        text_parts = []
+        for m in prompt_or_messages:
+            if isinstance(m, dict):
+                c = m.get("content", "")
+                if isinstance(c, list):
+                    text_parts.append("".join(item.get("text", "") if isinstance(item, dict) else str(item) for item in c))
+                elif isinstance(c, str):
+                    text_parts.append(c)
+            else:
+                text_parts.append(str(m))
+        return "\n".join(text_parts)
+
+    return str(prompt_or_messages)
 
 
 def build_target_extraction_messages(question: str) -> List[Dict[str, Any]]:
@@ -151,7 +210,33 @@ def extract_visual_targets(
         List of cleaned, deduplicated visual target strings O_Q.
     """
     messages = build_target_extraction_messages(question)
-    raw_response = mllm.generate_text(messages, max_new_tokens=max_new_tokens)
+    few_shot_prompt = build_few_shot_prompt(question)
+
+    raw_response = ""
+    # In the original code (stage1_parser.py), LLaVA-OV-7B (ModelGlobalLocal) and InternVL3-8B
+    # (ModelInternvl) did not use chat messages: stage1_parser.py sent build_few_shot_prompt
+    # (utils_stage1.py, line 149) through generate_response(image_pil=None, question=few_shot_prompt).
+    # Qwen-VL (ModelQwenVL) has a native chat template processor and uses generate_text(messages).
+    is_response_model = (
+        type(mllm).__name__ in ("ModelGlobalLocal", "ModelInternvl")
+        or (hasattr(mllm, "generate_response") and not hasattr(mllm, "processor"))
+    )
+
+    if is_response_model and hasattr(mllm, "generate_response"):
+        try:
+            raw_response = mllm.generate_response(image_pil=None, question=few_shot_prompt, max_new_tokens=max_new_tokens)
+        except Exception as e:
+            if verbose:
+                print(f"[Stage 1 Error] generate_response failed ({e}), falling back to generate_text")
+            if hasattr(mllm, "generate_text"):
+                raw_response = mllm.generate_text(few_shot_prompt, max_new_tokens=max_new_tokens)
+    elif hasattr(mllm, "generate_text"):
+        try:
+            raw_response = mllm.generate_text(messages, max_new_tokens=max_new_tokens)
+        except Exception:
+            raw_response = mllm.generate_text(few_shot_prompt, max_new_tokens=max_new_tokens)
+    elif hasattr(mllm, "generate_response"):
+        raw_response = mllm.generate_response(image_pil=None, question=few_shot_prompt, max_new_tokens=max_new_tokens)
 
     raw_targets = parse_mllm_json(raw_response)
 
@@ -188,3 +273,7 @@ def extract_visual_targets(
         print(f"[Stage 1: Target Extraction] Targets: {clean_targets} (from: '{question}')")
 
     return clean_targets
+
+
+# Backward-compatible alias
+extract_targets = extract_visual_targets

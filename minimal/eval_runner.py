@@ -75,6 +75,15 @@ def extract_predicted_option(pred_str: Any, options_str: Optional[str] = None) -
         return None
     clean = pred_str.strip()
     if clean.lower() in ("no answer found", "none", "n/a", "[error: image not found]"):
+        if options_str and clean.lower() in ("none", "n/a"):
+            for line in options_str.splitlines():
+                line = line.strip()
+                opt_m = re.match(r"^[\(\[]?([A-Ka-k])[\)\]\.\:\s]+(.*)", line)
+                if opt_m:
+                    opt_letter = opt_m.group(1).upper()
+                    opt_content = opt_m.group(2).strip().lower()
+                    if clean.lower() == opt_content or opt_content.startswith(clean.lower()) or "none" in opt_content:
+                        return opt_letter
         return None
 
     # Strip wrapping markdown bolding or backticks e.g. **A** -> A, `B` -> B
@@ -176,6 +185,8 @@ def parse_args():
     parser.add_argument("--pool_mode", type=str, default="N_5",
                         choices=["N_1", "N_5", "N_10", "N_20", "crop"],
                         help="Candidate gallery pool size for STASH-Bench.")
+    parser.add_argument("--cycle_idx", type=int, default=None,
+                        help="Option rotation index for HR-Bench (0-3). If None, evaluates all 4 rotations.")
 
     # Hyperparameters
     parser.add_argument("--k", type=int, default=20,
@@ -232,7 +243,8 @@ def resolve_dataset_args(args) -> Dict[str, Any]:
             h_dir = os.path.dirname(a_path)
         return {
             "dataset_dir_or_path": h_dir or a_path or "",
-            "annotation_path": a_path
+            "annotation_path": a_path,
+            "cycle_idx": args.cycle_idx
         }
     elif b == "hrbench8k":
         h_dir = args.dataset_dir or os.environ.get("HRBENCH_8K_DIR", "")
@@ -241,13 +253,12 @@ def resolve_dataset_args(args) -> Dict[str, Any]:
             h_dir = os.path.dirname(a_path)
         return {
             "dataset_dir_or_path": h_dir or a_path or "",
-            "annotation_path": a_path
+            "annotation_path": a_path,
+            "cycle_idx": args.cycle_idx
         }
     elif b == "treebench":
         a_path = args.dataset_path or os.environ.get("TREEBENCH_ANNOTATION")
         t_dir = args.dataset_dir or os.environ.get("TREEBENCH_DIR", "")
-        if not t_dir and os.path.isdir(r"D:\MachineLearning\Datasets\treebench"):
-            t_dir = r"D:\MachineLearning\Datasets\treebench"
         if not t_dir and a_path and os.path.isfile(a_path):
             t_dir = os.path.dirname(a_path)
         return {
@@ -257,8 +268,6 @@ def resolve_dataset_args(args) -> Dict[str, Any]:
     elif b == "mme-realworld-lite":
         a_path = args.dataset_path or os.environ.get("MME_REALWORLD_ANNOTATION")
         m_dir = args.dataset_dir or os.environ.get("MME_REALWORLD_DIR", "")
-        if not m_dir and os.path.isdir(r"D:\MachineLearning\Datasets\mme-realworld-lite"):
-            m_dir = r"D:\MachineLearning\Datasets\mme-realworld-lite"
         if not m_dir and a_path and os.path.isfile(a_path):
             m_dir = os.path.dirname(a_path)
         return {
@@ -342,7 +351,8 @@ def main():
         "correct": 0,
         "correct_img": 0,
         "correct_overall": 0,
-        "by_category": {}
+        "by_category": {},
+        "by_rotation": {}
     }
 
     completed_ids = set()
@@ -370,6 +380,15 @@ def main():
                             if rec.get("is_correct_overall"):
                                 stats["correct_overall"] += 1
                                 stats["by_category"][cat]["correct_overall"] += 1
+
+                            # Re-populate rotation stats if present
+                            if "cycle_idx" in rec and rec["cycle_idx"] is not None:
+                                rot_k = f"rot{rec['cycle_idx']}"
+                                if rot_k not in stats["by_rotation"]:
+                                    stats["by_rotation"][rot_k] = {"total": 0, "correct": 0}
+                                stats["by_rotation"][rot_k]["total"] += 1
+                                if rec.get("is_correct_answer"):
+                                    stats["by_rotation"][rot_k]["correct"] += 1
                     except Exception:
                         pass
         print(f"[Resume] Found {len(completed_ids)} completed records in '{out_jsonl}'. Restored baseline statistics.")
@@ -379,6 +398,7 @@ def main():
         k=args.k,
         saliency_plateau_gain_threshold=args.saliency_gain_thresh,
         answer_dedup_similarity=args.consensus_sim,
+        allow_none_answer=(b == "mme-realworld-lite"),
         verbose=not args.quiet
     )
 
@@ -472,10 +492,21 @@ def main():
                 stats["correct_overall"] += 1
                 stats["by_category"][cat]["correct_overall"] += 1
 
+            # Accumulate rotation stats if sample belongs to a rotation benchmark
+            rot = sample.metadata.get("cycle_idx") if sample.metadata else None
+            if rot is not None:
+                rot_k = f"rot{rot}"
+                if rot_k not in stats["by_rotation"]:
+                    stats["by_rotation"][rot_k] = {"total": 0, "correct": 0}
+                stats["by_rotation"][rot_k]["total"] += 1
+                if is_correct_ans:
+                    stats["by_rotation"][rot_k]["correct"] += 1
+
             # Log sample to JSONL
             record = {
                 "sample_id": sample.sample_id,
                 "benchmark": b,
+                "cycle_idx": rot,
                 "question": sample.question,
                 "inspection_prompt": sample.inspection_prompt,
                 "options_str": sample.options_str,
@@ -507,7 +538,8 @@ def main():
                       f"Pred: '{pred_ans}' (GT: '{sample.gt_answer}') | Img: {pred_img} (GT: {sample.gt_image_idx}) | "
                       f"Dedup (a): {total_dedup} | Pruned (b): {entropy_pruned} | {lat}s")
             else:
-                print(f"[{idx + 1}/{len(samples)}] [{status_tag}] Sample {sample.sample_id} | "
+                rot_tag = f" [rot{rot}]" if rot is not None else ""
+                print(f"[{idx + 1}/{len(samples)}] [{status_tag}] Sample {sample.sample_id}{rot_tag} | "
                       f"Pred: '{pred_letter}' ('{pred_ans}') (GT: '{gt_letter}') | "
                       f"Dedup (a): {total_dedup} | Pruned (b): {entropy_pruned} | {lat}s")
 
@@ -521,6 +553,14 @@ def main():
     acc_img = round(stats["correct_img"] / total * 100, 2)
     acc_overall = round(stats["correct_overall"] / total * 100, 2)
 
+    avg_rot_acc = None
+    if stats["by_rotation"]:
+        rot_accs = [
+            r_d["correct"] / max(1, r_d["total"]) * 100
+            for r_d in stats["by_rotation"].values()
+        ]
+        avg_rot_acc = round(sum(rot_accs) / len(rot_accs), 2)
+
     print("\n" + "=" * 70)
     print(f"BENCHMARK EVALUATION SUMMARY: {b.upper()}")
     print("=" * 70)
@@ -531,6 +571,17 @@ def main():
         print(f"Image Identification    : {acc_img:.2f}%")
     else:
         print(f"Total Option Accuracy   : {acc_overall:.2f}%")
+        if avg_rot_acc is not None:
+            print(f"Accuracy (Rotation)     : {avg_rot_acc:.2f}%")
+
+    if stats["by_rotation"]:
+        print("-" * 70)
+        print("Rotation Breakdown:")
+        for r_k, r_d in sorted(stats["by_rotation"].items()):
+            r_tot = max(1, r_d["total"])
+            r_acc = round(r_d["correct"] / r_tot * 100, 2)
+            r_d["accuracy"] = r_acc
+            print(f"  • Rotation {r_k:<6}: {r_acc:6.2f}% ({r_d['correct']}/{r_d['total']})")
 
     print("-" * 70)
     print("Category Breakdown:")
@@ -552,9 +603,10 @@ def main():
         "acc_img": acc_img,
         "by_category": stats["by_category"]
     }
-    with open(metrics_file, "w", encoding="utf-8") as mf:
-        json.dump(summary_metrics, mf, indent=2)
-    print(f"[Done] Metrics saved to '{metrics_file}'.")
+    if avg_rot_acc is not None:
+        summary_metrics["accuracy (rotation)"] = avg_rot_acc
+        summary_metrics["by_rotation"] = stats["by_rotation"]
+
     with open(metrics_file, "w", encoding="utf-8") as mf:
         json.dump(summary_metrics, mf, indent=2)
     print(f"[Done] Metrics saved to '{metrics_file}'.")

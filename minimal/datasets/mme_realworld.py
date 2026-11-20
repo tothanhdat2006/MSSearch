@@ -68,7 +68,7 @@ def load_mme_realworld(
             continue
 
         q_id = item.get("id") or item.get("Question_id") or item.get("question_id") or f"mme_{idx:04d}"
-        sample_id = str(q_id)
+        sample_id = f"{q_id}_{idx:04d}"
         question = item.get("question") if item.get("question") is not None else item.get("Text", "")
         
         task = item.get("Task") or item.get("task")

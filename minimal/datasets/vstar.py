@@ -6,6 +6,7 @@ sub-folders 'direct_attributes/' and 'relative_position/' with annotation_vstar.
 
 import os
 import json
+import re
 from typing import List, Dict, Any, Optional, Tuple
 from .base import BenchmarkSample
 
@@ -42,6 +43,7 @@ def load_vstar(
     anno_file = annotation_path
     if not anno_file or not os.path.isfile(anno_file):
         candidates = [
+            os.path.join(dataset_dir, "annotation_vstar_updated.json"),
             os.path.join(dataset_dir, "annotation_vstar.json"),
             os.path.join(dataset_dir, "annotations.json"),
             os.path.join(dataset_dir, "vstar.json")
@@ -52,7 +54,7 @@ def load_vstar(
                 break
 
     if not anno_file or not os.path.isfile(anno_file):
-        raise FileNotFoundError(f"[V*Bench] annotation_vstar.json not found in '{dataset_dir}'.")
+        raise FileNotFoundError(f"[V*Bench] Neither annotation_vstar_updated.json nor annotation_vstar.json found in '{dataset_dir}'.")
 
     with open(anno_file, "r", encoding="utf-8") as f:
         raw_data = json.load(f)
@@ -75,24 +77,30 @@ def load_vstar(
 
         full_img_path = os.path.join(dataset_dir, input_image_rel) if not os.path.isabs(input_image_rel) else input_image_rel
 
-        # In V*Bench, option 0 is canonically the ground-truth target option (mapped to "A")
+        # In annotation_vstar_updated.json, options are shuffled and label is explicitly provided (A, B, C, D)
+        # In legacy annotation_vstar.json, option 0 is canonically the ground truth target option ("A")
         options_list = item.get("options", [])
         if options_list:
             options_str, letter_map = format_options(options_list)
-            gt_letter = "A"
-            gt_text = options_list[0] if len(options_list) > 0 else ""
         else:
             options_str = None
-            gt_letter = "A"
-            gt_text = item.get("answer", "")
+            letter_map = {}
 
-        # Target hint from target_object annotation if available
-        tgt_obj = item.get("target_object")
-        target_hint = None
-        if isinstance(tgt_obj, list):
-            target_hint = " ".join([str(x) for x in tgt_obj if x])
-        elif isinstance(tgt_obj, str) and tgt_obj.strip():
-            target_hint = tgt_obj.strip()
+        raw_ans = item.get("label") if item.get("label") is not None else item.get("answer")
+        if raw_ans is not None:
+            raw_ans_str = str(raw_ans).strip().upper()
+            m = re.search(r"([A-Da-d])", raw_ans_str)
+            if m:
+                gt_letter = m.group(1).upper()
+            else:
+                try:
+                    gt_letter = OPTION_LETTERS[int(raw_ans)]
+                except Exception:
+                    gt_letter = "A"
+        else:
+            gt_letter = "A"
+
+        gt_text = letter_map.get(gt_letter, options_list[0] if options_list else "")
 
         bench_samples.append(BenchmarkSample(
             sample_id=sample_id,
@@ -102,7 +110,6 @@ def load_vstar(
             gt_image_idx=0,
             options_str=options_str,
             category=test_type,
-            target_hint=target_hint,
             metadata={
                 "benchmark": "vstar",
                 "test_type": test_type,

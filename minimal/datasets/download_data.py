@@ -7,6 +7,7 @@ from ModelScope repository (llp1995/hr_data).
 import os
 import sys
 import time
+import shutil
 import tarfile
 import argparse
 import urllib.request
@@ -233,6 +234,128 @@ def extract_tar_gz(archive_path: str, extract_to: str) -> bool:
         return False
 
 
+DATASETS_NEEDING_NORMALIZATION: Dict[str, Dict[str, Any]] = {
+    "vstar": {
+        "markers": ["annotation_vstar_updated.json", "annotation_vstar.json", "direct_attributes"],
+        "expected_items": ["direct_attributes", "relative_position"],
+    },
+    "hrbench4k": {
+        "markers": ["annotation_hr-bench_4k.json", "hr-bench_4k.json"],
+        "expected_items": ["image"],
+    },
+    "hrbench8k": {
+        "markers": ["annotation_hr-bench_8k.json", "hr-bench_8k.json"],
+        "expected_items": ["image"],
+    },
+}
+
+
+def normalize_dataset_directory(
+    dataset_key: str,
+    target_dir: str,
+    output_dir: Optional[str] = None
+) -> bool:
+    """
+    Normalizes dataset directory structure for vstar and hrbench4k/8k (Option B).
+    Archives for these benchmarks unpack under 'mnt/sdb/llp/datasets/zoom_eye_data/zoom_eye_data/'.
+    This function locates the nested directory containing the benchmark markers, moves all items
+    up to target_dir, and prunes the remaining empty 'mnt/...' directory hierarchy.
+
+    Args:
+        dataset_key: Canonical dataset key ('vstar', 'hrbench4k', 'hrbench8k').
+        target_dir: Destination folder where benchmark files should live directly.
+        output_dir: Optional parent output directory to check for orphaned mnt/ folders.
+
+    Returns:
+        True if directory is normalized or already contains expected markers, False otherwise.
+    """
+    canon = canonicalize_dataset_key(dataset_key) or dataset_key.lower().strip()
+    if canon not in DATASETS_NEEDING_NORMALIZATION:
+        return True
+
+    info = DATASETS_NEEDING_NORMALIZATION[canon]
+    markers = info["markers"]
+
+    # 1. Check if target_dir already contains the markers directly
+    if os.path.isdir(target_dir):
+        if any(os.path.exists(os.path.join(target_dir, m)) for m in markers):
+            # Already normalized. Clean up any leftover empty mnt/ folder if present.
+            mnt_path = os.path.join(target_dir, "mnt")
+            if os.path.isdir(mnt_path):
+                shutil.rmtree(mnt_path, ignore_errors=True)
+            return True
+
+    # 2. Search for the nested source directory containing the markers
+    candidate_source_dirs = []
+
+    # Direct known zoom_eye_data paths
+    if os.path.isdir(target_dir):
+        candidate_source_dirs.append(
+            os.path.join(target_dir, "mnt", "sdb", "llp", "datasets", "zoom_eye_data", "zoom_eye_data")
+        )
+    if output_dir and os.path.isdir(output_dir):
+        candidate_source_dirs.append(
+            os.path.join(output_dir, "mnt", "sdb", "llp", "datasets", "zoom_eye_data", "zoom_eye_data")
+        )
+
+    source_dir = None
+    for cand in candidate_source_dirs:
+        if os.path.isdir(cand) and any(os.path.exists(os.path.join(cand, m)) for m in markers):
+            source_dir = cand
+            break
+
+    # If not found at known path, perform bounded walk inside target_dir or output_dir/mnt
+    if not source_dir:
+        search_roots = []
+        if os.path.isdir(target_dir):
+            search_roots.append(target_dir)
+        if output_dir and os.path.isdir(os.path.join(output_dir, "mnt")):
+            search_roots.append(os.path.join(output_dir, "mnt"))
+
+        for s_root in search_roots:
+            for root, dirs, files in os.walk(s_root):
+                if any(m in files or m in dirs for m in markers):
+                    source_dir = root
+                    break
+            if source_dir:
+                break
+
+    if not source_dir or not os.path.isdir(source_dir):
+        print(f"  [Warning] Could not find nested directory containing markers {markers} for '{canon}'.")
+        return False
+
+    # 3. Move all contents from source_dir into target_dir
+    os.makedirs(target_dir, exist_ok=True)
+    moved_count = 0
+    for item_name in os.listdir(source_dir):
+        src_item = os.path.join(source_dir, item_name)
+        dst_item = os.path.join(target_dir, item_name)
+        if os.path.abspath(src_item) == os.path.abspath(dst_item):
+            continue
+        if os.path.exists(dst_item):
+            if os.path.isdir(dst_item):
+                shutil.rmtree(dst_item, ignore_errors=True)
+            else:
+                os.remove(dst_item)
+        shutil.move(src_item, dst_item)
+        moved_count += 1
+
+    # 4. Prune the remaining empty mnt/... hierarchy
+    if os.path.isdir(target_dir):
+        mnt_in_target = os.path.join(target_dir, "mnt")
+        if os.path.isdir(mnt_in_target):
+            shutil.rmtree(mnt_in_target, ignore_errors=True)
+
+    if output_dir and os.path.isdir(output_dir):
+        mnt_in_output = os.path.join(output_dir, "mnt")
+        if os.path.isdir(mnt_in_output):
+            shutil.rmtree(mnt_in_output, ignore_errors=True)
+
+    print(f"  [Normalize] Option B: Successfully normalized {canon.upper()}: moved {moved_count} items from "
+          f"'{source_dir}' -> '{target_dir}' and pruned nested 'mnt/' hierarchy.")
+    return True
+
+
 def run_dataset_download(
     dataset_keys: List[str],
     output_dir: str,
@@ -277,9 +400,13 @@ def run_dataset_download(
         # Check if already extracted
         target_subfolder = os.path.join(output_dir, info["extract_dir"])
         if os.path.isdir(target_subfolder) and test_seconds is None:
-            print(f"  [Skip] Destination directory '{target_subfolder}' already exists.")
-            results[canon] = True
-            continue
+            if canon in DATASETS_NEEDING_NORMALIZATION:
+                normalize_dataset_directory(canon, target_subfolder, output_dir)
+            markers = DATASETS_NEEDING_NORMALIZATION.get(canon, {}).get("markers", [])
+            if not markers or any(os.path.exists(os.path.join(target_subfolder, m)) for m in markers):
+                print(f"  [Skip] Destination directory '{target_subfolder}' already exists and contains expected files.")
+                results[canon] = True
+                continue
 
         # Check if archive already downloaded
         if os.path.isfile(dest_archive) and test_seconds is None:
@@ -303,7 +430,16 @@ def run_dataset_download(
 
         # Extract archive
         if not no_extract and os.path.isfile(dest_archive):
-            ext_ok = extract_tar_gz(dest_archive, output_dir)
+            # For vstar and hrbench4k/8k, extract into target_subfolder so that hrbench4k and hrbench8k
+            # (which share internal path mnt/.../zoom_eye_data/) do not collide with each other
+            extract_dest = target_subfolder if canon in DATASETS_NEEDING_NORMALIZATION else output_dir
+            ext_ok = extract_tar_gz(dest_archive, extract_dest)
+
+            # Option B post-extraction directory normalization (for vstar and hrbench4k/8k only)
+            if ext_ok and canon in DATASETS_NEEDING_NORMALIZATION:
+                norm_ok = normalize_dataset_directory(canon, target_subfolder, output_dir)
+                ext_ok = ext_ok and norm_ok
+
             if ext_ok and not keep_archive:
                 try:
                     os.remove(dest_archive)

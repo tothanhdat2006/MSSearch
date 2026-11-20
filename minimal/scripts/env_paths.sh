@@ -20,25 +20,26 @@ export STASH_IMAGE_DIR="${STASH_IMAGE_DIR:-/data/STASHBench/pool}"
 export GALLERY_ORDER_PATH="${GALLERY_ORDER_PATH:-}"
 
 # 4. External High-Resolution Transfer Benchmarks
-# V*Bench (Vstar): contains sub-folders 'direct_attributes/', 'relative_position/', and 'annotation_vstar.json'
+# V*Bench (Vstar): contains sub-folders 'direct_attributes/', 'relative_position/', and 'annotation_vstar_updated.json'
 export VSTAR_DIR="${VSTAR_DIR:-/data/Vstar}"
-export VSTAR_ANNOTATION="${VSTAR_ANNOTATION:-${VSTAR_DIR}/annotation_vstar.json}"
+[ ! -d "${VSTAR_DIR}" ] && [ -d "/data/vstar" ] && export VSTAR_DIR="/data/vstar"
+export VSTAR_ANNOTATION="${VSTAR_ANNOTATION:-${VSTAR_DIR}/annotation_vstar_updated.json}"
 
 # HR-Bench 4K & 8K: contains sub-folder 'image/' and 'annotation_hr-bench_{4k|8k}.json'
 export HRBENCH_4K_DIR="${HRBENCH_4K_DIR:-/data/HRBench4K}"
+[ ! -d "${HRBENCH_4K_DIR}" ] && [ -d "/data/hr-bench_4k" ] && export HRBENCH_4K_DIR="/data/hr-bench_4k"
 export HRBENCH_4K_ANNOTATION="${HRBENCH_4K_ANNOTATION:-${HRBENCH_4K_DIR}/annotation_hr-bench_4k.json}"
 
 export HRBENCH_8K_DIR="${HRBENCH_8K_DIR:-/data/HRBench8K}"
+[ ! -d "${HRBENCH_8K_DIR}" ] && [ -d "/data/hr-bench_8k" ] && export HRBENCH_8K_DIR="/data/hr-bench_8k"
 export HRBENCH_8K_ANNOTATION="${HRBENCH_8K_ANNOTATION:-${HRBENCH_8K_DIR}/annotation_hr-bench_8k.json}"
 
 # TreeBench: contains 'images/' and 'annotation_treebench.json'
-export TREEBENCH_DIR="${TREEBENCH_DIR:-D:/MachineLearning/Datasets/treebench}"
-[ ! -d "${TREEBENCH_DIR}" ] && export TREEBENCH_DIR="/data/TreeBench"
+export TREEBENCH_DIR="${TREEBENCH_DIR:-/data/TreeBench}"
 export TREEBENCH_ANNOTATION="${TREEBENCH_ANNOTATION:-${TREEBENCH_DIR}/annotation_treebench.json}"
 
 # MME-RealWorld-Lite: contains 'imgs/' and 'annotation_mme-realworld-lite.json'
-export MME_REALWORLD_DIR="${MME_REALWORLD_DIR:-D:/MachineLearning/Datasets/mme-realworld-lite}"
-[ ! -d "${MME_REALWORLD_DIR}" ] && export MME_REALWORLD_DIR="/data/mme-realworld-lite"
+export MME_REALWORLD_DIR="${MME_REALWORLD_DIR:-/data/mme-realworld-lite}"
 export MME_REALWORLD_ANNOTATION="${MME_REALWORLD_ANNOTATION:-${MME_REALWORLD_DIR}/annotation_mme-realworld-lite.json}"
 
 # 5. Base Output Directory

@@ -24,7 +24,7 @@ def load_hr_bench(
     dataset_dir: str,
     annotation_path: Optional[str] = None,
     resolution: str = "8k",
-    cycle_idx: int = 0
+    cycle_idx: Optional[int] = None
 ) -> List[BenchmarkSample]:
     """
     Loads HR-Bench evaluation samples from annotation_hr-bench_{4k|8k}.json.
@@ -33,7 +33,8 @@ def load_hr_bench(
         dataset_dir: Root directory containing 'image/' and annotation file.
         annotation_path: Optional explicit path to annotation JSON.
         resolution: '4k' or '8k'.
-        cycle_idx: Option rotation index (0 to 3, default: 0).
+        cycle_idx: Optional option rotation index (0 to 3). If None, all 4 rotations
+                   are generated per item to allow computing average rotation accuracy.
 
     Returns:
         List of BenchmarkSample instances.
@@ -80,7 +81,6 @@ def load_hr_bench(
             continue
 
         item_idx = item.get("index", idx)
-        sample_id = f"hrbench_{res_tag}_{item_idx:04d}"
         question = item.get("question", "")
         category = item.get("category", "single")
         input_image_rel = item.get("input_image", f"image/{item_idx}.jpg")
@@ -91,41 +91,53 @@ def load_hr_bench(
             if os.path.isfile(alt_img):
                 full_img_path = alt_img
 
-        # Options handling: extract rotation string for cycle_idx
         options_raw = item.get("options", [])
-        if isinstance(options_raw, list) and len(options_raw) > cycle_idx:
-            options_str = str(options_raw[cycle_idx]).strip()
-        elif isinstance(options_raw, str):
-            options_str = options_raw.strip()
-        else:
-            options_str = None
-
-        # Ground truth answer letter: extract letter for cycle_idx
         answers_raw = item.get("answer", [])
-        if isinstance(answers_raw, list) and len(answers_raw) > cycle_idx:
-            gt_letter = str(answers_raw[cycle_idx]).strip().upper()
-        elif isinstance(answers_raw, str):
-            gt_letter = answers_raw.strip().upper()
-        else:
-            gt_letter = "A"
 
-        bench_samples.append(BenchmarkSample(
-            sample_id=sample_id,
-            question=question,
-            candidate_image_paths=[os.path.abspath(full_img_path)],
-            gt_answer=gt_letter,
-            gt_image_idx=0,
-            options_str=options_str,
-            category=category,
-            target_hint=None,
-            metadata={
-                "benchmark": f"hrbench_{resolution}",
-                "index": item_idx,
-                "input_image": input_image_rel,
-                "category": category,
-                "cycle_idx": cycle_idx,
-                "raw_answers": answers_raw
-            }
-        ))
+        # Determine which rotations to generate
+        if cycle_idx is not None:
+            rotations = [cycle_idx]
+        elif isinstance(options_raw, list) and len(options_raw) > 0:
+            rotations = list(range(len(options_raw)))
+        else:
+            rotations = [0]
+
+        for rot in rotations:
+            # Options handling for current rotation
+            if isinstance(options_raw, list) and len(options_raw) > rot:
+                options_str = str(options_raw[rot]).strip()
+            elif isinstance(options_raw, str):
+                options_str = options_raw.strip()
+            else:
+                options_str = None
+
+            # Ground truth answer letter for current rotation
+            if isinstance(answers_raw, list) and len(answers_raw) > rot:
+                gt_letter = str(answers_raw[rot]).strip().upper()
+            elif isinstance(answers_raw, str):
+                gt_letter = answers_raw.strip().upper()
+            else:
+                gt_letter = "A"
+
+            sample_id = f"hrbench_{res_tag}_{item_idx:04d}_rot{rot}"
+
+            bench_samples.append(BenchmarkSample(
+                sample_id=sample_id,
+                question=question,
+                candidate_image_paths=[os.path.abspath(full_img_path)],
+                gt_answer=gt_letter,
+                gt_image_idx=0,
+                options_str=options_str,
+                category=category,
+                target_hint=None,
+                metadata={
+                    "benchmark": f"hrbench_{resolution}",
+                    "index": item_idx,
+                    "input_image": input_image_rel,
+                    "category": category,
+                    "cycle_idx": rot,
+                    "raw_answers": answers_raw
+                }
+            ))
 
     return bench_samples

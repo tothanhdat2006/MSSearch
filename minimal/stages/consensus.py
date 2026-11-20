@@ -76,11 +76,16 @@ NEGATIVE_REGEX_PATTERNS = [
 ]
 
 
-def is_uninformative_response(text: str) -> bool:
+def is_uninformative_response(text: str, allow_none: bool = False) -> bool:
     """Checks whether candidate text indicates an unanswerable crop or missing target."""
     cleaned = text.strip().rstrip(".").rstrip(",")
     if not cleaned:
         return True
+
+    # For benchmarks like MME-RealWorld-Lite, 'none' answers are real valid options
+    if allow_none:
+        return False
+
     lower = cleaned.lower()
 
     if lower in ABSENCE_TERMS:
@@ -120,7 +125,8 @@ def resolve_source_attributed_consensus(
     Returns:
         (predicted_answer, evidence_image_index)
     """
-    valid = [e for e in extractions if e.final_answer and not is_uninformative_response(e.final_answer)]
+    allow_none = getattr(config, "allow_none_answer", False)
+    valid = [e for e in extractions if e.final_answer and not is_uninformative_response(e.final_answer, allow_none=allow_none)]
     if not valid:
         if config.verbose:
             print("[Stage 4: Consensus (SAC)] 0 valid responses surviving filter -> Fallback 'No answer found'.")

@@ -41,6 +41,7 @@ class STASHConfig:
 
     # Stage 4: Source-Attributed Consensus (SAC)
     answer_dedup_similarity: float = 0.85            # \tau_{vote}: string pattern matching threshold
+    allow_none_answer: bool = False                  # When True, 'none' / refusal strings are treated as valid answers (e.g. MME-RealWorld-Lite)
 
     # Models & Runtime Environment
     dual_encoder_name: str = "google/siglip2-so400m-patch16-512"

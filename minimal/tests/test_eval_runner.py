@@ -55,7 +55,8 @@ class TestEvalRunner(unittest.TestCase):
                 dataset_path=None,
                 image_dir=None,
                 pool_mode="N_5",
-                gallery_order_path=None
+                gallery_order_path=None,
+                cycle_idx=None
             )
             res = resolve_dataset_args(args)
             self.assertEqual(res["dataset_dir_or_path"], "/dummy/dir")
@@ -69,7 +70,8 @@ class TestEvalRunner(unittest.TestCase):
                 dataset_path=None,
                 image_dir=None,
                 pool_mode="N_5",
-                gallery_order_path=None
+                gallery_order_path=None,
+                cycle_idx=None
             )
             with self.assertRaises(ValueError):
                 resolve_dataset_args(args)
@@ -111,6 +113,13 @@ class TestEvalRunner(unittest.TestCase):
         self.assertIsNone(extract_predicted_option("no answer found"))
         self.assertIsNone(extract_predicted_option("[error: image not found]"))
 
+        # 7. Matching "none" / "n/a" when explicitly present in options_str (e.g. MME-RealWorld-Lite)
+        none_opts = "(A) 30 mph\n(B) 40 mph\n(C) 50 mph\n(D) 60 mph\n(E) None"
+        self.assertEqual(extract_predicted_option("none", options_str=none_opts), "E")
+        self.assertEqual(extract_predicted_option("None", options_str=none_opts), "E")
+        na_opts = "A. Cat\nB. Dog\nC. N/A"
+        self.assertEqual(extract_predicted_option("n/a", options_str=na_opts), "C")
+
     def test_resolve_dataset_args_fallbacks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             anno_file = os.path.join(tmpdir, "annotation_vstar.json")
@@ -133,19 +142,21 @@ class TestEvalRunner(unittest.TestCase):
     def test_resume_statistics_restoration(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             out_jsonl = os.path.join(tmpdir, "test_resume.jsonl")
-            # Write 2 completed records
+            # Write 2 completed records with rotation metadata
             rec1 = {
                 "sample_id": "s1",
-                "benchmark": "vstar",
-                "category": "direct_attributes",
+                "benchmark": "hrbench8k",
+                "cycle_idx": 0,
+                "category": "single",
                 "is_correct_answer": True,
                 "is_correct_image": True,
                 "is_correct_overall": True
             }
             rec2 = {
                 "sample_id": "s2",
-                "benchmark": "vstar",
-                "category": "relative_position",
+                "benchmark": "hrbench8k",
+                "cycle_idx": 1,
+                "category": "single",
                 "is_correct_answer": False,
                 "is_correct_image": True,
                 "is_correct_overall": False
@@ -158,7 +169,8 @@ class TestEvalRunner(unittest.TestCase):
                 "correct": 0,
                 "correct_img": 0,
                 "correct_overall": 0,
-                "by_category": {}
+                "by_category": {},
+                "by_rotation": {}
             }
             completed_ids = set()
 
@@ -184,11 +196,20 @@ class TestEvalRunner(unittest.TestCase):
                                 stats["correct_overall"] += 1
                                 stats["by_category"][cat]["correct_overall"] += 1
 
+                            if "cycle_idx" in rec and rec["cycle_idx"] is not None:
+                                rot_k = f"rot{rec['cycle_idx']}"
+                                if rot_k not in stats["by_rotation"]:
+                                    stats["by_rotation"][rot_k] = {"total": 0, "correct": 0}
+                                stats["by_rotation"][rot_k]["total"] += 1
+                                if rec.get("is_correct_answer"):
+                                    stats["by_rotation"][rot_k]["correct"] += 1
+
             self.assertEqual(len(completed_ids), 2)
             self.assertEqual(stats["total"], 2)
             self.assertEqual(stats["correct_overall"], 1)
-            self.assertEqual(stats["by_category"]["direct_attributes"]["correct_overall"], 1)
-            self.assertEqual(stats["by_category"]["relative_position"]["correct_overall"], 0)
+            self.assertEqual(stats["by_category"]["single"]["correct_overall"], 1)
+            self.assertEqual(stats["by_rotation"]["rot0"]["correct"], 1)
+            self.assertEqual(stats["by_rotation"]["rot1"]["correct"], 0)
 
     def test_image_loading_exif_warning(self):
         """Tests that if EXIF transpose fails, a warning is printed before falling back to standard open."""

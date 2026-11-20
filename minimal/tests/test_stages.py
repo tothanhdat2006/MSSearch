@@ -13,6 +13,8 @@ from minimal.stages.target_extraction import (
     normalize_target,
     extract_visual_targets,
     build_target_extraction_messages,
+    build_few_shot_prompt,
+    format_prompt_for_text_completion,
 )
 from minimal.stages.quadtree_partitioning import (
     get_quadtree_splits,
@@ -92,6 +94,75 @@ class TestStage1TargetExtraction(unittest.TestCase):
         targets = extract_visual_targets("Where is the waterfall located?", mock_mllm, verbose=False)
         self.assertTrue(len(targets) > 0)
         self.assertIn("waterfall", targets)
+
+    def test_build_few_shot_prompt(self):
+        prompt = build_few_shot_prompt("What color is the boat?")
+        self.assertIn("Example 1 (Single-Object Attribute):", prompt)
+        self.assertIn("Example 3 (Counting):", prompt)
+        self.assertTrue(prompt.endswith('Question: "What color is the boat?"\nJSON:'))
+
+    def test_generate_response_path_for_text_completion_models(self):
+        class ModelGlobalLocalMock:
+            def __init__(self):
+                self.called_with = None
+
+            def generate_response(self, image_pil=None, question: str = "", max_new_tokens: int = 512, **kwargs):
+                self.called_with = (image_pil, question, max_new_tokens)
+                return '{"active_objects": ["red boat"], "question_type": "single_object_attribute"}'
+
+        mock = ModelGlobalLocalMock()
+        targets = extract_visual_targets("What color is the boat?", mock, verbose=False)
+        self.assertIsNotNone(mock.called_with)
+        image_pil, question_sent, max_tokens = mock.called_with
+        self.assertIsNone(image_pil)
+        self.assertTrue(question_sent.endswith('Question: "What color is the boat?"\nJSON:'))
+        self.assertEqual(targets, ["red boat"])
+
+    def test_generate_text_with_chat_messages_does_not_crash(self):
+        # 1. Test format_prompt_for_text_completion directly (pure logic without torch dependency)
+        messages = build_target_extraction_messages("Where is the mailbox?")
+        formatted_prompt = format_prompt_for_text_completion(messages)
+        self.assertTrue(formatted_prompt.endswith('Question: "Where is the mailbox?"\nJSON:'))
+
+        # Direct string passthrough
+        self.assertEqual(format_prompt_for_text_completion("test prompt"), "test prompt")
+
+        # General message list with dict contents (no TypeError on list of dicts)
+        custom_msgs = [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
+        res_custom = format_prompt_for_text_completion(custom_msgs)
+        self.assertEqual(res_custom, "hello")
+
+        # 2. Test ModelGlobalLocal and ModelInternvl if torch is available
+        try:
+            import torch
+            from minimal.models.modeling_internvl import ModelInternvl
+            from minimal.models.modeling_llava import ModelGlobalLocal
+        except ImportError:
+            return  # Skip model class testing in environments without torch
+
+        class SubInternvl(ModelInternvl):
+            def __init__(self):
+                self.received_q = None
+            def generate_response(self, image_pil=None, question: str = "", max_new_tokens: int = 512, **kwargs):
+                self.received_q = question
+                return '{"active_objects": ["mailbox"], "question_type": "single_object_attribute"}'
+
+        internvl_inst = SubInternvl()
+        res = internvl_inst.generate_text(messages)
+        self.assertIn("mailbox", res)
+        self.assertTrue(internvl_inst.received_q.endswith('Question: "Where is the mailbox?"\nJSON:'))
+
+        class SubLlava(ModelGlobalLocal):
+            def __init__(self):
+                self.received_q = None
+            def generate_response(self, image_pil=None, question: str = "", max_new_tokens: int = 512, **kwargs):
+                self.received_q = question
+                return '{"active_objects": ["mailbox"], "question_type": "single_object_attribute"}'
+
+        llava_inst = SubLlava()
+        res2 = llava_inst.generate_text(messages)
+        self.assertIn("mailbox", res2)
+        self.assertTrue(llava_inst.received_q.endswith('Question: "Where is the mailbox?"\nJSON:'))
 
 
 class TestStage2QuadtreePartitioning(unittest.TestCase):
