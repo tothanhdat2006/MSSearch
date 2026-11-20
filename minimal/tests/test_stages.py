@@ -38,6 +38,7 @@ from minimal.stages.visual_screening import (
 )
 from minimal.stages.consensus import (
     is_uninformative_response,
+    is_option_choice,
     normalize_answer_string,
     resolve_source_attributed_consensus,
 )
@@ -311,6 +312,15 @@ class TestStage4Consensus(unittest.TestCase):
         self.assertTrue(is_uninformative_response("none"))
         self.assertFalse(is_uninformative_response("red mailbox"))
         self.assertFalse(is_uninformative_response("42"))
+
+        # Multiple-choice option selection with negative phrases must NOT be uninformative
+        self.assertFalse(is_uninformative_response("A. There is no contact at all."))
+        self.assertFalse(is_uninformative_response("(B) No visible damage"))
+        self.assertFalse(is_uninformative_response("The best answer is: A. There is no contact at all."))
+        self.assertFalse(is_uninformative_response("There is no contact at all.", options_str="A. There is no contact at all.\nB. Direct collision"))
+        self.assertTrue(is_option_choice("A. There is no contact at all."))
+        self.assertTrue(is_option_choice("C"))
+        self.assertTrue(is_option_choice("(D) None"))
 
     def test_majority_voting(self):
         config = STASHConfig(answer_dedup_similarity=0.85, verbose=False)

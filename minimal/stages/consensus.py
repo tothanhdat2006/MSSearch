@@ -76,13 +76,68 @@ NEGATIVE_REGEX_PATTERNS = [
 ]
 
 
-def is_uninformative_response(text: str, allow_none: bool = False) -> bool:
+def is_option_choice(text: str, options_str: Optional[str] = None) -> bool:
+    """
+    Checks if candidate answer is an explicit multiple-choice selection:
+    1. Exact single letter e.g. 'A', 'B.', '(C)', '[D]'
+    2. Leading option label e.g. 'A. There is no contact', '(A) text', 'A: text', 'A - text'
+    3. Explicit answer phrase anywhere e.g. 'The best answer is: A', 'Final answer: B'
+    4. Match against candidate option texts in options_str if available
+    """
+    if not text or not isinstance(text, str):
+        return False
+
+    clean = text.strip()
+    clean = re.sub(r"^\*+([A-Ka-k])\*+$", r"\1", clean).strip()
+    clean = re.sub(r"^`+([A-Ka-k])`+$", r"\1", clean).strip()
+
+    # 1. Exact single letter
+    if re.match(r"^[\s\*\(\[\"']*([A-Ka-k])[\s\*\)\]\.\:\'\"]*$", clean):
+        return True
+
+    # 2. Leading option label (e.g. 'A. There is no contact', '(B) Direct collision', 'A: ', 'C - ')
+    if re.match(r"^[\s\*\(\[\"']*([A-Ka-k])(?:[\)\]\.\:\-]|(?:\s*\n))\s*", clean):
+        return True
+
+    # 3. Explicit answer phrase anywhere in text (e.g. 'The best answer is: A', 'Answer is (B)')
+    if re.search(
+        r"\b(?:final answer|best answer|correct answer|answer|choice|option)\b"
+        r"(?:\s+(?:is|to|be|would be|must be|of|should be|selected is))?"
+        r"[\s\:\*\(\[\"\']*([A-Ka-k])\b",
+        clean,
+        re.IGNORECASE
+    ):
+        return True
+
+    # 4. Direct match against candidate option text lines in options_str if provided
+    if options_str:
+        clean_lower = clean.rstrip(".").rstrip(",").lower()
+        for line in options_str.splitlines():
+            line = line.strip()
+            opt_m = re.match(r"^[\(\[]?([A-Ka-k])[\)\]\.\:\s]+(.*)", line)
+            if opt_m:
+                opt_content = opt_m.group(2).strip().rstrip(".").rstrip(",").lower()
+                if opt_content and (clean_lower == opt_content or clean_lower.startswith(opt_content) or opt_content.startswith(clean_lower)):
+                    return True
+
+    return False
+
+
+def is_uninformative_response(
+    text: str,
+    allow_none: bool = False,
+    options_str: Optional[str] = None
+) -> bool:
     """Checks whether candidate text indicates an unanswerable crop or missing target."""
     cleaned = text.strip().rstrip(".").rstrip(",")
     if not cleaned:
         return True
 
-    # For benchmarks like MME-RealWorld-Lite, 'none' answers are real valid options
+    # 1. If text is an explicit option choice (e.g. 'A. There is no contact at all.'), do NOT filter!
+    if is_option_choice(cleaned, options_str=options_str):
+        return False
+
+    # 2. For benchmarks like MME-RealWorld-Lite, 'none' answers are real valid options
     if allow_none:
         return False
 
@@ -110,7 +165,8 @@ def normalize_answer_string(ans: str) -> str:
 
 def resolve_source_attributed_consensus(
     extractions: List[CandidateExtraction],
-    config: STASHConfig
+    config: STASHConfig,
+    options_str: Optional[str] = None
 ) -> Tuple[str, Optional[int]]:
     """
     Executes Source-Attributed Consensus (SAC):
@@ -126,7 +182,14 @@ def resolve_source_attributed_consensus(
         (predicted_answer, evidence_image_index)
     """
     allow_none = getattr(config, "allow_none_answer", False)
-    valid = [e for e in extractions if e.final_answer and not is_uninformative_response(e.final_answer, allow_none=allow_none)]
+    valid = [
+        e for e in extractions
+        if e.final_answer and not is_uninformative_response(
+            e.final_answer,
+            allow_none=allow_none,
+            options_str=options_str
+        )
+    ]
     if not valid:
         if config.verbose:
             print("[Stage 4: Consensus (SAC)] 0 valid responses surviving filter -> Fallback 'No answer found'.")

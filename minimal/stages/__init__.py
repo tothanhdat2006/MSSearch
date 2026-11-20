@@ -11,7 +11,7 @@ from .target_extraction import (
 )
 from .quadtree_partitioning import BoundedPatch, partition_gallery
 from .visual_screening import CandidateExtraction, screen_and_inspect_crops
-from .consensus import resolve_source_attributed_consensus
+from .consensus import resolve_source_attributed_consensus, is_option_choice
 
 __all__ = [
     "extract_visual_targets",
@@ -24,4 +24,5 @@ __all__ = [
     "CandidateExtraction",
     "screen_and_inspect_crops",
     "resolve_source_attributed_consensus",
+    "is_option_choice",
 ]

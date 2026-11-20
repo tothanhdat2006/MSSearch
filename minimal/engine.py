@@ -145,7 +145,8 @@ class STASHSearchEngine:
         t0 = time.perf_counter()
         primary_answer, primary_evidence_img = resolve_source_attributed_consensus(
             extractions=extractions,
-            config=self.config
+            config=self.config,
+            options_str=options_str
         )
         timings["stage4_consensus"] = round(time.perf_counter() - t0, 3)
         timings["total_latency_sec"] = round(time.perf_counter() - t_start, 3)

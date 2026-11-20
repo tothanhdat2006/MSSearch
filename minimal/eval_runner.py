@@ -520,6 +520,7 @@ def main():
                 "is_correct_overall": is_correct_overall,
                 "category": cat,
                 "latency_sec": lat,
+                "raw_crop_answers": [e.final_answer for e in res.get("extractions", [])],
                 "entropy_pruned_leaves": res.get("entropy_pruned_leaves", 0),
                 "dedup_affected_crops": res.get("dedup_affected_crops", {}),
                 "telemetry": res.get("telemetry", {}),
