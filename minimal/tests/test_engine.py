@@ -88,8 +88,20 @@ class TestSTASHSearchEngine(unittest.TestCase):
         res = engine.search(
             candidate_images=[img],
             question="What is the color of the comb?",
-            options_str="A. purple\nB. black\nC. red\nD. brown",
-            target_hint="comb"
+            options_str="A. purple\nB. black\nC. red\nD. brown"
+        )
+        self.assertIn("primary_answer", res)
+        self.assertEqual(res["primary_evidence_image"], 0)
+
+    def test_search_with_inspection_prompt(self):
+        img = Image.new("RGB", (1000, 1000), color="blue")
+        config = STASHConfig(k=5, verbose=False)
+        engine = STASHSearchEngine(mllm=MockMLLM(), dual_encoder=MockDualEncoder(), config=config)
+        res = engine.search(
+            candidate_images=[img],
+            question="What is the color of the woman's jacket?",
+            options_str="A. black\nB. red\nC. blue\nD. orange",
+            inspection_prompt="What is the color of the woman's jacket? (A) black (B) red (C) blue (D) orange Answer with the option's letter from the given choices directly."
         )
         self.assertIn("primary_answer", res)
         self.assertEqual(res["primary_evidence_image"], 0)
