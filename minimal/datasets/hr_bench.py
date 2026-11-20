@@ -10,6 +10,16 @@ from typing import List, Dict, Any, Optional
 from .base import BenchmarkSample
 
 
+def normalize_resolution(resolution: str) -> str:
+    """Normalizes resolution string to '4k' or '8k' strictly."""
+    res_clean = resolution.lower().replace("-", "_").strip()
+    if "4" in res_clean:
+        return "4k"
+    if "8" in res_clean:
+        return "8k"
+    raise ValueError(f"[HR-Bench] Invalid resolution '{resolution}'. Expected '4k' or '8k'.")
+
+
 def load_hr_bench(
     dataset_dir: str,
     annotation_path: Optional[str] = None,
@@ -28,23 +38,32 @@ def load_hr_bench(
     Returns:
         List of BenchmarkSample instances.
     """
-    anno_file = annotation_path
-    if not anno_file or not os.path.isfile(anno_file):
-        res_tag = resolution.lower().strip()
-        candidates = [
-            os.path.join(dataset_dir, f"annotation_hr-bench_{res_tag}.json"),
-            os.path.join(dataset_dir, f"hr-bench_{res_tag}.json"),
-            os.path.join(dataset_dir, "annotation_hr-bench_8k.json"),
-            os.path.join(dataset_dir, "annotation_hr-bench_4k.json"),
-            os.path.join(dataset_dir, "annotations.json"),
-        ]
-        for c in candidates:
-            if os.path.isfile(c):
-                anno_file = c
-                break
+    res_tag = normalize_resolution(resolution)
+    expected_anno_name = f"annotation_hr-bench_{res_tag}.json"
+
+    anno_file: Optional[str] = None
+
+    # 1. Explicit annotation_path
+    if annotation_path and os.path.isfile(annotation_path):
+        anno_file = annotation_path
+    # 2. dataset_dir points directly to an annotation file
+    elif os.path.isfile(dataset_dir):
+        anno_file = dataset_dir
+    # 3. Look up exact resolution annotation file in dataset_dir (strictly resolution-specific)
+    elif os.path.isdir(dataset_dir):
+        exact_path = os.path.join(dataset_dir, expected_anno_name)
+        alt_path = os.path.join(dataset_dir, f"hr-bench_{res_tag}.json")
+        if os.path.isfile(exact_path):
+            anno_file = exact_path
+        elif os.path.isfile(alt_path):
+            anno_file = alt_path
 
     if not anno_file or not os.path.isfile(anno_file):
-        raise FileNotFoundError(f"[HR-Bench] Annotation file not found in '{dataset_dir}'.")
+        raise FileNotFoundError(
+            f"[HR-Bench] Exact annotation file '{expected_anno_name}' not found in '{dataset_dir}'."
+        )
+
+    base_img_dir = os.path.dirname(anno_file) if os.path.isfile(dataset_dir) else dataset_dir
 
     with open(anno_file, "r", encoding="utf-8") as f:
         raw_data = json.load(f)
@@ -61,12 +80,16 @@ def load_hr_bench(
             continue
 
         item_idx = item.get("index", idx)
-        sample_id = f"hrbench_{resolution}_{item_idx:04d}"
+        sample_id = f"hrbench_{res_tag}_{item_idx:04d}"
         question = item.get("question", "")
         category = item.get("category", "single")
         input_image_rel = item.get("input_image", f"image/{item_idx}.jpg")
 
-        full_img_path = os.path.join(dataset_dir, input_image_rel) if not os.path.isabs(input_image_rel) else input_image_rel
+        full_img_path = os.path.join(base_img_dir, input_image_rel) if not os.path.isabs(input_image_rel) else input_image_rel
+        if not os.path.isfile(full_img_path):
+            alt_img = os.path.join(base_img_dir, "image", os.path.basename(input_image_rel))
+            if os.path.isfile(alt_img):
+                full_img_path = alt_img
 
         # Options handling: extract rotation string for cycle_idx
         options_raw = item.get("options", [])

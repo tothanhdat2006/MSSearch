@@ -114,10 +114,30 @@ class TestDatasetLoaders(unittest.TestCase):
 
             self.assertEqual(len(samples), 1)
             s = samples[0]
+            self.assertEqual(s.sample_id, "hrbench_8k_0000")
             self.assertEqual(s.question, "What is the number displayed above the entrance?")
             self.assertEqual(s.gt_answer, "A")
             self.assertEqual(s.category, "single")
             self.assertIn("A. 27B", s.options_str)
+
+            # Strict resolution enforcement: requesting 4k must NOT fallback to 8k
+            with self.assertRaises(FileNotFoundError):
+                load_benchmark_dataset(
+                    benchmark="hrbench4k",
+                    dataset_dir_or_path=tmpdir
+                )
+
+            # Create annotation_hr-bench_4k.json and verify 4k loads cleanly
+            anno_4k_path = os.path.join(tmpdir, "annotation_hr-bench_4k.json")
+            with open(anno_4k_path, "w", encoding="utf-8") as f:
+                json.dump(hr_data, f)
+
+            samples_4k = load_benchmark_dataset(
+                benchmark="hrbench4k",
+                dataset_dir_or_path=tmpdir
+            )
+            self.assertEqual(len(samples_4k), 1)
+            self.assertEqual(samples_4k[0].sample_id, "hrbench_4k_0000")
 
     def test_stash_bench_gallery_keys_and_ordering(self):
         with tempfile.TemporaryDirectory() as tmpdir:
