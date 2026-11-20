@@ -47,7 +47,7 @@ MODELS = {
     # "molmo2_8b": "allenai/Molmo2-8B",
     # "eagle25_8b": "nvidia/Eagle2.5-8B",
 }
-# REMOTE_CODE = {"molmo2", "eagle25"}
+REMOTE_CODE = {"molmo2", "eagle25"}
 BENCHMARKS = ["vstar", "hrbench4k", "hrbench8k", "treebench", "mme-realworld-lite"]
 INTERNVL_TOTAL_TILES = 64
 
@@ -78,17 +78,13 @@ def image_placeholder(processor: Any) -> str:
 def build_prompt_text(sample: BenchmarkSample) -> str:
     """
     Constructs unified visual question answering prompt text.
-    Uses benchmark-specific official inspection prompt when provided (TreeBench, MME-RealWorld-Lite),
-    or standard multiple-choice instruction for V* and HR-Bench.
+    Uses benchmark-specific official inspection prompt when provided (TreeBench, MME-RealWorld-Lite, Vstar, HR-Bench),
+    or direct option letter prompt.
     """
     if getattr(sample, "inspection_prompt", None):
         body = sample.inspection_prompt
     elif getattr(sample, "options_str", None):
-        body = (
-            f"{sample.question}\n{sample.options_str.strip()}\n"
-            "Select the best answer to the above multiple-choice question based on the image. "
-            "Respond with only the letter of the correct option.\nThe best answer is:"
-        )
+        body = f"{sample.question}\n{sample.options_str.strip()}\nAnswer the option letter directly."
     else:
         body = sample.question
     return f"<image>\n{body}"

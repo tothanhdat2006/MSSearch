@@ -20,6 +20,7 @@ from minimal.baseline.run_inference import (
     BenchmarkDataset,
     MODELS,
     BENCHMARKS,
+    REMOTE_CODE,
 )
 
 
@@ -34,6 +35,8 @@ class TestBaselineInference(unittest.TestCase):
         self.assertEqual(family("Qwen/Qwen3-VL-8B-Instruct"), "qwen3vl")
         self.assertEqual(family("molmo2_8b"), "molmo2")
         self.assertEqual(family("eagle25_8b"), "eagle25")
+        self.assertIn("molmo2", REMOTE_CODE)
+        self.assertIn("eagle25", REMOTE_CODE)
 
     def test_build_prompt_text(self):
         # 1. Benchmark with inspection_prompt (e.g. TreeBench or MME-RealWorld-Lite)
@@ -48,7 +51,7 @@ class TestBaselineInference(unittest.TestCase):
         self.assertTrue(prompt1.startswith("<image>\n"))
         self.assertIn("Which leaf? Options:", prompt1)
 
-        # 2. Benchmark with options_str (e.g. V* or HR-Bench)
+        # 2. Benchmark with options_str fallback
         sample2 = BenchmarkSample(
             sample_id="vstar_001",
             question="What color is the comb?",
@@ -59,7 +62,7 @@ class TestBaselineInference(unittest.TestCase):
         prompt2 = build_prompt_text(sample2)
         self.assertTrue(prompt2.startswith("<image>\n"))
         self.assertIn("What color is the comb?\nA. Purple\nB. Black", prompt2)
-        self.assertIn("The best answer is:", prompt2)
+        self.assertIn("Answer the option letter directly.", prompt2)
 
     def test_resolve_benchmark_path(self):
         # Explicit data_dir
