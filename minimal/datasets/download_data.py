@@ -461,7 +461,7 @@ def main():
     )
     parser.add_argument(
         "--output_dir", type=str,
-        default=os.environ.get("DATASETS_DIR", "D:\\MachineLearning\\Datasets" if os.path.isdir("D:\\MachineLearning\\Datasets") else "./data"),
+        default=os.environ.get("DATASETS_DIR", "./data"),
         help="Directory where datasets will be downloaded and extracted."
     )
     parser.add_argument(
