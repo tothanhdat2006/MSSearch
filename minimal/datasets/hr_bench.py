@@ -20,6 +20,10 @@ def normalize_resolution(resolution: str) -> str:
     raise ValueError(f"[HR-Bench] Invalid resolution '{resolution}'. Expected '4k' or '8k'.")
 
 
+def format_question(question: str, option_str: str) -> str:
+    return question + '\n' + option_str + 'Answer the option letter directly.'
+
+
 def load_hr_bench(
     dataset_dir: str,
     annotation_path: Optional[str] = None,
@@ -105,11 +109,21 @@ def load_hr_bench(
         for rot in rotations:
             # Options handling for current rotation
             if isinstance(options_raw, list) and len(options_raw) > rot:
-                options_str = str(options_raw[rot]).strip()
+                raw_opt_entry = str(options_raw[rot])
+                options_str = raw_opt_entry.strip()
             elif isinstance(options_raw, str):
-                options_str = options_raw.strip()
+                raw_opt_entry = options_raw
+                options_str = raw_opt_entry.strip()
             else:
+                raw_opt_entry = ""
                 options_str = None
+
+            # Format inspection_prompt matching HR-Bench standard:
+            if options_str:
+                opt_block = raw_opt_entry if raw_opt_entry.endswith(('\n', ' ')) else raw_opt_entry + ' '
+                inspection_prompt = format_question(question, opt_block)
+            else:
+                inspection_prompt = question
 
             # Ground truth answer letter for current rotation
             if isinstance(answers_raw, list) and len(answers_raw) > rot:
@@ -136,7 +150,8 @@ def load_hr_bench(
                     "category": category,
                     "cycle_idx": rot,
                     "raw_answers": answers_raw
-                }
+                },
+                inspection_prompt=inspection_prompt
             ))
 
     return bench_samples

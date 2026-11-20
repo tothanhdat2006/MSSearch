@@ -9,7 +9,7 @@ import tempfile
 import os
 
 from minimal.datasets.base import BenchmarkSample
-from minimal.datasets.vstar import format_options
+from minimal.datasets.vstar import format_options, parse_options_from_text
 from minimal.datasets import load_benchmark_dataset
 from minimal.eval_runner import extract_predicted_option, normalize_text
 
@@ -40,6 +40,29 @@ class TestDatasetLoaders(unittest.TestCase):
         self.assertEqual(normalize_text("A red apple."), "red apple")
         self.assertEqual(normalize_text("The blue jacket!"), "blue jacket")
         self.assertEqual(normalize_text("an elephant"), "elephant")
+
+    def test_parse_options_from_text(self):
+        # 1. Parenthesized options (V* updated annotation standard)
+        text1 = "(A) brown (B) red (C) purple (D) black"
+        letters1, texts1 = parse_options_from_text(text1)
+        self.assertEqual(letters1, ["A", "B", "C", "D"])
+        self.assertEqual(texts1, ["brown", "red", "purple", "black"])
+
+        # 2. Dotted options with newlines
+        text2 = "A. cat\nB. dog\nC. bird\nD. fish"
+        letters2, texts2 = parse_options_from_text(text2)
+        self.assertEqual(letters2, ["A", "B", "C", "D"])
+        self.assertEqual(texts2, ["cat", "dog", "bird", "fish"])
+
+        # 3. Question prefix before parenthesized options
+        text3 = "What is the color of the comb?\n(A) brown (B) red (C) purple (D) black"
+        letters3, texts3 = parse_options_from_text(text3)
+        self.assertEqual(letters3, ["A", "B", "C", "D"])
+        self.assertEqual(texts3, ["brown", "red", "purple", "black"])
+
+        # 4. Invalid or empty
+        self.assertEqual(parse_options_from_text(""), ([], []))
+        self.assertEqual(parse_options_from_text("Just a regular sentence without options."), ([], []))
 
     def test_vstar_schema_loading(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -81,20 +104,21 @@ class TestDatasetLoaders(unittest.TestCase):
             self.assertIn("A. The color of the comb is purple.", s.options_str)
             self.assertIn("B. The color of the comb is black.", s.options_str)
 
-            # Test annotation_vstar_updated.json takes priority and uses labeled ground truth
+            # Test annotation_vstar_updated.json parses shuffled options from 'text' field and sets inspection_prompt
             updated_vstar_data = [
                 {
-                    "target_object": ["comb"],
+                    "target_object": ["jacket"],
                     "bbox": [[[10, 10, 50, 50]]],
-                    "question": "What is the color of the comb?",
+                    "question": "What is the color of the woman's jacket?",
+                    "text": "What is the color of the woman's jacket? (A) black (B) red (C) blue (D) orange Answer with the option's letter from the given choices directly.",
                     "options": [
-                        "The color of the comb is black.",
-                        "The color of the comb is purple.",
-                        "The color of the comb is red.",
-                        "The color of the comb is brown."
+                        "The color of the woman's jacket is blue.",
+                        "The color of the woman's jacket is black.",
+                        "The color of the woman's jacket is red.",
+                        "The color of the woman's jacket is orange."
                     ],
-                    "label": "B",
-                    "input_image": "direct_attributes/sa_7429.jpg",
+                    "label": "C",
+                    "input_image": "direct_attributes/sa_7018.jpg",
                     "test_type": "direct_attributes"
                 }
             ]
@@ -107,9 +131,16 @@ class TestDatasetLoaders(unittest.TestCase):
                 dataset_dir_or_path=tmpdir
             )
             self.assertEqual(len(samples_up), 1)
-            self.assertEqual(samples_up[0].gt_answer, "B")
-            self.assertIn("A. The color of the comb is black.", samples_up[0].options_str)
-            self.assertIn("B. The color of the comb is purple.", samples_up[0].options_str)
+            self.assertEqual(samples_up[0].gt_answer, "C")
+            self.assertIn("A. black", samples_up[0].options_str)
+            self.assertIn("B. red", samples_up[0].options_str)
+            self.assertIn("C. blue", samples_up[0].options_str)
+            self.assertIn("D. orange", samples_up[0].options_str)
+            self.assertEqual(samples_up[0].metadata["gt_text"], "blue")
+            self.assertEqual(
+                samples_up[0].inspection_prompt,
+                "What is the color of the woman's jacket? (A) black (B) red (C) blue (D) orange Answer with the option's letter from the given choices directly."
+            )
 
     def test_hrbench_schema_loading(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -155,6 +186,10 @@ class TestDatasetLoaders(unittest.TestCase):
             self.assertEqual(samples[0].question, "What is the number displayed above the entrance?")
             self.assertEqual(samples[0].category, "single")
             self.assertIn("A. 27B", samples[0].options_str)
+            self.assertEqual(
+                samples[0].inspection_prompt,
+                "What is the number displayed above the entrance?\nA. 27B B. 27D C. 27E D. 37B Answer the option letter directly."
+            )
 
             # Explicit cycle_idx evaluates only that rotation
             samples_rot0 = load_benchmark_dataset(
@@ -341,7 +376,7 @@ class TestDatasetLoaders(unittest.TestCase):
             self.assertTrue(os.path.isabs(s.candidate_image_paths[0]))
 
     def test_prompt_formatters(self):
-        from minimal.datasets import format_question_multichoice, format_question_new
+        from minimal.datasets import format_question, format_question_multichoice, format_question_new
         
         # 1. MME format_question_multichoice
         mme_prompt = format_question_multichoice("What is this?", ["(A) Cat", "(B) Dog"])
@@ -355,6 +390,13 @@ class TestDatasetLoaders(unittest.TestCase):
         self.assertEqual(
             tb_prompt,
             "Which animal? Options:\nA. Cat\nB. Dog\nSelect the best answer to the above multiple-choice question based on the image. Respond with only the letter of the correct option.\nThe best answer is:"
+        )
+
+        # 3. HR-Bench format_question
+        hr_prompt = format_question("What is the number?", "A. 27B B. 27D ")
+        self.assertEqual(
+            hr_prompt,
+            "What is the number?\nA. 27B B. 27D Answer the option letter directly."
         )
 
     def test_real_dataset_paths_if_present(self):

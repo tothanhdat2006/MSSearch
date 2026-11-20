@@ -13,6 +13,61 @@ from .base import BenchmarkSample
 OPTION_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"]
 
 
+def parse_options_from_text(text: str) -> Tuple[List[str], List[str]]:
+    """
+    Parses options from text formatted like:
+    '(A) brown (B) red (C) purple (D) black' or
+    'A. brown\nB. red\nC. purple\nD. black'.
+    
+    Returns:
+        letters: list of option letters e.g. ['A', 'B', 'C', 'D']
+        texts: list of option text strings e.g. ['brown', 'red', 'purple', 'black']
+    """
+    if not text or not isinstance(text, str):
+        return [], []
+
+    clean_text = text.strip()
+
+    # Pattern 1: Parenthesized letters e.g. (A) ... (B) ... (C) ... (D) ...
+    matches = list(re.finditer(r'\(([A-Ha-h])\)', clean_text))
+    if len(matches) >= 2:
+        letters = []
+        texts = []
+        for i, m in enumerate(matches):
+            letters.append(m.group(1).upper())
+            start = m.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(clean_text)
+            t = clean_text[start:end].strip()
+            if i == len(matches) - 1:
+                # Strip trailing instructions e.g. "Answer with the option's letter from the given choices directly."
+                m_inst = re.search(r'\s+(?:Answer\s+(?:with|the)|Select\s+the|Please\s+answer)\b.*$', t, re.IGNORECASE)
+                if m_inst:
+                    t = t[:m_inst.start()].strip()
+            texts.append(t)
+        if len(letters) == len(texts) and all(texts):
+            return letters, texts
+
+    # Pattern 2: Dotted or bracketed letters e.g. A. ... B. ... or A) ... B) ...
+    matches = list(re.finditer(r'(?:^|[\s\n])([A-Ha-h])[\.\)]\s+', clean_text))
+    if len(matches) >= 2:
+        letters = []
+        texts = []
+        for i, m in enumerate(matches):
+            letters.append(m.group(1).upper())
+            start = m.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(clean_text)
+            t = clean_text[start:end].strip()
+            if i == len(matches) - 1:
+                m_inst = re.search(r'\s+(?:Answer\s+(?:with|the)|Select\s+the|Please\s+answer)\b.*$', t, re.IGNORECASE)
+                if m_inst:
+                    t = t[:m_inst.start()].strip()
+            texts.append(t)
+        if len(letters) == len(texts) and all(texts):
+            return letters, texts
+
+    return [], []
+
+
 def format_options(options_list: List[str]) -> Tuple[str, Dict[str, str]]:
     """Formats raw option strings into letter-labeled candidate options."""
     formatted_lines = []
@@ -77,30 +132,58 @@ def load_vstar(
 
         full_img_path = os.path.join(dataset_dir, input_image_rel) if not os.path.isabs(input_image_rel) else input_image_rel
 
-        # In annotation_vstar_updated.json, options are shuffled and label is explicitly provided (A, B, C, D)
-        # In legacy annotation_vstar.json, option 0 is canonically the ground truth target option ("A")
-        options_list = item.get("options", [])
-        if options_list:
-            options_str, letter_map = format_options(options_list)
+        # In annotation_vstar_updated.json, shuffled options matching the ground truth 'label'
+        # are stored in the 'text' field e.g. "(A) brown (B) red (C) purple (D) black".
+        # In legacy annotation_vstar.json, option 0 in item["options"] is canonically the GT target ("A").
+        text_field = item.get("text", "")
+        parsed_letters, parsed_texts = parse_options_from_text(text_field) if text_field else ([], [])
+
+        if not question and parsed_letters and text_field:
+            m_first = re.search(r'\([A-Ha-h]\)|(?:^|[\s\n])[A-Ha-h][\.\)]\s+', text_field)
+            if m_first and m_first.start() > 0:
+                question = text_field[:m_first.start()].strip()
+
+        if parsed_letters and parsed_texts:
+            options_str = "\n".join([f"{l}. {t}" for l, t in zip(parsed_letters, parsed_texts)])
+            letter_map = dict(zip(parsed_letters, parsed_texts))
+            options_list = parsed_texts
         else:
-            options_str = None
-            letter_map = {}
+            options_list = item.get("options", [])
+            if options_list:
+                options_str, letter_map = format_options(options_list)
+            else:
+                options_str = None
+                letter_map = {}
 
         raw_ans = item.get("label") if item.get("label") is not None else item.get("answer")
         if raw_ans is not None:
-            raw_ans_str = str(raw_ans).strip().upper()
-            m = re.search(r"([A-Da-d])", raw_ans_str)
+            raw_ans_str = str(raw_ans).strip()
+            m = re.search(r"\b([A-Ha-h])\b", raw_ans_str) or re.search(r"([A-Ha-h])", raw_ans_str)
             if m:
                 gt_letter = m.group(1).upper()
             else:
                 try:
-                    gt_letter = OPTION_LETTERS[int(raw_ans)]
-                except Exception:
+                    num_idx = int(raw_ans_str)
+                    gt_letter = OPTION_LETTERS[num_idx] if num_idx < len(OPTION_LETTERS) else "A"
+                except ValueError:
                     gt_letter = "A"
+                    for let, opt_t in letter_map.items():
+                        if opt_t.lower() == raw_ans_str.lower():
+                            gt_letter = let
+                            break
         else:
             gt_letter = "A"
 
         gt_text = letter_map.get(gt_letter, options_list[0] if options_list else "")
+
+        # Use the prompt inside 'text' for Vstar when present:
+        # e.g. "What is the color of the woman's jacket? (A) black (B) red (C) blue (D) orange Answer with the option's letter from the given choices directly."
+        if text_field and text_field.strip():
+            inspection_prompt = text_field.strip()
+        elif options_str:
+            inspection_prompt = f"{question}\n{options_str.strip()}\nAnswer the option letter directly."
+        else:
+            inspection_prompt = question
 
         bench_samples.append(BenchmarkSample(
             sample_id=sample_id,
@@ -116,7 +199,8 @@ def load_vstar(
                 "input_image": input_image_rel,
                 "gt_text": gt_text,
                 "options": options_list
-            }
+            },
+            inspection_prompt=inspection_prompt
         ))
 
     return bench_samples
