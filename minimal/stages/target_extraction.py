@@ -90,16 +90,14 @@ def parse_mllm_json(raw_text: str) -> List[str]:
 def normalize_target(target: str) -> str:
     """
     Normalizes candidate target string matching the reference 85d3edb pipeline:
-    - Strips leading articles (a, an, the, this, that, these, those).
     - Trims punctuation at edges only (preserves internal hyphens like 'open-front bar').
     - Preserves nouns/plurals ('pants', 'shoes') without aggressive singularization.
+    - Preserves articles (matching 85d3edb:normalize_target_text).
     - Handles 'all ' prefix by removing prefix and trailing 's'.
     """
     t = target.strip()
     if not t:
         return ""
-    # Strip leading articles
-    t = re.sub(r'^(?:the|a|an|this|that|these|those)\s+', '', t, flags=re.IGNORECASE).strip()
     # Strip boundary punctuation/whitespace only
     t = re.sub(r'^[\W_]+|[\W_]+$', '', t)
     # Check "all " prefix

@@ -5,6 +5,7 @@ Provides pure-text generation for Stage 1 and batched crop reading for Stage 3.
 """
 
 import os
+import warnings
 from typing import List, Dict, Any, Union, Optional
 from PIL import Image
 import torch
@@ -239,7 +240,12 @@ class ModelQwenVL(BaseMLLM):
                 else:
                     decoded = tokenizer.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
                 results.extend([d.strip() for d in decoded])
-            except Exception:
+            except Exception as e:
+                warnings.warn(
+                    f"[ModelQwenVL] Batched generation failed ({e!r}). Falling back to single-crop generation.",
+                    UserWarning,
+                    stacklevel=2
+                )
                 # Safe fallback to single-item generation
                 for img in chunk_imgs:
                     messages = [

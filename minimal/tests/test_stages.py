@@ -73,9 +73,9 @@ class TestStage1TargetExtraction(unittest.TestCase):
         self.assertEqual(targets, ["mailbox", "person", "car"])
 
     def test_target_normalization(self):
-        # Edge trimming only, internal hyphens and plurals preserved matching 85d3edb
-        self.assertEqual(normalize_target("The Windows"), "windows")
-        self.assertEqual(normalize_target("a red mailbox!"), "red mailbox")
+        # Edge trimming only, internal hyphens and plurals preserved matching 85d3edb (no article stripping)
+        self.assertEqual(normalize_target("The Windows"), "the windows")
+        self.assertEqual(normalize_target("a red mailbox!"), "a red mailbox")
         self.assertEqual(normalize_target("!open-front bar?"), "open-front bar")
         self.assertEqual(normalize_target("pants"), "pants")
         self.assertEqual(normalize_target("shoes"), "shoes")
@@ -261,6 +261,51 @@ class TestStage4Consensus(unittest.TestCase):
         ans, img_idx = resolve_source_attributed_consensus(extractions, config)
         self.assertEqual(ans, "No answer found")
         self.assertIsNone(img_idx)
+
+    def test_batched_reading_fallback_warning(self):
+        try:
+            import torch
+            from minimal.models.modeling_qwenvl import ModelQwenVL
+        except ImportError:
+            self.skipTest("torch or transformers not installed in local test environment")
+
+        import warnings
+        from PIL import Image
+
+        model_adapter = object.__new__(ModelQwenVL)
+        model_adapter.device = "cpu"
+
+        class DummyInputs:
+            def __init__(self):
+                self.input_ids = torch.tensor([[1, 2, 3]])
+            def to(self, dev):
+                return self
+
+        class MockFailingProcessor:
+            def __init__(self):
+                self.tokenizer = self
+            def __call__(self, text, images, **kwargs):
+                if len(images) > 1:
+                    raise RuntimeError("Simulated OOM on batch")
+                return DummyInputs()
+            def decode(self, ids, **kwargs):
+                return "single answer"
+
+        class MockGenModel:
+            def generate(self, **kwargs):
+                return torch.tensor([[1, 2, 3, 10, 11]])
+
+        model_adapter.processor = MockFailingProcessor()
+        model_adapter.model = MockGenModel()
+
+        imgs = [Image.new("RGB", (32, 32)), Image.new("RGB", (32, 32))]
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = model_adapter.generate_response_batch(imgs, "test question?", batch_size=2)
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results, ["single answer", "single answer"])
+            self.assertGreaterEqual(len(w), 1)
+            self.assertIn("Falling back to single-crop generation", str(w[-1].message))
 
 
 if __name__ == "__main__":
