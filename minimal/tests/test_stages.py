@@ -73,7 +73,7 @@ class TestStage1TargetExtraction(unittest.TestCase):
         self.assertEqual(targets, ["mailbox", "person", "car"])
 
     def test_target_normalization(self):
-        # Edge trimming only, internal hyphens and plurals preserved matching 85d3edb (no article stripping)
+        # Edge trimming only, internal hyphens and plurals preserved (no article stripping)
         self.assertEqual(normalize_target("The Windows"), "the windows")
         self.assertEqual(normalize_target("a red mailbox!"), "a red mailbox")
         self.assertEqual(normalize_target("!open-front bar?"), "open-front bar")

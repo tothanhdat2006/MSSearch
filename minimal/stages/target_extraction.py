@@ -89,10 +89,10 @@ def parse_mllm_json(raw_text: str) -> List[str]:
 
 def normalize_target(target: str) -> str:
     """
-    Normalizes candidate target string matching the reference 85d3edb pipeline:
+    Normalizes candidate target string:
     - Trims punctuation at edges only (preserves internal hyphens like 'open-front bar').
     - Preserves nouns/plurals ('pants', 'shoes') without aggressive singularization.
-    - Preserves articles (matching 85d3edb:normalize_target_text).
+    - Preserves articles (matching normalize_target_text).
     - Handles 'all ' prefix by removing prefix and trailing 's'.
     """
     t = target.strip()

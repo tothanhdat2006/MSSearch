@@ -370,7 +370,7 @@ def screen_and_inspect_crops(
     num_images = len(gallery_images)
     b_retain = config.k * num_images
 
-    # 1. Global ranking and retention (with tie-breaker matching 85d3edb stage4 top-k: alignment_score, entropy)
+    # 1. Global ranking and retention (with tie-breaker: alignment_score, entropy)
     sorted_patches = sorted(
         candidate_patches,
         key=lambda p: (
