@@ -43,6 +43,15 @@ class STASHConfig:
     answer_dedup_similarity: float = 0.85            # \tau_{vote}: string pattern matching threshold
     allow_none_answer: bool = False                  # When True, 'none' / refusal strings are treated as valid answers (e.g. MME-RealWorld-Lite)
 
+    # Visualization & Artifact Logging (STASH-Bench)
+    save_vis: bool = False                           # Master switch to save visualization artifacts
+    vis_dir: str = "vis"                             # Root output directory for visualization artifacts
+    save_crops: bool = True                          # Save native-resolution crop JPEGs
+    save_overlays: bool = True                       # Save bounding box overlays on full gallery images
+    save_pipeline_overview: bool = True              # Generate multi-panel composite summary figure
+    vis_box_alpha: float = 0.25                      # Semi-transparent box fill alpha for overlays
+    vis_box_width: int = 3                           # Line thickness for bounding box overlays
+
     # Models & Runtime Environment
     dual_encoder_name: str = "google/siglip2-so400m-patch16-512"
     mllm_model_name: str = "Qwen/Qwen3-VL-8B-Instruct"

@@ -74,7 +74,13 @@ class STASHSearchEngine:
         question: str,
         options_str: Optional[str] = None,
         target_hint: Optional[str] = None,
-        inspection_prompt: Optional[str] = None
+        inspection_prompt: Optional[str] = None,
+        sample_id: Optional[str] = None,
+        pool_mode: str = "N_5",
+        gt_answer: Optional[str] = None,
+        gt_image_idx: Optional[int] = None,
+        save_vis: Optional[bool] = None,
+        vis_dir: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Executes end-to-end multi-image visual search across candidate images.
@@ -85,6 +91,12 @@ class STASHSearchEngine:
             options_str: Optional formatted multiple-choice candidate options (e.g. for Vstar or HR-Bench).
             target_hint: Optional explicit target entity/phrase to guide quadtree search.
             inspection_prompt: Optional full prompt for Stage 3 crop inspection (e.g. for TreeBench or MME-RealWorld).
+            sample_id: Optional unique sample identifier for visual artifact logging.
+            pool_mode: Gallery pool size mode ('N_1', 'N_5', 'N_10', 'N_20').
+            gt_answer: Optional ground truth answer string for visualization comparison.
+            gt_image_idx: Optional ground truth evidence image index.
+            save_vis: Explicit boolean override to enable/disable saving visualization artifacts.
+            vis_dir: Root directory path for saving visualization artifacts.
 
         Returns:
             Dictionary containing predicted answer, supporting image index, extractions, and timings.
@@ -129,13 +141,14 @@ class STASHSearchEngine:
         else:
             inspection_question = question
 
-        extractions, dedup_stats = screen_and_inspect_crops(
+        extractions, dedup_stats, crops_to_read = screen_and_inspect_crops(
             candidate_patches=candidate_patches,
             gallery_images=candidate_images,
             question=inspection_question,
             mllm=self.mllm,
             config=self.config,
-            return_stats=True
+            return_stats=True,
+            return_crops=True
         )
         timings["stage3_visual_screening"] = round(time.perf_counter() - t0, 3)
 
@@ -143,13 +156,46 @@ class STASHSearchEngine:
         # Stage 4: Source-Attributed Consensus (SAC)
         # -------------------------------------------------------------
         t0 = time.perf_counter()
-        primary_answer, primary_evidence_img = resolve_source_attributed_consensus(
+        primary_answer, primary_evidence_img, consensus_details = resolve_source_attributed_consensus(
             extractions=extractions,
             config=self.config,
-            options_str=options_str
+            options_str=options_str,
+            return_details=True
         )
         timings["stage4_consensus"] = round(time.perf_counter() - t0, 3)
         timings["total_latency_sec"] = round(time.perf_counter() - t_start, 3)
+
+        # -------------------------------------------------------------
+        # Optional Visualization & Qualitative Telemetry
+        # -------------------------------------------------------------
+        vis_trace = None
+        should_vis = save_vis if save_vis is not None else getattr(self.config, "save_vis", False)
+        if should_vis and sample_id:
+            try:
+                from .visualization import save_sample_visualization
+                target_vis_dir = vis_dir or getattr(self.config, "vis_dir", "vis")
+                vis_trace = save_sample_visualization(
+                    vis_root_dir=target_vis_dir,
+                    benchmark_name="stash",
+                    pool_mode=pool_mode,
+                    sample_id=sample_id,
+                    gallery_images=candidate_images,
+                    question=question,
+                    active_objects=active_objects,
+                    candidate_patches=candidate_patches,
+                    extractions=extractions,
+                    crops_to_read=crops_to_read,
+                    primary_answer=primary_answer,
+                    primary_evidence_img=primary_evidence_img,
+                    consensus_details=consensus_details,
+                    timings=timings,
+                    gt_answer=gt_answer,
+                    gt_image_idx=gt_image_idx,
+                    config=self.config
+                )
+            except Exception as e:
+                if self.config.verbose:
+                    print(f"[STASHSearchEngine Visualization Warning] Failed to generate visual artifacts: {e}")
 
         if self.config.verbose:
             print(f"[STASHSearchEngine Result] Final Answer: '{primary_answer}' | "
@@ -166,9 +212,13 @@ class STASHSearchEngine:
             "entropy_pruned_leaves": entropy_pruned_leaves,
             "dedup_affected_crops": dedup_stats,
             "extractions": extractions,
+            "consensus_details": consensus_details,
+            "vis_trace": vis_trace,
             "telemetry": {
                 "timings_sec": timings,
                 "entropy_pruned_leaves": entropy_pruned_leaves,
                 "dedup_affected_crops": dedup_stats,
+                "consensus": consensus_details,
+                "vis_trace": vis_trace,
             }
         }

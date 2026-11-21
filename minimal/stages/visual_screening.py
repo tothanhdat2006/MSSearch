@@ -355,8 +355,14 @@ def screen_and_inspect_crops(
     question: str,
     mllm: BaseMLLM,
     config: STASHConfig,
-    return_stats: bool = False
-) -> Union[List[CandidateExtraction], Tuple[List[CandidateExtraction], Dict[str, int]]]:
+    return_stats: bool = False,
+    return_crops: bool = False
+) -> Union[
+    List[CandidateExtraction],
+    Tuple[List[CandidateExtraction], Dict[str, Any]],
+    Tuple[List[CandidateExtraction], List[Image.Image]],
+    Tuple[List[CandidateExtraction], Dict[str, Any], List[Image.Image]]
+]:
     """
     Executes Gallery-Level Visual Screening and Native-Resolution Inspection:
     1. Retains top B_retain = k * N candidates globally ranked by alignment score.
@@ -487,7 +493,13 @@ def screen_and_inspect_crops(
         "ios_merged": num_ios_merged,
         "nms_suppressed": num_nms_suppressed,
         "total_affected": total_dedup_affected,
+        "retained_count": len(retained_patches),
+        "total_screened_patches": len(sorted_patches),
     }
+    if return_stats and return_crops:
+        return extractions, dedup_stats, crops_to_read
     if return_stats:
         return extractions, dedup_stats
+    if return_crops:
+        return extractions, crops_to_read
     return extractions

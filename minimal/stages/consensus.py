@@ -6,7 +6,7 @@ and applies lexicographical ranking to jointly predict the final answer and supp
 
 from difflib import SequenceMatcher
 import re
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, Union
 
 from ..config import STASHConfig
 from .visual_screening import CandidateExtraction
@@ -166,8 +166,9 @@ def normalize_answer_string(ans: str) -> str:
 def resolve_source_attributed_consensus(
     extractions: List[CandidateExtraction],
     config: STASHConfig,
-    options_str: Optional[str] = None
-) -> Tuple[str, Optional[int]]:
+    options_str: Optional[str] = None,
+    return_details: bool = False
+) -> Union[Tuple[str, Optional[int]], Tuple[str, Optional[int], Dict[str, Any]]]:
     """
     Executes Source-Attributed Consensus (SAC):
     1. Filters uninformative / unanswerable responses.
@@ -179,7 +180,8 @@ def resolve_source_attributed_consensus(
     4. Selects representative extraction with highest alignment score s_e.
 
     Returns:
-        (predicted_answer, evidence_image_index)
+        (predicted_answer, evidence_image_index) or
+        (predicted_answer, evidence_image_index, details_dict) if return_details is True.
     """
     allow_none = getattr(config, "allow_none_answer", False)
     valid = [
@@ -190,9 +192,23 @@ def resolve_source_attributed_consensus(
             options_str=options_str
         )
     ]
+    uninformative_indices = [
+        idx for idx, e in enumerate(extractions) if e not in valid
+    ]
+
     if not valid:
         if config.verbose:
             print("[Stage 4: Consensus (SAC)] 0 valid responses surviving filter -> Fallback 'No answer found'.")
+        if return_details:
+            details = {
+                "clusters": [],
+                "uninformative_crop_indices": uninformative_indices,
+                "winning_extraction_idx": None,
+                "winning_cluster": None,
+                "total_extractions": len(extractions),
+                "valid_extractions": 0,
+            }
+            return ("No answer found", None, details)
         return ("No answer found", None)
 
     clusters: List[Dict[str, Any]] = []
@@ -250,9 +266,31 @@ def resolve_source_attributed_consensus(
 
     predicted_answer = winning["rep"]
     evidence_img_idx = best_extraction.img_idx
+    best_extraction_idx = extractions.index(best_extraction) if best_extraction in extractions else None
 
     if config.verbose:
         print(f"[Stage 4: Consensus (SAC)] Winner: '{predicted_answer}' (Image {evidence_img_idx}) | "
               f"Support: {winning['count']} | Weight: {winning['weighted_score']:.2f} | Area: {winning['max_area']} px^2")
+
+    if return_details:
+        cluster_summaries = []
+        for c in clusters:
+            member_indices = [extractions.index(e) for e in c["extractions"] if e in extractions]
+            cluster_summaries.append({
+                "representative": c["rep"],
+                "count": c["count"],
+                "weighted_score": round(float(c["weighted_score"]), 3),
+                "max_area": c["max_area"],
+                "member_crop_indices": member_indices,
+            })
+        details = {
+            "clusters": cluster_summaries,
+            "uninformative_crop_indices": uninformative_indices,
+            "winning_extraction_idx": best_extraction_idx,
+            "winning_cluster": winning["rep"],
+            "total_extractions": len(extractions),
+            "valid_extractions": len(valid),
+        }
+        return (predicted_answer, evidence_img_idx, details)
 
     return (predicted_answer, evidence_img_idx)

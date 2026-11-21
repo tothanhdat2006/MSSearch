@@ -135,7 +135,8 @@ class TestEvalRunner(unittest.TestCase):
                 pool_mode="N_5",
                 gallery_order_path=None
             )
-            res = resolve_dataset_args(args)
+            with patch.dict(os.environ, {}, clear=True):
+                res = resolve_dataset_args(args)
             self.assertEqual(res["annotation_path"], anno_file)
             self.assertEqual(res["dataset_dir_or_path"], tmpdir)
 
@@ -241,6 +242,15 @@ class TestEvalRunner(unittest.TestCase):
             stdout_val = output_buffer.getvalue()
             self.assertIn("[Warning] Failed to open", stdout_val)
             self.assertIn("Falling back to standard image open without EXIF transpose", stdout_val)
+
+    def test_parse_args_visualization_flags(self):
+        from minimal.eval_runner import parse_args
+        with patch.dict(os.environ, {}, clear=True), patch("sys.argv", ["eval_runner.py", "--benchmark", "stash", "--save_vis", "--vis_dir", "vis/custom", "--vis_max_samples", "10", "--vis_sample_ids", "sample_1,sample_2"]):
+            args = parse_args()
+            self.assertTrue(args.save_vis)
+            self.assertEqual(args.vis_dir, "vis/custom")
+            self.assertEqual(args.vis_max_samples, 10)
+            self.assertEqual(args.vis_sample_ids, "sample_1,sample_2")
 
 
 if __name__ == "__main__":

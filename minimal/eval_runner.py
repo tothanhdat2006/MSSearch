@@ -212,6 +212,16 @@ def parse_args():
     parser.add_argument("--quiet", action="store_true",
                         help="Silence stage-level debug logs.")
 
+    # Visualization & Qualitative Telemetry (STASH-Bench)
+    parser.add_argument("--save_vis", action="store_true", default=False,
+                        help="Save intermediate crops, bounding box overlays, and pipeline overview for STASH-Bench.")
+    parser.add_argument("--vis_dir", type=str, default=None,
+                        help="Root directory for saving visualization artifacts (default: 'vis/stash').")
+    parser.add_argument("--vis_max_samples", type=int, default=20,
+                        help="Maximum number of samples to generate visualizations for (default: 20).")
+    parser.add_argument("--vis_sample_ids", type=str, default=None,
+                        help="Comma-separated list of specific sample IDs to visualize.")
+
     return parser.parse_args()
 
 
@@ -414,6 +424,11 @@ def main():
     # 6. Run evaluation loop
     print(f"\n[Execution] Starting inference across {len(samples)} samples -> '{out_jsonl}'...\n")
 
+    vis_saved_count = 0
+    target_sample_ids = None
+    if args.vis_sample_ids:
+        target_sample_ids = {s.strip() for s in args.vis_sample_ids.split(",") if s.strip()}
+
     with open(out_jsonl, "a", encoding="utf-8") as out_f:
         for idx, sample in enumerate(samples):
             if str(sample.sample_id) in completed_ids:
@@ -441,14 +456,30 @@ def main():
                 print(f"[Error] No valid images loaded for sample {sample.sample_id}. Skipping.")
                 continue
 
+            # Determine whether to save visual artifacts for this sample (STASH-Bench only)
+            should_save_vis = False
+            if b == "stash" and args.save_vis:
+                if target_sample_ids is not None:
+                    should_save_vis = str(sample.sample_id) in target_sample_ids
+                elif vis_saved_count < args.vis_max_samples:
+                    should_save_vis = True
+
             t0 = time.perf_counter()
             res = engine.search(
                 candidate_images=pil_images,
                 question=sample.question,
                 options_str=sample.options_str,
-                inspection_prompt=sample.inspection_prompt
+                inspection_prompt=sample.inspection_prompt,
+                sample_id=sample.sample_id,
+                pool_mode=getattr(args, "pool_mode", "N_5"),
+                gt_answer=sample.gt_answer,
+                gt_image_idx=sample.gt_image_idx,
+                save_vis=should_save_vis,
+                vis_dir=args.vis_dir
             )
             lat = round(time.perf_counter() - t0, 3)
+            if should_save_vis:
+                vis_saved_count += 1
 
             pred_ans = res["primary_answer"]
             pred_img = res["primary_evidence_image"]
