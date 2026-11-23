@@ -251,10 +251,11 @@ async function checkStatus(kernelSlug = 'stash-search-visualization') {
   const parts = fullSlug.split('/');
   
   const statusResp = await callKaggleApi('kernels.KernelsApiService/GetKernelSessionStatus', {
-    userName: parts[0],
-    kernelSlug: parts[1]
+    user_name: parts[0],
+    kernel_slug: parts[1]
   });
-  console.log('Kernel Status for', fullSlug, ':', statusResp);
+  const status = statusResp.status || 'QUEUED';
+  console.log('Kernel Status for', fullSlug, ':', { status });
 
   try {
     const outResp = await callKaggleApi('kernels.KernelsApiService/ListKernelSessionOutput', {
