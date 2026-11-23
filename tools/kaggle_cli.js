@@ -218,6 +218,7 @@ async function pushKernel(notebookPath, slug = 'stash-search-visualization', tit
 
   const nbContent = fs.readFileSync(notebookPath, 'utf8');
 
+  const formattedDatasets = datasetSources.map(d => d.includes('/') ? d : `${username}/${d}`);
   const kernelReq = {
     slug: `${username}/${slug}`,
     newTitle: title,
@@ -228,7 +229,8 @@ async function pushKernel(notebookPath, slug = 'stash-search-visualization', tit
     enableGpu: true,
     machineShape: 'NvidiaTeslaT4',
     enableInternet: true,
-    datasetDataSources: datasetSources.map(d => d.includes('/') ? d : `${username}/${d}`)
+    datasetDataSources: formattedDatasets,
+    dataset_data_sources: formattedDatasets
   };
 
   const saveResp = await callKaggleApi('kernels.KernelsApiService/SaveKernel', kernelReq);
@@ -251,6 +253,26 @@ async function checkStatus(kernelSlug = 'stash-search-visualization') {
     kernelSlug: parts[1]
   });
   console.log('Kernel Status for', fullSlug, ':', statusResp);
+
+  try {
+    const outResp = await callKaggleApi('kernels.KernelsApiService/ListKernelSessionOutput', {
+      user_name: parts[0],
+      kernel_slug: parts[1]
+    });
+    if (outResp && outResp.log) {
+      try {
+        const events = JSON.parse(outResp.log);
+        const text = events.map(e => e.data || '').join('');
+        console.log('\n--- Recent Logs (Last 1200 chars) ---');
+        console.log(text.slice(-1200));
+        console.log('-------------------------------------\n');
+      } catch (e) {
+        console.log('\n--- Raw Log ---');
+        console.log(outResp.log.slice(-1200));
+      }
+    }
+  } catch (e) {}
+
   return statusResp;
 }
 

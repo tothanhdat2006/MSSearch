@@ -40,7 +40,8 @@ class STASHSearchEngine:
         dual_encoder_name: str = "google/siglip2-so400m-patch16-512",
         config: Optional[STASHConfig] = None,
         device: str = "cuda:0",
-        nlp_model_path: Optional[str] = "en_core_web_sm"
+        nlp_model_path: Optional[str] = "en_core_web_sm",
+        **kwargs
     ) -> "STASHSearchEngine":
         """Factory method to load production HuggingFace backbones."""
         from .models.dual_encoder import SigLIPDualEncoder
