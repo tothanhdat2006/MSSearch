@@ -52,6 +52,11 @@ class STASHSearchEngine:
         cfg.dual_encoder_name = dual_encoder_name
         cfg.device = device
 
+        if hasattr(cfg, "vlm_max_pixels") and "max_pixels" not in kwargs:
+            kwargs["max_pixels"] = cfg.vlm_max_pixels
+        if hasattr(cfg, "vlm_min_pixels") and "min_pixels" not in kwargs:
+            kwargs["min_pixels"] = cfg.vlm_min_pixels
+
         print(f"[STASHSearchEngine] Loading Dual-Encoder: '{dual_encoder_name}'...")
         dual_encoder = SigLIPDualEncoder(model_name=dual_encoder_name, device=device)
 

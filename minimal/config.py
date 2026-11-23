@@ -38,6 +38,8 @@ class STASHConfig:
     bbox_expansion_factor: float = 1.25              # \alpha_{expand}: contextual margin expansion factor
     vlm_batch_size: int = 4                          # B_{reader}: parallel reading batch size
     max_vlm_tokens: int = 512                        # T_{max}: maximum generated tokens per crop inspection
+    vlm_max_pixels: int = 512 * 28 * 28              # Cap resolution at ~512x512 equivalent to bound tokens <= 1024
+    vlm_min_pixels: int = 56 * 56                    # Minimum crop resolution
 
     # Stage 4: Source-Attributed Consensus (SAC)
     answer_dedup_similarity: float = 0.85            # \tau_{vote}: string pattern matching threshold

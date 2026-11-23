@@ -45,6 +45,22 @@ class ModelQwenVL(BaseMLLM):
             local_files_only=local_files
         )
 
+        # Bound vision token count to prevent SDPA memory blowup on Turing GPUs (e.g. Kaggle T4)
+        # Default: 512 * 28 * 28 = 401,408 pixels (<= 512 visual tokens, ~20MB attention instead of 3.2GB)
+        self.max_pixels = kwargs.get("max_pixels", 512 * 28 * 28)
+        self.min_pixels = kwargs.get("min_pixels", 56 * 56)
+
+        if hasattr(self.processor, "image_processor"):
+            if hasattr(self.processor.image_processor, "max_pixels"):
+                self.processor.image_processor.max_pixels = self.max_pixels
+            if hasattr(self.processor.image_processor, "min_pixels"):
+                self.processor.image_processor.min_pixels = self.min_pixels
+        if hasattr(self.processor, "max_pixels"):
+            self.processor.max_pixels = self.max_pixels
+        if hasattr(self.processor, "min_pixels"):
+            self.processor.min_pixels = self.min_pixels
+        print(f"[ModelQwenVL] Configured vision resolution bounds: min_pixels={self.min_pixels}, max_pixels={self.max_pixels}")
+
         # In transformers 5.6.2 / Qwen3-VL, AutoModelForImageTextToText is the primary loader
         loaders = []
         try:
@@ -177,6 +193,12 @@ class ModelQwenVL(BaseMLLM):
         results: List[str] = []
         batch_size = kwargs.get("batch_size", 4)
 
+        proc_kwargs = {}
+        if getattr(self, "max_pixels", None) is not None:
+            proc_kwargs["max_pixels"] = self.max_pixels
+        if getattr(self, "min_pixels", None) is not None:
+            proc_kwargs["min_pixels"] = self.min_pixels
+
         for i in range(0, len(images), max(1, batch_size)):
             chunk_imgs = images[i : i + max(1, batch_size)]
 
@@ -199,12 +221,21 @@ class ModelQwenVL(BaseMLLM):
                 else:
                     prompt = f"<image>\n{clean_q}"
 
-                inputs = self.processor(
-                    text=[prompt],
-                    images=[img],
-                    padding=True,
-                    return_tensors="pt"
-                ).to(self.device)
+                try:
+                    inputs = self.processor(
+                        text=[prompt],
+                        images=[img],
+                        padding=True,
+                        return_tensors="pt",
+                        **proc_kwargs
+                    ).to(self.device)
+                except TypeError:
+                    inputs = self.processor(
+                        text=[prompt],
+                        images=[img],
+                        padding=True,
+                        return_tensors="pt"
+                    ).to(self.device)
 
                 with torch.inference_mode():
                     output_ids = self.model.generate(
@@ -216,6 +247,7 @@ class ModelQwenVL(BaseMLLM):
                 gen_ids = output_ids[0, input_len:]
                 resp = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
                 results.append(resp)
+                del inputs, output_ids
                 continue
 
             try:
@@ -238,13 +270,23 @@ class ModelQwenVL(BaseMLLM):
                         p = f"<image>\n{clean_q}"
                     prompts.append(p)
 
-                model_inputs = self.processor(
-                    text=prompts,
-                    images=chunk_imgs,
-                    padding=True,
-                    padding_side="left",
-                    return_tensors="pt"
-                ).to(self.device)
+                try:
+                    model_inputs = self.processor(
+                        text=prompts,
+                        images=chunk_imgs,
+                        padding=True,
+                        padding_side="left",
+                        return_tensors="pt",
+                        **proc_kwargs
+                    ).to(self.device)
+                except TypeError:
+                    model_inputs = self.processor(
+                        text=prompts,
+                        images=chunk_imgs,
+                        padding=True,
+                        padding_side="left",
+                        return_tensors="pt"
+                    ).to(self.device)
 
                 with torch.inference_mode():
                     generated_ids = self.model.generate(
@@ -260,6 +302,7 @@ class ModelQwenVL(BaseMLLM):
                 else:
                     decoded = tokenizer.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
                 results.extend([d.strip() for d in decoded])
+                del model_inputs, generated_ids
             except Exception as e:
                 warnings.warn(
                     f"[ModelQwenVL] Batched generation failed ({e!r}). Falling back to single-crop generation.",
@@ -284,12 +327,21 @@ class ModelQwenVL(BaseMLLM):
                     else:
                         prompt = f"<image>\n{clean_q}"
 
-                    inputs = self.processor(
-                        text=[prompt],
-                        images=[img],
-                        padding=True,
-                        return_tensors="pt"
-                    ).to(self.device)
+                    try:
+                        inputs = self.processor(
+                            text=[prompt],
+                            images=[img],
+                            padding=True,
+                            return_tensors="pt",
+                            **proc_kwargs
+                        ).to(self.device)
+                    except TypeError:
+                        inputs = self.processor(
+                            text=[prompt],
+                            images=[img],
+                            padding=True,
+                            return_tensors="pt"
+                        ).to(self.device)
 
                     with torch.inference_mode():
                         output_ids = self.model.generate(
@@ -301,6 +353,10 @@ class ModelQwenVL(BaseMLLM):
                     gen_ids = output_ids[0, input_len:]
                     resp = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
                     results.append(resp)
+                    del inputs, output_ids
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return results
 
