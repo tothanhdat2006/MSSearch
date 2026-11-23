@@ -55,7 +55,7 @@ class STASHSearchEngine:
         dual_encoder = SigLIPDualEncoder(model_name=dual_encoder_name, device=device)
 
         print(f"[STASHSearchEngine] Loading MLLM: '{mllm_name_or_path}'...")
-        mllm = load_mllm(model_name_or_path=mllm_name_or_path, device=device)
+        mllm = load_mllm(model_name_or_path=mllm_name_or_path, device=device, **kwargs)
 
         nlp_parser = None
         if nlp_model_path:

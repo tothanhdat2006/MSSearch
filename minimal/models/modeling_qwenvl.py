@@ -64,15 +64,29 @@ class ModelQwenVL(BaseMLLM):
             pass
 
         self.model = None
+        target_device_map = kwargs.get(
+            "device_map",
+            "auto" if (torch.cuda.device_count() > 1 or kwargs.get("max_memory") is not None) else self.device
+        )
+        max_memory = kwargs.get("max_memory", None)
+        offload_folder = kwargs.get("offload_folder", None)
+
+        extra_load_args = {}
+        if max_memory is not None:
+            extra_load_args["max_memory"] = max_memory
+        if offload_folder is not None:
+            extra_load_args["offload_folder"] = offload_folder
+
         for loader_cls in loaders:
             try:
                 self.model = loader_cls.from_pretrained(
                     self.model_path,
                     dtype=self.dtype,
-                    device_map="auto" if torch.cuda.device_count() > 1 else self.device,
+                    device_map=target_device_map,
                     trust_remote_code=True,
                     local_files_only=local_files,
-                    low_cpu_mem_usage=True
+                    low_cpu_mem_usage=True,
+                    **extra_load_args
                 )
                 print(f"[ModelQwenVL] Loaded '{self.model_path}' with {loader_cls.__name__} ({self.dtype})")
                 break
@@ -81,10 +95,11 @@ class ModelQwenVL(BaseMLLM):
                     self.model = loader_cls.from_pretrained(
                         self.model_path,
                         torch_dtype=self.dtype,
-                        device_map="auto" if torch.cuda.device_count() > 1 else self.device,
+                        device_map=target_device_map,
                         trust_remote_code=True,
                         local_files_only=local_files,
-                        low_cpu_mem_usage=True
+                        low_cpu_mem_usage=True,
+                        **extra_load_args
                     )
                     print(f"[ModelQwenVL] Loaded '{self.model_path}' with {loader_cls.__name__} (torch_dtype={self.dtype})")
                     break
@@ -95,6 +110,11 @@ class ModelQwenVL(BaseMLLM):
 
         if self.model is None:
             raise RuntimeError(f"[ModelQwenVL] Failed to load '{self.model_path}' across available loaders: {[l.__name__ for l in loaders]}")
+
+        if hasattr(self.model, "device"):
+            self.device = str(self.model.device)
+        elif self.model is not None and next(self.model.parameters(), None) is not None:
+            self.device = str(next(self.model.parameters()).device)
 
         self.model.eval()
 

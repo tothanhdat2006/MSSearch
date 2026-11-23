@@ -222,6 +222,16 @@ def parse_args():
     parser.add_argument("--vis_sample_ids", type=str, default=None,
                         help="Comma-separated list of specific sample IDs to visualize.")
 
+    # Hardware & Multi-GPU device allocation (e.g. 2x T4 on Kaggle)
+    parser.add_argument("--split_gpus", action="store_true", default=False,
+                        help="Split model across available GPUs and CPU with safe memory limits (useful for 2x T4 on Kaggle).")
+    parser.add_argument("--max_memory", type=str, default=None,
+                        help="Custom max memory string per device (e.g. '0:12GiB,1:14GiB,cpu:20GiB').")
+    parser.add_argument("--device_map", type=str, default=None,
+                        help="Explicit device_map override (e.g. 'auto').")
+    parser.add_argument("--offload_folder", type=str, default=None,
+                        help="Optional scratch directory for offloaded model weights.")
+
     return parser.parse_args()
 
 
@@ -412,13 +422,43 @@ def main():
         verbose=not args.quiet
     )
 
+    extra_engine_kwargs = {}
+    if args.device_map:
+        extra_engine_kwargs["device_map"] = args.device_map
+    if args.max_memory:
+        mem_dict = {}
+        for part in args.max_memory.split(","):
+            if ":" in part:
+                k, v = part.split(":", 1)
+                k = k.strip()
+                v = v.strip()
+                mem_dict[int(k) if k.isdigit() else k] = v
+        extra_engine_kwargs["max_memory"] = mem_dict
+        if "device_map" not in extra_engine_kwargs:
+            extra_engine_kwargs["device_map"] = "auto"
+    elif args.split_gpus:
+        import torch
+        gpu_count = torch.cuda.device_count()
+        if gpu_count > 1:
+            mem_dict = {}
+            for i in range(gpu_count):
+                limit_gib = 12 if i == 0 else 14
+                mem_dict[i] = f"{limit_gib}GiB"
+            mem_dict["cpu"] = "20GiB"
+            extra_engine_kwargs["max_memory"] = mem_dict
+            extra_engine_kwargs["device_map"] = "auto"
+            print(f"[Device Setup] Multi-GPU split active across {gpu_count} GPUs + CPU: {mem_dict}")
+    if args.offload_folder:
+        extra_engine_kwargs["offload_folder"] = args.offload_folder
+
     print(f"\n[Engine Setup] Initializing STASHSearchEngine...")
     engine = STASHSearchEngine.from_pretrained(
         mllm_name_or_path=args.model_path,
         dual_encoder_name=args.dual_encoder_name,
         config=config,
         device=args.device,
-        nlp_model_path=args.nlp_model
+        nlp_model_path=args.nlp_model,
+        **extra_engine_kwargs
     )
 
     # 6. Run evaluation loop
