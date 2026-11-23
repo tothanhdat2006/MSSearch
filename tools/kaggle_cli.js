@@ -230,7 +230,9 @@ async function pushKernel(notebookPath, slug = 'stash-search-visualization', tit
     machineShape: 'NvidiaTeslaT4',
     enableInternet: true,
     datasetDataSources: formattedDatasets,
-    dataset_data_sources: formattedDatasets
+    dataset_data_sources: formattedDatasets,
+    kernelExecutionType: 'SAVE_AND_RUN_ALL',
+    kernel_execution_type: 1
   };
 
   const saveResp = await callKaggleApi('kernels.KernelsApiService/SaveKernel', kernelReq);
